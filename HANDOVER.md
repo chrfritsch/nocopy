@@ -120,6 +120,12 @@ Contention (`run.php contend`, copy mode, median of 3, M ops/s) before -> after 
 | 4 readers fetch int, 4 writers running | 0.14 | 38 | 162 | 70 | 94 | 137 |
 | 4 readers fetch int, no writers | 7.7 | 200 | 199 | 199 | 198 | 200 |
 
+Key dedupe (2026-11-03, Linux Docker arm64, `docker/ab.sh 5 read write`, best of 5, quiet host, load ~2): equal array keys stored once per entry, copied out once per fetch.
+Copy mode: fetch array 10 rows 796 -> 714 ns, 1k rows 86.5 -> 70.5 us (also with unserialized keys: 88.8 -> 73.0), 10k rows 909 -> 727 us (-20..25%). Arena bytes for `rows(1000)` 648 KB -> 520 KB (-20%).
+Price: store array 10 rows 511 -> 594 ns, 1k rows 49.3 -> 58.1 us (+15-17%: two table probes per key). Zero-copy reads, scalars, objects: within noise.
+`fetch 10 keys (array form)` copy reads 185 -> 205 ns (+9-11%) in every run, but callgrind counts +0.6% instructions (+2.5 per key): code alignment, not chased.
+The table first sat inside the module globals (8 KB): that alone moved `apcu_entry hit` +6%; it is a separate allocation now.
+
 Single-process numbers did not move (store int 36 ns, store string 100B 83 -> 78 ns vs APCu 57, all fetches within noise):
 the remaining small-write gap is not the lock, look at `calc_zval`/`time()`/`locate` next.
 
@@ -196,9 +202,8 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 1. Symfony bundle: done in `symfony/` (`cache.adapter.stash`, smoke test passes on PHP 8.3/8.4/8.5 with Symfony 6.4 and 8.1). Rewritten on `stash_*` (`StashAdapter`, versioned clear), so it works with `stash.apcu_compat=0` and next to APCu; `bench/sfapp`'s raw pool uses it under stash. fpm run with `StashAdapter` (2026-11-03, load 37 -> 12 during the run): zero-copy /products 13482, /product/77 12865 req/s vs APCu raw 3991 / 3949 (3.4x / 3.3x) and APCu default pool 2279 / 2392 (5.9x / 5.4x); /hello and /validate within noise of APCu. fpm run with the bundle (2026-11-03, load 9 -> 46 during the run: shape only): zero-copy /products 9809, /product/77 12328 req/s vs APCu raw 3764 / 2804. CI: `symfony` job (`docker/symfony.sh`: 6.4/8.3, 7.4/8.4, 8.x/8.5; compat on, off, next to APCu). Open: Packagist name, a quiet rerun.
 2. Linux runs exist now (Docker, above); still: a real (non-VM) x86_64 box for numbers, wrk instead of ab; push to GitHub so CI actually runs.
 3. Lock takeover: segments leaked by takeovers are never recovered.
-   Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
    Shards: expiry of a shard without writes waits for memory pressure. Fixed slices: one hot shard cannot borrow from idle ones.
-4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).
+4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`. A one-pass `copy_out` was considered: `zend_array_dup` of an immutable array is already one memcpy, the cost was per-key allocation (fixed by key dedupe).
 5. Milestone 3 features that justify a price: tags, cross-server invalidation (single-flight `apcu_entry` + `stash_remember` with XFetch: done, tests 030/031; APCu's own suite not re-run since). Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
 6. Packaging: license and vendor name undecided (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
    `preload_path`; slam defense; license.

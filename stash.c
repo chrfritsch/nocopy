@@ -45,6 +45,33 @@ enum { WHY_NONE = 0, WHY_FALLBACK, WHY_RESOURCE };
 
 static bool calc_zval(zval *z, int depth, size_t *n, int *why);
 
+/* Empties the key table for the next value. */
+static zend_always_inline void keys_reset(void)
+{
+	if (UNEXPECTED(++STASH_G(kgen) == 0)) {
+		memset(STASH_G(keys), 0, STASH_KEYS * sizeof(stash_kslot));
+		STASH_G(kgen) = 1;
+	}
+}
+
+static zend_always_inline stash_kslot *key_slot(zend_ulong h)
+{
+	return &STASH_G(keys)[h & (STASH_KEYS - 1)];
+}
+
+/* An equal key was persisted earlier in this value. Depends only on the key sequence, so calc, persist and relocate agree. */
+static zend_always_inline bool key_hit(const stash_kslot *s, const zend_string *k, zend_ulong h)
+{
+	return s->gen == STASH_G(kgen) && s->h == h && zend_string_equals(s->s, k);
+}
+
+static zend_always_inline void key_put(stash_kslot *s, const zend_string *k, zend_ulong h)
+{
+	s->s = k;
+	s->h = h;
+	s->gen = STASH_G(kgen);
+}
+
 static bool calc_array(zend_array *a, int depth, size_t *n, int *why)
 {
 	if (zend_hash_num_elements(a) == 0) {
@@ -62,7 +89,11 @@ static bool calc_array(zend_array *a, int depth, size_t *n, int *why)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
 			if (b->key) {
-				*n += SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(b->key)));
+				stash_kslot *s = key_slot(b->h);
+				if (!key_hit(s, b->key, b->h)) {
+					*n += SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(b->key)));
+					key_put(s, b->key, b->h);
+				}
 			}
 			if (!calc_zval(&b->val, depth + 1, n, why)) {
 				return false;
@@ -154,7 +185,13 @@ static zend_array *persist_array(const zend_array *src)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(ht, b) {
 			if (b->key) {
-				b->key = persist_str(b->key);
+				stash_kslot *s = key_slot(b->h);
+				if (key_hit(s, b->key, b->h)) {
+					b->key = (zend_string *) s->s;
+				} else {
+					b->key = persist_str(b->key);
+					key_put(s, b->key, b->h);
+				}
 			}
 			persist_zval(&b->val);
 		} ZEND_HASH_FOREACH_END();
@@ -202,6 +239,9 @@ static void persist_entry(stash_entry *e, const zend_string *key, zval *val)
 	e->koff = (uint8_t) (ZSTR_VAL(k) - (char *) e);
 	ZVAL_COPY_VALUE(entry_val(e), val);
 	Z_EXTRA_P(entry_val(e)) = 0; /* stash_remember's compute time, ms */
+	if (Z_TYPE_P(val) == IS_ARRAY) {
+		keys_reset();
+	}
 	persist_zval(entry_val(e));
 	ZEND_ASSERT(STASH_G(cursor) == (char *) e + e->size);
 }
@@ -258,8 +298,14 @@ static void unshare_contents(zend_array *a, int depth)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
 			if (b->key && in_arena(b->key)) {
-				b->key = zend_string_init(ZSTR_VAL(b->key), ZSTR_LEN(b->key), 0);
-				ZSTR_H(b->key) = b->h;
+				stash_kslot *s = key_slot(b->h);
+				if (s->gen == STASH_G(kgen) && s->s == b->key) { /* a deduped key: share its copy */
+					b->key = zend_string_copy(s->copy);
+				} else {
+					key_put(s, b->key, b->h);
+					b->key = s->copy = zend_string_init(ZSTR_VAL(b->key), ZSTR_LEN(b->key), 0);
+					ZSTR_H(b->key) = b->h;
+				}
 				HT_FLAGS(a) &= ~HASH_FLAG_STATIC_KEYS;
 			}
 			unshare_zval(&b->val, depth + 1);
@@ -310,6 +356,9 @@ stash_entry *stash_build(zend_string *key, zval *val, zend_long ttl, bool apcu_s
 
 	if (!ttl) {
 		ttl = stash_ini_ttl;
+	}
+	if (Z_TYPE_P(val) == IS_ARRAY) {
+		keys_reset();
 	}
 	if (!calc_zval(val, 0, &body, apcu_semantics ? &why : NULL)) {
 		if (!why) {
@@ -429,6 +478,9 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 		if (e->flags & ENTRY_SERIALIZED) {
 			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v));
 		} else if (copy) {
+			if (Z_TYPE_P(v) == IS_ARRAY) {
+				keys_reset();
+			}
 			copy_out(rv, v);
 		} else {
 			ZVAL_COPY_VALUE(rv, v);
@@ -786,6 +838,7 @@ static PHP_GINIT_FUNCTION(stash)
 #endif
 	memset(stash_globals, 0, sizeof(*stash_globals));
 	stash_globals->ctx.slot = -1;
+	stash_globals->keys = pecalloc(STASH_KEYS, sizeof(stash_kslot), 1);
 }
 
 /* A thread ending (ZTS) gives its worker slot back. */
@@ -794,6 +847,7 @@ static PHP_GSHUTDOWN_FUNCTION(stash)
 	if (stash_a) {
 		stash_release(&stash_globals->ctx);
 	}
+	pefree(stash_globals->keys, 1);
 }
 
 PHP_MINIT_FUNCTION(stash)

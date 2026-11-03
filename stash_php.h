@@ -7,12 +7,24 @@
 #include "php_stash.h"
 #include "stash_arena.h"
 
+#define STASH_KEYS 256
+
+/* One value's array keys by hash: dedupes them when persisting, shares their private copies when copying out. */
+typedef struct {
+	const zend_string *s;
+	zend_string *copy;
+	zend_ulong h;
+	uint32_t gen;
+} stash_kslot;
+
 ZEND_BEGIN_MODULE_GLOBALS(stash)
 	stash_ctx ctx;
 	bool zero_copy; /* this request may be handed pointers into the arena */
 	char *cursor;    /* write position inside the block being filled */
 	zend_string *leases[8]; /* lease keys held (persistent): dropped at request end if a callback bailed out */
 	int nleases;
+	uint32_t kgen; /* slots of other generations are empty */
+	stash_kslot *keys; /* STASH_KEYS, own allocation: kept out of the hot globals */
 ZEND_END_MODULE_GLOBALS(stash)
 
 ZEND_EXTERN_MODULE_GLOBALS(stash)

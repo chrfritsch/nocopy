@@ -15,6 +15,8 @@ Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so fo
 - Segment size = power of two so that there are at most 256 segments (min 64 KB). Entries larger than half a segment take a run of contiguous segments.
 - Entry = `stash_entry` header (hash, size, expiry, seq, key length/offset, live/hot/flags: 48 bytes) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
+  Equal array keys are stored once per entry (rows of a result set share their column names): a 256-slot table by hash (`STASH_G(keys)`, `key_slot`/`key_hit`) remembers this value's keys; a miss overwrites the slot.
+  Its decisions depend only on the sequence of key contents, so `calc_zval`, `persist_*` and a later relocation of the arena copy dedupe exactly alike and agree on the size.
 - Slot: 64 bits = `{ offset/8 (32 bit), low 32 bits of the hash }`; 0 empty. The low bits are the home slot and the probe filter: a probe compares them first and only dereferences on a match.
 
 ## Shards: fixed slices
@@ -76,7 +78,7 @@ the worker switches to copy mode at its first handled request, also with `stash.
 ## Fetch modes
 
 - zero-copy (`zero_copy`, set in RINIT from `request_scope`): returns the arena pointer; the segment stays pinned until the request ends.
-- copy: `copy_out` = `zend_array_dup` + `unshare_contents` (repoint arena strings/keys).
+- copy: `copy_out` = `zend_array_dup` (one memcpy of an immutable array) + `unshare_contents` (repoint arena strings/keys). The same key table maps a deduped arena key to its first private copy, which later rows share (refcounted).
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
 
 ## Single-flight and early refresh (`stash_remember`, `apcu_entry`)
@@ -102,6 +104,7 @@ Leases are visible to `APCUIterator` / `apcu_cache_info` while held.
 - Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `stash_hold` + re-check (`-DSTASH_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `relocate()` relies on it.
+- Key dedupe must stay a function of key contents only (not of pointers or earlier values): relocation re-persists from the arena copy and must reproduce `e->size`.
 - Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
 - The slot table never holds more than `cap` (3/4) entries: probes and backward shifts rely on an empty slot ending every run.

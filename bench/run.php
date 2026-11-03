@@ -39,6 +39,10 @@ if ($group === 'read') {
     apcu_store('arr10', array_slice(rows(10), 0, 10));
     apcu_store('arr1k', rows(1000));
     apcu_store('arr10k', rows(10000));
+    apcu_store('arr1k_u', unserialize(serialize(rows(1000)))); // every key its own string, as from unserialize/json_decode
+    if (function_exists('stash_stats')) {
+        $u = stash_stats()['used']; apcu_store('mem1k', rows(1000)); out('arena bytes, array 1k rows', stash_stats()['used'] - $u, 'bytes');
+    }
     $o = new Obj; $o->child = new Obj; apcu_store('obj', $o);
 
     bench('fetch int', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('int'); });
@@ -46,6 +50,7 @@ if ($group === 'read') {
     bench('fetch string 10KB', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('str10k'); });
     bench('fetch array 10 rows', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('arr10'); });
     bench('fetch array 1k rows', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('arr1k'); });
+    bench('fetch array 1k rows, unserialized keys', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('arr1k_u'); });
     bench('fetch array 10k rows', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('arr10k'); });
     bench('fetch 10k rows + read 1', function ($n) { for ($i = 0; $i < $n; $i++) { $x = apcu_fetch('arr10k'); $y = $x['key9999']['name']; } });
     bench('fetch 10k rows + sum ALL scores', function ($n) { for ($i = 0; $i < $n; $i++) { $t = 0.0; foreach (apcu_fetch('arr10k') as $row) $t += $row['score']; } });
@@ -60,11 +65,12 @@ if ($group === 'read') {
 }
 
 if ($group === 'write') {
-    $s100 = str_repeat('x', 100); $a10 = array_slice(rows(10), 0, 10); $a1k = rows(1000);
+    $s100 = str_repeat('x', 100); $a10 = array_slice(rows(10), 0, 10); $a1k = rows(1000); $a1ku = unserialize(serialize($a1k));
     bench('store int', function ($n) { for ($i = 0; $i < $n; $i++) apcu_store('w_int', $i); });
     bench('store string 100B', function ($n) use ($s100) { for ($i = 0; $i < $n; $i++) apcu_store('w_str', $s100); });
     bench('store array 10 rows', function ($n) use ($a10) { for ($i = 0; $i < $n; $i++) apcu_store('w_a10', $a10); });
     bench('store array 1k rows', function ($n) use ($a1k) { for ($i = 0; $i < $n; $i++) apcu_store('w_a1k', $a1k); });
+    bench('store array 1k rows, unserialized keys', function ($n) use ($a1ku) { for ($i = 0; $i < $n; $i++) apcu_store('w_a1ku', $a1ku); });
     $o = new Obj; $o->child = new Obj;
     bench('store object', function ($n) use ($o) { for ($i = 0; $i < $n; $i++) apcu_store('w_obj', $o); });
     bench('store+delete int', function ($n) { for ($i = 0; $i < $n; $i++) { apcu_store('w_k', $i); apcu_delete('w_k'); } });
