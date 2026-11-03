@@ -37,7 +37,8 @@ the shard's segments with `max_exp <= now`, at most 64 per write, and unlinks th
 `exp_gen` is compared with the segment's `gen` (bumped on every free) so a cursor never resumes mid-entry in a reused segment.
 When an allocation fails: `reclaim()` -> `expire_step()` with a large budget -> expire other shards (`help_others`, trylock only: we hold our shard)
 -> `evacuate()` (copy the shard's sparsest sealed segment, <= 50% live, forward, dropping expired entries, keeping each entry in its TTL bucket; one free segment is kept in reserve)
--> evacuate other shards (trylock) -> give up (cache full).
+-> evacuate other shards (trylock) -> `evict()` the shard's oldest sealed segment (FIFO by `born`, the inserts counter when it left the pool: every live entry in it is unlinked)
+-> evict in other shards (trylock) -> give up. Each eviction counts in `expunges`. A pinned victim dies but stays allocated until unpinned; the loop moves on to the next oldest.
 Expiry is driven by writes per shard: a shard without writes keeps its expired entries (reads already treat them as misses) until some shard needs memory.
 
 ## Reads (lock-free) and pins
@@ -68,6 +69,7 @@ INI and constants mirror APCu. `apcu_cache_info` / `apcu_sma_info` report live b
 - Never allocate (emalloc, zvals) while holding a shard or the pool lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker.
 - Never wait for a second shard lock while holding one (trylock only); shard before pool.
 - Arena strings are `IS_STR_INTERNED` but never `IS_STR_PERMANENT`: that flag promises process lifetime and PCRE then keeps the pointer as a cache key.
+- Only keys (entry keys, array keys) carry a hash. Value strings are stored with `h == 0` (hashing every value was 0.4 ns/byte); PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race. stash itself must only read `ZSTR_H` of keys.
 - Never dereference an entry before `seg_hold` + re-check (the debug build poisons freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `evacuate()` relies on it.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`. DEAD only ends in `reclaim()`.

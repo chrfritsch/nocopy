@@ -8,7 +8,7 @@ apc.shm_size=4M
 stash.request_scope=1
 --FILE--
 <?php
-for ($n = 0; stash_put("v$n", range(1, 3000)); $n++); // fill the arena
+for ($n = 0; stash_put("v$n", range(1, 3000)) && stash_get("v0") !== null; $n++); // fill the arena until it evicts
 $pid = pcntl_fork();
 if ($pid === 0) {
     for ($i = 0; $i < $n; $i++) stash_get("v$i"); // child pins every segment...

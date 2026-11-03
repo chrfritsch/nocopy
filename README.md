@@ -48,6 +48,10 @@ Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `sta
 Symfony's default `cache.adapter.apcu` serializes values before they reach the extension, which hides the benefit. Use a pool without a marshaller
 (`new ApcuAdapter($ns, 0, null, null)`, see `bench/sfapp`): about 2x requests/s on cache-heavy endpoints in our benchmark (details in `HANDOVER.md`).
 
+## When the cache is full
+
+Unlike APCu, which wipes the whole cache, stash evicts its oldest segments (FIFO, a few hundred entries at a time); `stash_stats()['expunges']` counts them.
+
 ## Known gaps
 
 No `preload_path`, no slam defense, no per-entry hit counts (would add a shared write per read),

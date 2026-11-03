@@ -12,9 +12,11 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 ## State (2026-11-03)
 
 Works, not released. Not a git repo yet, no license, no CI, only tried on PHP 8.7-dev (master), macOS arm64, NTS.
-- Own tests: `tests/001..018` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
+- Own tests: `tests/001..020` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
 - TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes` and `shards`.
 - Sharded writes (2026-11-03): per-shard locks, a pool lock for segments; see ARCHITECTURE.md "Shards".
+- FIFO eviction when full (2026-11-03): APCu wipes everything, stash used to refuse every write (187k of 200k stores failed in an 8M arena). Tests 011/015 accept a miss only if `expunges` moved since the store.
+- Value strings are no longer hashed when stored (2026-11-03): `store string 100B` 76 -> 49 ns (APCu 57).
 - Growable slot tables (2026-11-03): a shard's table doubles into pool segments when it fills; `stash_stats()` has `slots`. 018 loops clean 60x on debug.
 - Review fixes (2026-11-03): arena strings no longer `IS_STR_PERMANENT` (PCRE kept them as process-wide cache keys);
   pins dropped in post-deactivate, not RSHUTDOWN (session's RSHUTDOWN serialized `$_SESSION` after ours: test 012 segfaulted);
@@ -104,6 +106,12 @@ parallel stores +-4%, 4 readers under 4 writers 80 -> 74 M ops/s, a figure that 
 The new cost is the grow stall: 3M unique puts at 512M grew 2M -> 4M slots, one ~2-2.8 ms put per shard.
 018's readers are not sensitive to the table-pointer re-check in `find()` (removing it still passes 30/30): the window needs a key overwritten and its segment reused mid-probe.
 
+FIFO eviction + unhashed value strings (median of 3, before -> after): store string 100B 76 -> 49 ns, store object 354 -> 288, store array 1k rows 90.5 -> 84.4 us;
+500 B value, same key 242 -> 72 ns (APCu 45), unique keys 375 -> 163 (APCu 148). Eviction itself: ~17 ns per store in a full 8M arena.
+`ttl churn` turned into a full-cache benchmark because stores got faster (1.65 -> 2.97 M/s): the unexpired ttl=1 data alone fills 512M,
+so it evicts (~300 segments) and evacuates ~2.1 GB in 5 s (stores > 50 us 2090 -> 4784, slowest 0.5 -> 2.7 ms). At 1024M: 1.8 MB evacuated, 497 slow stores.
+Next: when truly full, evacuation copies data that is about to expire anyway; evicting before evacuating in that case would cut the copying.
+
 Real Symfony 8.1 app, requests/s, median of 3 (`bench/sfapp.sh`):
 
 | config | /hello | /products | /product/77 | /validate |
@@ -130,6 +138,7 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 
 ## Known gaps / next steps (rough priority)
 
+0. Eviction is FIFO: no hit information. Segcache-style merge (keep recently read entries) if hit rates in a full cache matter.
 1. Symfony bundle: `cache.adapter.stash` pool without marshaller; document the default-pool finding for customers.
 2. Re-run on Linux + php-fpm; re-run the full Symfony Cache suite after the segment rewrite.
 3. Robust process-shared locks on Linux (a writer dying inside a shard or the pool lock deadlocks everyone).

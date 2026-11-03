@@ -71,6 +71,7 @@ typedef struct {
 	size_t used;      /* bytes appended */
 	size_t live;      /* bytes of live entries */
 	time_t max_exp;   /* latest expiry of its entries; 0 in the ttl=0 bucket (never) */
+	uint64_t born;    /* inserts counter when taken from the pool: eviction order */
 } stash_seg;
 
 /* Entries go to an open segment per TTL bucket (Segcache), so a segment expires as a whole:
@@ -463,6 +464,7 @@ static uint32_t pool_run(stash_shard *sh, uint32_t k, uint32_t spare, uint8_t st
 			}
 			arena->segs[got].owner = (uint8_t) shard_id(sh);
 			arena->segs[got].run = k;
+			arena->segs[got].born = __atomic_load_n(&arena->inserts, __ATOMIC_RELAXED);
 			seg_set(got, state);
 			arena->nfree -= k;
 			break;
@@ -623,9 +625,36 @@ static bool evacuate(stash_shard *sh)
 	return true;
 }
 
-/* Under pressure the pool may be held by other shards' expired or sparse segments: expire (or compact) them.
+/* Cache full of live data: unlinks every entry of sh's oldest sealed segment (FIFO); it dies once unpinned.
+ * ponytail: FIFO ignores hits; Segcache-style merge keeping recently read entries if the hit rate needs it. */
+static bool evict(stash_shard *sh)
+{
+	uint32_t victim = UINT32_MAX;
+	for (uint32_t s = 0; s < arena->nsegs; s++) {
+		if (seg_mine(sh, s, false) && !arena->segs[s].pending
+		 && (victim == UINT32_MAX || arena->segs[s].born < arena->segs[victim].born)) {
+			victim = s;
+		}
+	}
+	if (victim == UINT32_MAX) {
+		return false;
+	}
+	for (char *p = seg_start(victim), *end = p + arena->segs[victim].used; p < end;) {
+		stash_entry *e = (stash_entry *) p;
+		p += e->size;
+		if (e->live) {
+			entry_unlink(e);
+		}
+	}
+	__atomic_add_fetch(&arena->expunges, 1, __ATOMIC_RELAXED);
+	return true;
+}
+
+enum { HELP_EXPIRE, HELP_COMPACT, HELP_EVICT };
+
+/* Under pressure the pool may be held by other shards' expired, sparse or old segments: expire, compact or evict them.
  * trylock only: we hold sh, so waiting for another shard could deadlock. */
-static bool help_others(stash_shard *sh, time_t now, bool compact)
+static bool help_others(stash_shard *sh, time_t now, int how)
 {
 	bool did = false;
 	for (uint32_t i = 0; i < arena->nshards; i++) {
@@ -633,7 +662,9 @@ static bool help_others(stash_shard *sh, time_t now, bool compact)
 		if (o == sh || !spin_trylock(&o->lock)) {
 			continue;
 		}
-		if (compact) {
+		if (how == HELP_EVICT) {
+			did |= evict(o);
+		} else if (how == HELP_COMPACT) {
 			did |= evacuate(o);
 		} else {
 			while (expire_step(o, now, 4096)) {
@@ -658,7 +689,7 @@ static stash_entry *alloc_entry(stash_shard *sh, size_t total, time_t exp, time_
 		reclaim();
 		e = seg_alloc(sh, total, false, exp, now);
 	}
-	if (!e && help_others(sh, now, false)) {
+	if (!e && help_others(sh, now, HELP_EXPIRE)) {
 		reclaim();
 		e = seg_alloc(sh, total, false, exp, now);
 	}
@@ -666,7 +697,15 @@ static stash_entry *alloc_entry(stash_shard *sh, size_t total, time_t exp, time_
 		reclaim();
 		e = seg_alloc(sh, total, false, exp, now);
 	}
-	for (uint32_t tries = arena->nsegs; !e && tries && help_others(sh, now, true); tries--) {
+	for (uint32_t tries = arena->nsegs; !e && tries && help_others(sh, now, HELP_COMPACT); tries--) {
+		reclaim();
+		e = seg_alloc(sh, total, false, exp, now);
+	}
+	for (uint32_t tries = arena->nsegs; !e && tries && evict(sh); tries--) {
+		reclaim();
+		e = seg_alloc(sh, total, false, exp, now);
+	}
+	for (uint32_t tries = arena->nsegs; !e && tries && help_others(sh, now, HELP_EVICT); tries--) {
 		reclaim();
 		e = seg_alloc(sh, total, false, exp, now);
 	}
@@ -755,8 +794,7 @@ static zend_string *persist_str(const zend_string *s)
 {
 	size_t size = _ZSTR_STRUCT_SIZE(ZSTR_LEN(s));
 	zend_string *p = take(size);
-	memcpy(p, s, size);
-	zend_string_hash_val(p);
+	memcpy(p, s, size); /* keys arrive hashed; values stay unhashed until used as a key (benign idempotent write) */
 	GC_SET_REFCOUNT(p, 2);
 	/* not IS_STR_PERMANENT: that promises process lifetime (PCRE then keeps the pointer as a cache key) */
 	GC_TYPE_INFO(p) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
@@ -1711,6 +1749,7 @@ PHP_FUNCTION(stash_stats)
 	add_assoc_long(return_value, "evacuated_bytes", evacuated);
 	add_assoc_long(return_value, "shards", arena->nshards);
 	add_assoc_long(return_value, "slots", slots_total());
+	add_assoc_long(return_value, "expunges", __atomic_load_n(&arena->expunges, __ATOMIC_RELAXED));
 }
 
 /* ---- apcu_* ---- */
