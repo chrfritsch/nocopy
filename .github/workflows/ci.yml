@@ -27,3 +27,19 @@ jobs:
       - run: docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t stash-zts docker
       - run: docker run --rm -v "$PWD":/src:ro stash-zts /src/docker/test.sh
       - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
+  symfony:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {php: "8.3", symfony: "6.4.*"}
+          - {php: "8.4", symfony: "7.4.*"}
+          - {php: "8.5", symfony: "8.*"}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg PHP=${{ matrix.php }} -t stash-linux docker
+      - run: |
+          mkdir sf && echo '{"config":{"platform":{"php":"${{ matrix.php }}.0"}}}' > sf/composer.json
+          docker run --rm -v "$PWD/sf":/app -w /app composer:2 require -q '--ignore-platform-req=ext-*' "symfony/framework-bundle:${{ matrix.symfony }}"
+      - run: docker run --rm -v "$PWD":/src:ro -v "$PWD/sf":/sf:ro stash-linux /src/docker/symfony.sh
