@@ -69,6 +69,8 @@ Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (P
 | APCu suite | `PHP=<php> STASH_SO=<so> scripts/apcu-suite.sh [workdir]` (expect 59/61) |
 | micro benchmarks vs APCu | `PHP=.. STASH_SO=.. APCU_SO=.. bench/all.sh` (release builds only) |
 | Symfony adapter benchmarks | `PHP=.. STASH_SO=.. APCU_SO=.. SF_AUTOLOAD=<symfony/cache>/vendor/autoload.php bench/symfony-all.sh` |
+| hit ratio of one workload (zipf / loop, footprint, one-hit wonders) | `php -d extension=<so> -d apc.shm_size=4M bench/hitratio.php zipf 1.5 0` |
+| stampede (8 workers, ttl 2 s, 50 ms callback) | `docker run --rm -v "$PWD":/src:ro stash-linux:8.5 /src/docker/stampede.sh` |
 | real Symfony app (php -S, 8 workers, ab) | `PHP=.. STASH_SO=.. APCU_SO=.. APP=<app dir> bench/sfapp.sh` |
 
 Gotchas: zsh scripts (`${=VAR}` for word splitting); `-n` to ignore php.ini; the benchmark scripts guard against a
@@ -190,7 +192,7 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 
 ## Known gaps / next steps (rough priority)
 
-0. Merge eviction keeps read entries only up to one segment per 4 merged (the most-read first, test 029); tune MERGE_N / the budget if hit rates in a full cache need it (`stash_stats()` has `evicted` / `expired` now). A failing `apcu_add` costs 15 instructions more than before (not chased).
+0. Merge eviction keeps read entries only up to one segment per 4 merged (the most-read first, test 029); tune MERGE_N / the budget if hit rates in a full cache need it (`stash_stats()` has `evicted` / `expired` now). Ghost of evicted tags (test 033), `bench/hitratio.php`, no-ghost build given the ghost's 4 B/slot as cache (4M / 32M, % hits ghost vs none): zipf 1.5x / 3x the cache 91.2/91.3, 81.5/82.3 / 92.9/92.4, 85.3/84.8 (noise); zipf + 1 one-hit wonder per request 77.6/75.2 / 79.6/77.9; loop 1.25x 25/0 / 22/0; loop 1.8x 0/0; loop 0.25x + 5 one-hit wonders per request 56/0 / 56/0, at 0.4x 0/0. Never worse beyond noise; the direct-mapped table loses ~40% of ghosts, 2x its size would keep more. A failing `apcu_add` costs 15 instructions more than before (not chased).
 1. Symfony bundle: done in `symfony/` (`cache.adapter.stash`, smoke test passes on PHP 8.3/8.4/8.5 with Symfony 6.4 and 8.1). Rewritten on `stash_*` (`StashAdapter`, versioned clear), so it works with `stash.apcu_compat=0` and next to APCu; `bench/sfapp`'s raw pool uses it under stash. fpm run with `StashAdapter` (2026-11-03, load 37 -> 12 during the run): zero-copy /products 13482, /product/77 12865 req/s vs APCu raw 3991 / 3949 (3.4x / 3.3x) and APCu default pool 2279 / 2392 (5.9x / 5.4x); /hello and /validate within noise of APCu. fpm run with the bundle (2026-11-03, load 9 -> 46 during the run: shape only): zero-copy /products 9809, /product/77 12328 req/s vs APCu raw 3764 / 2804. CI: `symfony` job (`docker/symfony.sh`: 6.4/8.3, 7.4/8.4, 8.x/8.5; compat on, off, next to APCu). Open: Packagist name, a quiet rerun.
 2. Linux runs exist now (Docker, above); still: a real (non-VM) x86_64 box for numbers, wrk instead of ab; push to GitHub so CI actually runs.
 3. Lock takeover: segments leaked by takeovers are never recovered.

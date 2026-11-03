@@ -25,6 +25,7 @@ char *stash_seg_base;
 unsigned stash_seg_shift;
 uint32_t stash_shard_mask, stash_tab_mask;
 stash_slot *stash_tabs[STASH_MAX_SHARDS];
+static uint32_t *stash_ghosts[STASH_MAX_SHARDS]; /* per shard, as many as slots: tags of recently evicted keys (S3-FIFO ghost) */
 uint64_t stash_self;
 
 static size_t seg_size;
@@ -33,6 +34,14 @@ static time_t checked[STASH_MAX_WORKERS]; /* last liveness check of a pinning wo
 static inline char *seg_start(uint32_t s) { return stash_seg_base + ((size_t) s << stash_seg_shift); }
 static inline stash_slot slot_make(const stash_entry *e) { return (e->h << 32) | (uint32_t) (((const char *) e - (const char *) stash_a) >> 3); }
 static inline stash_slot *tab_of(const stash_shard *sh) { return stash_tabs[sh - stash_a->shards]; }
+
+/* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
+ * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */
+static inline uint32_t *ghost_cell(const stash_shard *sh, uint64_t h)
+{
+	return &stash_ghosts[sh - stash_a->shards][(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & stash_tab_mask];
+}
+static inline uint32_t ghost_tag(uint64_t h) { return (uint32_t) h | 1; }
 
 /* ---- owner ids: pid + process start time, so a recycled pid does not look like its dead predecessor ---- */
 
@@ -624,6 +633,7 @@ static bool merge(stash_shard *sh, bool evict_only)
 					sh->expired++;
 				} else {
 					sh->evicted++;
+					*ghost_cell(sh, e->h) = ghost_tag(e->h);
 				}
 				entry_unlink(sh, e);
 			}
@@ -678,6 +688,11 @@ stash_put_result stash_commit(stash_shard *sh, stash_entry *e, bool add_only)
 			stash_abort(sh, e);
 			return PUT_FULL;
 		}
+	}
+	if (!old && *ghost_cell(sh, e->h) == ghost_tag(e->h)) {
+		*ghost_cell(sh, e->h) = 0;
+		e->hot = 2; /* came back after an eviction: survives two merges without a read */
+		sh->ghost_hits++;
 	}
 	e->seq = __atomic_add_fetch(&stash_a->inserts, 1, __ATOMIC_RELAXED);
 	sh->nlive += !old;
@@ -769,6 +784,7 @@ void stash_stats(stash_stats_t *st)
 		st->evacuated += __atomic_load_n(&sh->evacuated, __ATOMIC_RELAXED);
 		st->evicted += __atomic_load_n(&sh->evicted, __ATOMIC_RELAXED);
 		st->expired += __atomic_load_n(&sh->expired, __ATOMIC_RELAXED);
+		st->ghost_hits += __atomic_load_n(&sh->ghost_hits, __ATOMIC_RELAXED);
 		st->free_segments += __atomic_load_n(&sh->nfree, __ATOMIC_RELAXED);
 		st->dead_segments += __atomic_load_n(&sh->ndead, __ATOMIC_RELAXED);
 	}
@@ -829,7 +845,7 @@ const char *stash_arena_create(size_t size, uint64_t hint, size_t *need)
 	while (per * nshards < hint * 2 || per * nshards < size / 256) {
 		per <<= 1;
 	}
-	size_t header = STASH_ALIGN(sizeof(stash_arena)) + (size_t) nshards * per * sizeof(stash_slot);
+	size_t header = STASH_ALIGN(sizeof(stash_arena)) + (size_t) nshards * per * (sizeof(stash_slot) + sizeof(uint32_t));
 	header = (header + 63) & ~(size_t) 63;
 	*need = header + ((size_t) 4 << shift);
 	if (per > ((uint64_t) 1 << 31) || size < *need) {
@@ -857,6 +873,7 @@ const char *stash_arena_create(size_t size, uint64_t hint, size_t *need)
 	for (uint32_t s = 0; s < nshards; s++) {
 		stash_shard *sh = &stash_a->shards[s];
 		stash_tabs[s] = (stash_slot *) (stash_a->tables + (size_t) s * per * sizeof(stash_slot));
+		stash_ghosts[s] = (uint32_t *) (stash_a->tables + (size_t) nshards * per * sizeof(stash_slot)) + (size_t) s * per;
 		sh->lo = s * slice;
 		sh->hi = sh->lo + slice;
 		sh->nfree = slice;

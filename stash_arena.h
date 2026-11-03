@@ -58,6 +58,7 @@ typedef struct {
 	size_t exp_off;
 	uint64_t live_bytes, evacuated;
 	uint64_t evicted, expired; /* entries unlinked by merge while unexpired / by their TTL */
+	uint64_t ghost_hits;        /* new keys that were evicted recently: they start hot */
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4) */
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
 } stash_shard;
@@ -128,7 +129,7 @@ void stash_clear(void);
 stash_entry *stash_scan_next(stash_ctx *c, uint32_t *sh, uint32_t *i);
 
 typedef struct {
-	uint64_t used, entries, evacuated, hits, misses, evicted, expired, expunges, lock_steals, slots;
+	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
 } stash_stats_t;
 void stash_stats(stash_stats_t *s);

@@ -68,7 +68,7 @@ About 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x 
 
 ## When the cache is full
 
-Unlike APCu, which wipes the whole cache, stash merges its oldest segments: entries read since they were written survive, the rest is evicted (a few hundred at a time); `stash_stats()['expunges']` counts the rounds. `evicted` / `expired` count the entries dropped by merge / by their TTL; with `hits` / `misses` they show whether `apc.shm_size` is too small.
+Unlike APCu, which wipes the whole cache, stash merges its oldest segments: entries read since they were written survive, the rest is evicted (a few hundred at a time); `stash_stats()['expunges']` counts the rounds. `evicted` / `expired` count the entries dropped by merge / by their TTL; with `hits` / `misses` they show whether `apc.shm_size` is too small. A key written again soon after it was evicted starts as if read (`ghost_hits`), so keys that recur just beyond the cache size are kept over keys used once.
 The arena is split into up to 8 shards of at least 8 MB each (1 shard up to 8 MB, 4 at the default 32 MB); one entry must fit in a shard, larger ones are refused.
 
 ## Known gaps
