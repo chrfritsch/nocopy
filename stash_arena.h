@@ -221,9 +221,9 @@ static inline uint32_t stash_rand(stash_ctx *c)
 	return c->rng = x;
 }
 
-/* Lock-free; between borrow_begin/end. The entry's segment is pinned before it is touched.
+/* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
-static inline stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
+static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
 {
 	stash_shard *sh = stash_shard_of(h);
 	const stash_slot *t = stash_tabs[sh - stash_a->shards];

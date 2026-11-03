@@ -415,7 +415,7 @@ static bool cache_unserialize(zval *rv, const char *buf, size_t len)
 }
 
 /* Fetch into rv. Outside a scope the result is a private copy; inside, zero-copy. exp/delta: the entry's expiry and compute time (ms). */
-static bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	stash_ctx *c = &STASH_G(ctx);
 	bool copy = STASH_G(scope_depth) == 0;
