@@ -52,12 +52,22 @@ typedef struct stash_entry {
 typedef uint64_t slot_t;
 #define SLOT_TOMB ((slot_t) 1)
 
-enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT };
+/* A shard's open-addressing table. The first one lives in the header; grown ones in pool segments (SEG_TABLE). */
+typedef struct {
+	uint32_t mask;
+	slot_t s[] __attribute__((aligned(64))); /* mask on its own line: slots 0..7 are written */
+} stash_table;
 
+enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT, SEG_TABLE };
+
+/* state changes FREE -> OPEN/SEALED/CONT and DEAD -> FREE under the pool lock, everything else under the owner shard's lock:
+ * read it with seg_state() wherever the other lock may be the one held. */
 typedef struct {
 	uint8_t state;
+	uint8_t owner;    /* shard that opened it; only that shard appends to or unlinks from it */
 	uint32_t run;     /* head of a run: number of segments */
 	uint32_t pending; /* allocated, not yet published */
+	uint32_t gen;     /* bumped on every free, survives it: lets an expiry cursor notice reuse */
 	size_t used;      /* bytes appended */
 	size_t live;      /* bytes of live entries */
 	time_t max_exp;   /* latest expiry of its entries; 0 in the ttl=0 bucket (never) */
@@ -66,6 +76,21 @@ typedef struct {
 /* Entries go to an open segment per TTL bucket (Segcache), so a segment expires as a whole:
  * ttl 0, then < 8s, < 64s, < 512s, < 4096s, < 32768s, longer. */
 #define TTL_BUCKETS 7
+#define STASH_MAX_SHARDS 8
+
+/* Writers lock only the shard of their key (MICA-style partitions): own slot-table slice, open segments, expiry cursor. */
+typedef struct {
+	int lock __attribute__((aligned(64))); /* alone on its cache line: spinners must not steal the holder's metadata */
+	int32_t cur[TTL_BUCKETS] __attribute__((aligned(64))); /* segment being appended to per bucket, or -1 */
+	time_t exp_idle;    /* second in which a full expiry pass found nothing */
+	uint32_t exp_next;  /* expiry cursor: segment, its gen, and offset of the next entry to look at */
+	uint32_t exp_gen;
+	size_t exp_off;
+	uint64_t live_bytes, evacuated;
+	uint32_t used;   /* non-empty slots (live + tombstones) in tab */
+	uint32_t nlive;  /* live slots in tab */
+	stash_table *tab __attribute__((aligned(64))); /* read-mostly line: every lookup loads it, only grow() writes it */
+} stash_shard;
 
 /* One cache line per worker: the segments it pins, and its counters. */
 typedef struct {
@@ -76,19 +101,20 @@ typedef struct {
 } __attribute__((aligned(64))) stash_worker;
 
 typedef struct {
-	int lock __attribute__((aligned(64))); /* alone on its cache line: spinners must not steal the holder's metadata */
-	int32_t cur[TTL_BUCKETS] __attribute__((aligned(64))); /* segment being appended to per bucket, or -1 */
+	int pool __attribute__((aligned(64))); /* segment pool lock; taken inside a shard lock, never the other way round */
+	uint32_t nfree __attribute__((aligned(64))); /* pool lock */
+	uint32_t ndead;    /* atomic */
+	bool hint;         /* atomic: a segment just died, worth a reclaim pass */
 	size_t header_size;
-	uint32_t nslots, nsegs, nfree, ndead;
+	uint32_t nsegs, nshards;
 	uint32_t nworkers; /* high-water mark of claimed worker slots: scans stop here */
-	bool hint;     /* a segment just died: worth a reclaim pass */
-	time_t start_time, exp_idle; /* exp_idle: second in which a full expiry pass found nothing */
-	uint32_t exp_next;  /* expiry cursor: segment ... */
-	size_t exp_off;     /* ... and offset of the next entry to look at */
-	uint64_t inserts, expunges, live_bytes, evacuated;
+	time_t start_time;
+	uint64_t expunges;
+	uint64_t inserts __attribute__((aligned(64))); /* atomic, insertion order for iterators */
+	stash_shard shards[STASH_MAX_SHARDS];
 	stash_worker workers[STASH_MAX_WORKERS];
 	stash_seg segs[STASH_MAX_SEGS];
-	slot_t slots[]; /* nslots entries follow */
+	char tables[] __attribute__((aligned(64))); /* the shards' initial tables follow */
 } stash_arena;
 
 static stash_arena *arena;
@@ -105,10 +131,15 @@ static int pin_refs;              /* calls currently reading the arena */
 static uint64_t mine[SEG_WORDS];  /* segments this process has published as pinned */
 static uint64_t keep[SEG_WORDS];  /* subset kept past the call: a zero-copy pointer left the extension */
 static bool transient;            /* mine has bits that are not in keep */
-static uint32_t slot_mask;        /* arena->nslots - 1, kept local so readers never touch the header's cache lines */
+static uint32_t shard_mask;       /* nshards - 1; kept local so readers never touch the header's written cache lines */
 
-#define MASK slot_mask
-
+/* Fibonacci mix: DJB hashes of short keys barely vary in their high bits */
+static inline uint32_t shard_of(zend_ulong h) { return (uint32_t) (((uint64_t) h * 0x9E3779B97F4A7C15ULL) >> 56) & shard_mask; }
+static inline stash_table *shard_tab(uint32_t sh) { return __atomic_load_n(&arena->shards[sh].tab, __ATOMIC_ACQUIRE); }
+static inline stash_shard *key_shard(zend_ulong h) { return &arena->shards[shard_of(h)]; }
+static inline uint32_t shard_id(const stash_shard *sh) { return (uint32_t) (sh - arena->shards); }
+static inline uint8_t seg_state(uint32_t s) { return __atomic_load_n(&arena->segs[s].state, __ATOMIC_ACQUIRE); }
+static inline void seg_set(uint32_t s, uint8_t st) { __atomic_store_n(&arena->segs[s].state, st, __ATOMIC_RELEASE); }
 static inline uint32_t seg_index(const void *p) { return (uint32_t) (((const char *) p - seg_base) >> seg_shift); }
 static inline char *seg_start(uint32_t i) { return seg_base + ((size_t) i << seg_shift); }
 static inline bool slot_live(slot_t s) { return (uint32_t) s > 1; }
@@ -130,11 +161,11 @@ static inline void cpu_relax(void)
 
 /* Test-and-test-and-set; yields once the wait gets long (holder preempted or compacting).
  * ponytail: a writer dying inside the lock deadlocks everyone; robust pthread mutex (EOWNERDEAD) on Linux */
-static void arena_lock(void)
+static void spin_lock(int *l)
 {
 	unsigned spins = 0;
-	while (__atomic_exchange_n(&arena->lock, 1, __ATOMIC_ACQUIRE)) {
-		while (__atomic_load_n(&arena->lock, __ATOMIC_RELAXED)) {
+	while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
+		while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
 			if (++spins < 128) {
 				cpu_relax();
 			} else {
@@ -144,9 +175,14 @@ static void arena_lock(void)
 	}
 }
 
-static void arena_unlock(void)
+static void spin_unlock(int *l)
 {
-	__atomic_store_n(&arena->lock, 0, __ATOMIC_RELEASE);
+	__atomic_store_n(l, 0, __ATOMIC_RELEASE);
+}
+
+static bool spin_trylock(int *l)
+{
+	return !__atomic_load_n(l, __ATOMIC_RELAXED) && !__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE);
 }
 
 /* ---- workers and pins ---- */
@@ -263,7 +299,7 @@ static bool tracked(void)
 	return true;
 }
 
-/* ---- segments (all with the lock held) ---- */
+/* ---- segments (owner shard's lock held unless noted) ---- */
 
 static bool expired(const stash_entry *e)
 {
@@ -274,33 +310,47 @@ static void seg_check(uint32_t s)
 {
 	stash_seg *g = &arena->segs[s];
 	if (g->state == SEG_SEALED && !g->live && !g->pending) {
-		g->state = SEG_DEAD;
-		arena->ndead++;
-		arena->hint = true;
+		seg_set(s, SEG_DEAD); /* from here on only the pool touches it */
+		__atomic_add_fetch(&arena->ndead, 1, __ATOMIC_RELAXED);
+		__atomic_store_n(&arena->hint, true, __ATOMIC_RELAXED);
 	}
 }
 
+/* Pool lock held. */
 static void seg_free(uint32_t s)
 {
 	uint32_t k = arena->segs[s].run;
-	if (s == arena->exp_next) {
-		arena->exp_off = 0; /* the cursor's offset would land mid-entry once the segment is reused */
-	}
 #if ZEND_DEBUG
 	memset(seg_start(s), 0x5A, (size_t) k << seg_shift); /* make use-after-free loud */
 #endif
 	for (uint32_t j = s; j < s + k; j++) {
+		uint32_t gen = arena->segs[j].gen + 1;
 		memset(&arena->segs[j], 0, sizeof(stash_seg)); /* SEG_FREE */
+		arena->segs[j].gen = gen;
 	}
 	arena->nfree += k;
-	arena->ndead--;
+	__atomic_sub_fetch(&arena->ndead, 1, __ATOMIC_RELAXED);
 }
 
-/* Hand back every dead segment that no live worker pins. */
+/* Hand back every dead segment that no live worker pins. Takes the pool lock. */
 static void reclaim(void)
 {
-	arena->hint = false;
-	if (!arena->ndead) {
+	__atomic_store_n(&arena->hint, false, __ATOMIC_RELAXED);
+	if (!__atomic_load_n(&arena->ndead, __ATOMIC_RELAXED)) {
+		return;
+	}
+	spin_lock(&arena->pool);
+	/* Dead set first, pins second: shards turn segments DEAD concurrently, and a segment that died after
+	 * we read the pins could have been pinned (and its slot re-checked) just before. DEAD only ends here. */
+	uint64_t dead[SEG_WORDS] = {0}, any_dead = 0;
+	for (uint32_t s = 0; s < arena->nsegs; s++) {
+		if (seg_state(s) == SEG_DEAD) {
+			dead[s >> 6] |= (uint64_t) 1 << (s & 63);
+			any_dead = 1;
+		}
+	}
+	if (!any_dead) {
+		spin_unlock(&arena->pool);
 		return;
 	}
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
@@ -324,10 +374,30 @@ static void reclaim(void)
 		}
 	}
 	for (uint32_t s = 0; s < arena->nsegs; s++) {
-		if (arena->segs[s].state == SEG_DEAD && !(held[s >> 6] >> (s & 63) & 1)) {
+		if ((dead[s >> 6] & ~held[s >> 6]) >> (s & 63) & 1) {
 			seg_free(s);
 		}
 	}
+	spin_unlock(&arena->pool);
+}
+
+/* Live bytes over all shards; racy by design, for stats. */
+static uint64_t live_total(void)
+{
+	uint64_t n = 0;
+	for (uint32_t i = 0; i < arena->nshards; i++) {
+		n += __atomic_load_n(&arena->shards[i].live_bytes, __ATOMIC_RELAXED);
+	}
+	return n;
+}
+
+static zend_long slots_total(void)
+{
+	zend_long n = 0;
+	for (uint32_t i = 0; i < arena->nshards; i++) {
+		n += shard_tab(i)->mask + 1;
+	}
+	return n;
 }
 
 /* An entry stops being reachable: its bytes are garbage from now on. */
@@ -336,7 +406,7 @@ static void entry_die(stash_entry *e)
 	uint32_t s = seg_index(e);
 	e->live = false;
 	arena->segs[s].live -= e->size;
-	arena->live_bytes -= e->size;
+	key_shard(ZSTR_H(e->key))->live_bytes -= e->size;
 	seg_check(s);
 }
 
@@ -346,7 +416,7 @@ static void entry_birth(stash_entry *e)
 	e->live = true;
 	arena->segs[s].pending--;
 	arena->segs[s].live += e->size;
-	arena->live_bytes += e->size;
+	key_shard(ZSTR_H(e->key))->live_bytes += e->size;
 }
 
 static void entry_abort(stash_entry *e)
@@ -379,121 +449,132 @@ static stash_entry *seg_carve(uint32_t s, size_t total, time_t exp)
 	return e;
 }
 
+/* Takes k contiguous free segments for sh, leaving `spare` free ones; the first gets `state`. UINT32_MAX if none. */
+static uint32_t pool_run(stash_shard *sh, uint32_t k, uint32_t spare, uint8_t state)
+{
+	uint32_t got = UINT32_MAX;
+	spin_lock(&arena->pool);
+	for (uint32_t s = 0, n = 0; arena->nfree >= k + spare && s < arena->nsegs; s++) {
+		n = seg_state(s) == SEG_FREE ? n + 1 : 0;
+		if (n == k) {
+			got = s + 1 - k;
+			for (uint32_t j = got + 1; j <= s; j++) {
+				seg_set(j, SEG_CONT);
+			}
+			arena->segs[got].owner = (uint8_t) shard_id(sh);
+			arena->segs[got].run = k;
+			seg_set(got, state);
+			arena->nfree -= k;
+			break;
+		}
+	}
+	spin_unlock(&arena->pool);
+	return got;
+}
+
 /* total: aligned block size. reserve: may take the last free segment (kept back for compaction).
  * exp: the entry's expiry (0 never); it picks the TTL bucket. */
-static stash_entry *seg_alloc(size_t total, bool reserve, time_t exp, time_t now)
+static stash_entry *seg_alloc(stash_shard *sh, size_t total, bool reserve, time_t exp, time_t now)
 {
 	int b = ttl_bucket(exp ? exp - now : 0);
-	uint32_t spare = reserve ? 0 : 1;
+	uint32_t spare = reserve ? 0 : 1, got;
 	if (total > seg_size / 2) { /* a run of contiguous segments */
-		uint32_t k = (uint32_t) ((total + seg_size - 1) >> seg_shift);
-		if (arena->nfree < k + spare) {
-			return NULL;
-		}
-		for (uint32_t s = 0, n = 0; s < arena->nsegs; s++) {
-			n = arena->segs[s].state == SEG_FREE ? n + 1 : 0;
-			if (n == k) {
-				uint32_t head = s + 1 - k;
-				for (uint32_t j = head; j <= s; j++) {
-					arena->segs[j].state = SEG_CONT;
-				}
-				arena->segs[head].state = SEG_SEALED;
-				arena->segs[head].run = k;
-				arena->nfree -= k;
-				return seg_carve(head, total, exp);
-			}
-		}
-		return NULL;
+		got = pool_run(sh, (uint32_t) ((total + seg_size - 1) >> seg_shift), spare, SEG_SEALED);
+		return got == UINT32_MAX ? NULL : seg_carve(got, total, exp);
 	}
-	int32_t cur = arena->cur[b];
+	int32_t cur = sh->cur[b];
 	if (cur >= 0 && arena->segs[cur].used + total <= seg_size) {
 		return seg_carve(cur, total, exp);
 	}
-	if (arena->nfree < 1 + spare) {
+	got = pool_run(sh, 1, spare, SEG_OPEN);
+	if (got == UINT32_MAX) {
 		return NULL;
 	}
 	if (cur >= 0) {
-		arena->segs[cur].state = SEG_SEALED;
-		arena->cur[b] = -1;
+		seg_set(cur, SEG_SEALED);
 		seg_check(cur);
 	}
-	for (uint32_t s = 0; s < arena->nsegs; s++) {
-		if (arena->segs[s].state == SEG_FREE) {
-			arena->segs[s].state = SEG_OPEN;
-			arena->segs[s].run = 1;
-			arena->nfree--;
-			arena->cur[b] = s;
-			return seg_carve(s, total, exp);
-		}
-	}
-	return NULL;
+	sh->cur[b] = (int32_t) got;
+	return seg_carve(got, total, exp);
 }
 
-static void slot_clear(uint32_t i);
+static void slot_clear(stash_shard *sh, slot_t *p);
 static bool calc_zval(zval *z, int depth, size_t *n, int *why);
 static void persist_zval(zval *z);
 static char *cursor;
 static zend_string *persist_str(const zend_string *s);
 
-/* Slot that links the live entry e, or UINT32_MAX. */
-static uint32_t slot_of(const stash_entry *e)
+/* Slot that links the live entry e, or NULL. */
+static slot_t *slot_of(const stash_entry *e)
 {
 	zend_ulong h = ZSTR_H(e->key);
-	for (uint32_t i = h & MASK, k = 0; k <= MASK; k++, i = (i + 1) & MASK) {
-		if (slot_live(arena->slots[i]) && slot_entry(arena->slots[i]) == e) {
-			return i;
+	stash_table *t = key_shard(h)->tab;
+	for (uint32_t i = h & t->mask, k = 0; k <= t->mask; k++, i = (i + 1) & t->mask) {
+		if (slot_live(t->s[i]) && slot_entry(t->s[i]) == e) {
+			return &t->s[i];
 		}
 	}
-	return UINT32_MAX;
+	return NULL;
 }
 
 static void entry_unlink(stash_entry *e)
 {
-	uint32_t i = slot_of(e);
-	if (i != UINT32_MAX) {
-		slot_clear(i);
+	slot_t *p = slot_of(e);
+	if (p) {
+		slot_clear(key_shard(ZSTR_H(e->key)), p);
 	}
 	entry_die(e);
 }
 
-/* Unlinks entries of segments whose entries have all expired, looking at most `budget` entries per call
+/* Whether sh owns segment s in a state it may append to or unlink from. */
+static bool seg_mine(const stash_shard *sh, uint32_t s, bool open_ok)
+{
+	uint8_t st = seg_state(s); /* state first: an owner read after it belongs to the same life of the segment */
+	return (st == SEG_SEALED || (open_ok && st == SEG_OPEN)) && arena->segs[s].owner == shard_id(sh);
+}
+
+/* Unlinks entries of sh's segments whose entries have all expired, looking at most `budget` entries per call
  * so no single write pays for a second's worth of expiry. No slot scan. True if anything was unlinked. */
-static bool expire_step(time_t now, int budget)
+static bool expire_step(stash_shard *sh, time_t now, int budget)
 {
 	bool did = false;
-	if (arena->exp_idle == now) {
+	if (sh->exp_idle == now) {
 		return false;
 	}
 	for (uint32_t seen = 0; seen < arena->nsegs; seen++) {
-		uint32_t s = arena->exp_next;
+		uint32_t s = sh->exp_next;
 		stash_seg *g = &arena->segs[s];
-		if ((g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp <= now) {
-			while (arena->exp_off < g->used) {
+		if (seg_mine(sh, s, true) && g->live && g->max_exp && g->max_exp <= now) {
+			if (sh->exp_gen != g->gen) { /* freed and reused since the cursor stopped here: entry boundaries moved */
+				sh->exp_gen = g->gen;
+				sh->exp_off = 0;
+			}
+			while (sh->exp_off < g->used) {
 				if (budget-- <= 0) {
 					return did; /* resume here on the next write */
 				}
-				stash_entry *e = (stash_entry *) (seg_start(s) + arena->exp_off);
-				arena->exp_off += e->size;
+				stash_entry *e = (stash_entry *) (seg_start(s) + sh->exp_off);
+				sh->exp_off += e->size;
 				if (e->live) {
 					entry_unlink(e);
 					did = true;
 				}
 			}
 		}
-		arena->exp_off = 0;
-		arena->exp_next = (s + 1) % arena->nsegs;
+		sh->exp_off = 0;
+		sh->exp_next = (s + 1) % arena->nsegs;
 	}
-	arena->exp_idle = now;
+	sh->exp_idle = now;
 	return did;
 }
 
-/* Moves the live entries of the sparsest sealed segment forward (expired ones are dropped); the segment dies. */
-static bool evacuate(void)
+/* Moves the live entries of sh's sparsest sealed segment forward (expired ones are dropped); the segment dies. */
+static bool evacuate(stash_shard *sh)
 {
 	uint32_t victim = UINT32_MAX;
 	for (uint32_t s = 0; s < arena->nsegs; s++) {
 		stash_seg *g = &arena->segs[s];
-		if (g->state == SEG_SEALED && g->run == 1 && !g->pending && g->live <= seg_size / 2
+		if (seg_mine(sh, s, false) && g->run == 1 && !g->pending && g->live <= seg_size / 2
 		 && (victim == UINT32_MAX || g->live < arena->segs[victim].live)) {
 			victim = s;
 		}
@@ -515,11 +596,11 @@ static bool evacuate(void)
 		size_t body = 0, head = SALIGN(sizeof(stash_entry));
 		calc_zval(&old->val, 0, &body, NULL);
 		/* now = created: keeps the entry in its original TTL bucket */
-		stash_entry *n = seg_alloc(head + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(old->key))) + body, true, old->expires, old->created);
+		stash_entry *n = seg_alloc(sh, head + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(old->key))) + body, true, old->expires, old->created);
 		if (!n) {
 			return false;
 		}
-		arena->evacuated += n->size;
+		sh->evacuated += n->size;
 		size_t total = n->size;
 		cursor = (char *) n + head;
 		n->key = persist_str(old->key);
@@ -530,10 +611,10 @@ static bool evacuate(void)
 		n->created = old->created;
 		n->seq = old->seq;
 		n->serialized = old->serialized;
-		uint32_t i = slot_of(old);
-		if (i != UINT32_MAX) {
+		slot_t *sp = slot_of(old);
+		if (sp) {
 			entry_birth(n);
-			__atomic_store_n(&arena->slots[i], slot_make(n, ZSTR_H(n->key)), __ATOMIC_RELEASE);
+			__atomic_store_n(sp, slot_make(n, ZSTR_H(n->key)), __ATOMIC_RELEASE);
 		} else {
 			entry_abort(n);
 		}
@@ -542,22 +623,52 @@ static bool evacuate(void)
 	return true;
 }
 
-/* Lock held. Expire, reclaim and compact until `total` bytes fit, or give up. */
-static stash_entry *alloc_entry(size_t total, time_t exp, time_t now)
+/* Under pressure the pool may be held by other shards' expired or sparse segments: expire (or compact) them.
+ * trylock only: we hold sh, so waiting for another shard could deadlock. */
+static bool help_others(stash_shard *sh, time_t now, bool compact)
 {
-	expire_step(now, 64);
-	stash_entry *e = seg_alloc(total, false, exp, now);
+	bool did = false;
+	for (uint32_t i = 0; i < arena->nshards; i++) {
+		stash_shard *o = &arena->shards[i];
+		if (o == sh || !spin_trylock(&o->lock)) {
+			continue;
+		}
+		if (compact) {
+			did |= evacuate(o);
+		} else {
+			while (expire_step(o, now, 4096)) {
+				did = true;
+			}
+		}
+		spin_unlock(&o->lock);
+	}
+	return did;
+}
+
+/* sh locked. Expire, reclaim and compact until `total` bytes fit, or give up. */
+static stash_entry *alloc_entry(stash_shard *sh, size_t total, time_t exp, time_t now)
+{
+	expire_step(sh, now, 64);
+	stash_entry *e = seg_alloc(sh, total, false, exp, now);
 	if (!e) {
 		reclaim();
-		e = seg_alloc(total, false, exp, now);
+		e = seg_alloc(sh, total, false, exp, now);
 	}
-	while (!e && expire_step(now, 4096)) { /* under pressure: catch up on expiry before copying live data */
+	while (!e && expire_step(sh, now, 4096)) { /* under pressure: catch up on expiry before copying live data */
 		reclaim();
-		e = seg_alloc(total, false, exp, now);
+		e = seg_alloc(sh, total, false, exp, now);
 	}
-	for (uint32_t tries = arena->nsegs; !e && tries && evacuate(); tries--) {
+	if (!e && help_others(sh, now, false)) {
 		reclaim();
-		e = seg_alloc(total, false, exp, now);
+		e = seg_alloc(sh, total, false, exp, now);
+	}
+	for (uint32_t tries = arena->nsegs; !e && tries && evacuate(sh); tries--) {
+		reclaim();
+		e = seg_alloc(sh, total, false, exp, now);
+	}
+	for (uint32_t tries = arena->nsegs; !e && tries && help_others(sh, now, true); tries--) {
+		reclaim();
+		e = seg_alloc(sh, total, false, exp, now);
 	}
 	return e;
 }
@@ -815,15 +926,20 @@ static bool key_eq(const zend_string *a, const zend_string *b)
 }
 
 /* Tombstones are only needed while a probe chain continues behind them. */
-static void slot_clear(uint32_t i)
+static void slot_clear(stash_shard *sh, slot_t *p)
 {
-	if (arena->slots[(i + 1) & MASK] != 0) {
-		__atomic_store_n(&arena->slots[i], SLOT_TOMB, __ATOMIC_RELEASE);
+	slot_t *tab = sh->tab->s;
+	uint32_t m = sh->tab->mask, i = (uint32_t) (p - tab);
+	sh->nlive--;
+	if (tab[(i + 1) & m] != 0) {
+		__atomic_store_n(&tab[i], SLOT_TOMB, __ATOMIC_RELEASE);
 		return;
 	}
-	__atomic_store_n(&arena->slots[i], 0, __ATOMIC_RELEASE);
-	for (uint32_t j = (i - 1) & MASK; arena->slots[j] == SLOT_TOMB; j = (j - 1) & MASK) {
-		__atomic_store_n(&arena->slots[j], 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&tab[i], 0, __ATOMIC_RELEASE);
+	sh->used--;
+	for (uint32_t j = (i - 1) & m; tab[j] == SLOT_TOMB; j = (j - 1) & m) {
+		__atomic_store_n(&tab[j], 0, __ATOMIC_RELEASE);
+		sh->used--;
 	}
 }
 
@@ -831,10 +947,12 @@ static void slot_clear(uint32_t i)
 static stash_entry *find(zend_string *key)
 {
 	zend_ulong h = zend_string_hash_val(key);
-	uint32_t tag = slot_tag(h);
-retry:
-	for (uint32_t n = 0, i = h & MASK; n <= MASK; n++, i = (i + 1) & MASK) {
-		slot_t s = __atomic_load_n(&arena->slots[i], __ATOMIC_ACQUIRE);
+	uint32_t tag = slot_tag(h), shi = shard_of(h);
+retry:;
+	const stash_table *t = shard_tab(shi);
+	uint32_t m = t->mask;
+	for (uint32_t n = 0, i = h & m; n <= m; n++, i = (i + 1) & m) {
+		slot_t s = __atomic_load_n(&t->s[i], __ATOMIC_ACQUIRE);
 		if (!s) {
 			return NULL;
 		}
@@ -842,7 +960,9 @@ retry:
 			continue;
 		}
 		stash_entry *e = slot_entry(s);
-		if (seg_hold(e) && __atomic_load_n(&arena->slots[i], __ATOMIC_ACQUIRE) != s) {
+		bool fresh = seg_hold(e);
+		/* a replaced table is frozen: its slots may name freed entries, even in a segment we already pin */
+		if (shard_tab(shi) != t || (fresh && __atomic_load_n(&t->s[i], __ATOMIC_ACQUIRE) != s)) {
 			goto retry; /* unlinked while we were pinning: the memory may be reused */
 		}
 		if (key_eq(e->key, key)) {
@@ -852,43 +972,92 @@ retry:
 	return NULL;
 }
 
-/* Lock-free scan helper: the pinned entry in slot i, or NULL. Call between borrow_begin()/borrow_end(). */
-static stash_entry *slot_pin(uint32_t i)
+/* Lock-free scan helper: the pinned entry in slot i of shard shi's table t, or NULL. Call between borrow_begin()/borrow_end().
+ * A scan racing grow() may skip or repeat entries of that shard, like any concurrent write. */
+static stash_entry *slot_pin(uint32_t shi, const stash_table *t, uint32_t i)
 {
 	for (;;) {
-		slot_t s = __atomic_load_n(&arena->slots[i], __ATOMIC_ACQUIRE);
+		slot_t s = __atomic_load_n(&t->s[i], __ATOMIC_ACQUIRE);
 		if (!slot_live(s)) {
 			return NULL;
 		}
 		stash_entry *e = slot_entry(s);
-		if (!seg_hold(e) || __atomic_load_n(&arena->slots[i], __ATOMIC_ACQUIRE) == s) {
+		bool fresh = seg_hold(e);
+		if (shard_tab(shi) != t) {
+			return NULL;
+		}
+		if (!fresh || __atomic_load_n(&t->s[i], __ATOMIC_ACQUIRE) == s) {
 			return e;
 		}
 	}
 }
 
-/* Lock held. Slot for key: its own if present, else first tombstone/empty, else -1. */
-static int locate(zend_string *key, stash_entry **found)
+/* Lock-free scan: the next pinned unexpired entry at or after (*sh, *i), NULL at the end. Start at 0, 0. */
+static stash_entry *scan_next(uint32_t *sh, uint32_t *i)
+{
+	for (; *sh < arena->nshards; (*sh)++, *i = 0) {
+		const stash_table *t = shard_tab(*sh);
+		while (*i <= t->mask) {
+			stash_entry *e = slot_pin(*sh, t, (*i)++);
+			if (e && !expired(e)) {
+				return e;
+			}
+		}
+	}
+	return NULL;
+}
+
+/* Shard locked. Doubles its table into a pool run and publishes it; readers on the old one notice in find().
+ * ponytail: old grown tables are never freed (less than the live table); rehash stalls the shard, go incremental if that shows. */
+static void grow(stash_shard *sh)
+{
+	stash_table *old = sh->tab, *t;
+	uint32_t cap = (old->mask + 1) * 2;
+	size_t bytes = sizeof(stash_table) + (size_t) cap * sizeof(slot_t);
+	uint32_t got = pool_run(sh, (uint32_t) ((bytes + seg_size - 1) >> seg_shift), 1, SEG_TABLE);
+	if (got == UINT32_MAX) {
+		return; /* ponytail: retried on every insert while the pool is short */
+	}
+	t = (stash_table *) seg_start(got);
+	memset(t, 0, bytes);
+	t->mask = cap - 1;
+	for (uint32_t i = 0; i <= old->mask; i++) {
+		slot_t s = old->s[i];
+		if (slot_live(s)) {
+			uint32_t j = ZSTR_H(slot_entry(s)->key) & t->mask;
+			while (t->s[j]) {
+				j = (j + 1) & t->mask;
+			}
+			t->s[j] = s;
+		}
+	}
+	sh->used = sh->nlive;
+	__atomic_store_n(&sh->tab, t, __ATOMIC_SEQ_CST);
+}
+
+/* Key's shard locked. Slot for key: its own if present, else first tombstone/empty, else NULL (table full). */
+static slot_t *locate(zend_string *key, stash_entry **found)
 {
 	zend_ulong h = zend_string_hash_val(key);
 	uint32_t tag = slot_tag(h);
-	int idx = -1;
+	stash_table *t = key_shard(h)->tab;
+	slot_t *free_slot = NULL;
 	*found = NULL;
-	for (uint32_t n = 0, i = h & MASK; n < arena->nslots; n++, i = (i + 1) & MASK) {
-		slot_t s = arena->slots[i];
+	for (uint32_t n = 0, i = h & t->mask; n <= t->mask; n++, i = (i + 1) & t->mask) {
+		slot_t s = t->s[i];
 		if (!s) {
-			return idx < 0 ? (int) i : idx;
+			return free_slot ? free_slot : &t->s[i];
 		}
 		if (!slot_live(s)) {
-			if (idx < 0) {
-				idx = i;
+			if (!free_slot) {
+				free_slot = &t->s[i];
 			}
 		} else if ((uint32_t) (s >> 32) == tag && key_eq(slot_entry(s)->key, key)) {
 			*found = slot_entry(s);
-			return i;
+			return &t->s[i];
 		}
 	}
-	return idx;
+	return free_slot;
 }
 
 /* ---- core operations ---- */
@@ -939,12 +1108,13 @@ static stash_entry *build_entry(zend_string *key, zval *val, zend_long ttl, bool
 	}
 	payload += body;
 
-	arena_lock();
+	stash_shard *sh = key_shard(zend_string_hash_val(key));
+	spin_lock(&sh->lock);
 	time_t now = time(NULL), exp = ttl ? now + ttl : 0; /* inside the lock: measured faster under write contention than before it */
-	stash_entry *e = alloc_entry(payload, exp, now);
+	stash_entry *e = alloc_entry(sh, payload, exp, now);
 	*locked = e && payload <= STASH_INLINE_PUT;
 	if (!*locked) {
-		arena_unlock();
+		spin_unlock(&sh->lock);
 	}
 
 	if (e) {
@@ -967,29 +1137,36 @@ static stash_entry *build_entry(zend_string *key, zval *val, zend_long ttl, bool
 static put_result commit(stash_entry *e, zend_string *key, bool add_only, bool locked)
 {
 	put_result r = PUT_OK;
+	stash_shard *sh = key_shard(zend_string_hash_val(key));
 	if (!locked) {
-		arena_lock();
+		spin_lock(&sh->lock);
+	}
+	uint32_t cap = sh->tab->mask + 1;
+	if (sh->used >= cap / 4 * 3 && sh->nlive >= cap / 2) { /* mostly tombstones: inserts reuse them, no need to grow */
+		grow(sh);
 	}
 	stash_entry *old;
-	int idx = locate(key, &old);
-	if (idx < 0) {
+	slot_t *sp = locate(key, &old);
+	if (!sp) {
 		entry_abort(e);
 		r = PUT_FULL;
 	} else if (add_only && old && !expired(old)) {
 		entry_abort(e);
 		r = PUT_EXISTS;
 	} else {
-		e->seq = ++arena->inserts;
+		e->seq = __atomic_add_fetch(&arena->inserts, 1, __ATOMIC_RELAXED);
+		sh->used += !*sp;
+		sh->nlive += !old;
 		entry_birth(e);
-		__atomic_store_n(&arena->slots[idx], slot_make(e, zend_string_hash_val(key)), __ATOMIC_RELEASE);
+		__atomic_store_n(sp, slot_make(e, zend_string_hash_val(key)), __ATOMIC_RELEASE);
 		if (old) {
 			entry_die(old);
 		}
-		if (arena->hint) {
+		if (__atomic_load_n(&arena->hint, __ATOMIC_RELAXED)) {
 			reclaim();
 		}
 	}
-	arena_unlock();
+	spin_unlock(&sh->lock);
 	return r;
 }
 
@@ -1002,18 +1179,19 @@ static bool do_store(zend_string *key, zval *val, zend_long ttl, bool add_only, 
 
 static bool do_delete(zend_string *key)
 {
-	arena_lock();
+	stash_shard *sh = key_shard(zend_string_hash_val(key));
+	spin_lock(&sh->lock);
 	stash_entry *old;
-	int idx = locate(key, &old);
+	slot_t *sp = locate(key, &old);
 	bool found = old && !expired(old);
 	if (old) {
-		slot_clear(idx);
+		slot_clear(sh, sp);
 		entry_die(old);
-		if (arena->hint) {
+		if (__atomic_load_n(&arena->hint, __ATOMIC_RELAXED)) {
 			reclaim();
 		}
 	}
-	arena_unlock();
+	spin_unlock(&sh->lock);
 	return found;
 }
 
@@ -1146,11 +1324,8 @@ static void iter_snapshot(stash_iter *it)
 	uint32_t c = 0, cap = 64;
 	snap_row *rows = safe_emalloc(cap, sizeof(snap_row), 0);
 	borrow_begin();
-	for (uint32_t i = 0; i < arena->nslots; i++) {
-		stash_entry *e = slot_pin(i);
-		if (!e || expired(e)) {
-			continue;
-		}
+	stash_entry *e;
+	for (uint32_t sh = 0, i = 0; (e = scan_next(&sh, &i));) {
 		if (c == cap) {
 			cap *= 2;
 			rows = safe_erealloc(rows, cap, sizeof(snap_row), 0);
@@ -1500,18 +1675,14 @@ PHP_FUNCTION(stash_scope)
 PHP_FUNCTION(stash_stats)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	zend_long entries = 0, live, nfree, ndead, nsegs, evacuated;
+	zend_long entries = 0, live = live_total(), nfree, ndead, nsegs = arena->nsegs, evacuated = 0;
 
-	arena_lock();
-	for (uint32_t i = 0; i < arena->nslots; i++) {
-		entries += slot_live(arena->slots[i]);
+	for (uint32_t i = 0; i < arena->nshards; i++) { /* lock-free: a snapshot that may be off by concurrent writes */
+		entries += __atomic_load_n(&arena->shards[i].nlive, __ATOMIC_RELAXED);
+		evacuated += __atomic_load_n(&arena->shards[i].evacuated, __ATOMIC_RELAXED);
 	}
-	live = arena->live_bytes;
-	nfree = arena->nfree;
-	ndead = arena->ndead;
-	evacuated = arena->evacuated;
-	nsegs = arena->nsegs;
-	arena_unlock();
+	nfree = __atomic_load_n(&arena->nfree, __ATOMIC_RELAXED);
+	ndead = __atomic_load_n(&arena->ndead, __ATOMIC_RELAXED);
 
 	uint64_t held[SEG_WORDS] = {0}, hits = 0, misses = 0;
 	for (uint32_t i = 0; i < arena->nworkers; i++) {
@@ -1538,6 +1709,8 @@ PHP_FUNCTION(stash_stats)
 	add_assoc_long(return_value, "hits", hits);
 	add_assoc_long(return_value, "misses", misses);
 	add_assoc_long(return_value, "evacuated_bytes", evacuated);
+	add_assoc_long(return_value, "shards", arena->nshards);
+	add_assoc_long(return_value, "slots", slots_total());
 }
 
 /* ---- apcu_* ---- */
@@ -1780,24 +1953,25 @@ static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 	if (!tracked()) {
 		RETURN_THROWS();
 	}
+	stash_shard *sh = key_shard(zend_string_hash_val(key));
 	for (;;) {
-		arena_lock();
+		spin_lock(&sh->lock);
 		stash_entry *e;
 		locate(key, &e);
 		if (e && !expired(e)) {
 			if (Z_TYPE(e->val) != IS_LONG || e->serialized) {
-				arena_unlock();
+				spin_unlock(&sh->lock);
 				RETURN_FALSE;
 			}
 			/* in place and atomic: lock-free readers copy this word */
 			zend_long nv = __atomic_add_fetch(&e->val.value.lval, sign * step, __ATOMIC_RELAXED);
-			arena_unlock();
+			spin_unlock(&sh->lock);
 			if (success) {
 				ZEND_TRY_ASSIGN_REF_TRUE(success);
 			}
 			RETURN_LONG(nv);
 		}
-		arena_unlock();
+		spin_unlock(&sh->lock);
 
 		zval init;
 		ZVAL_LONG(&init, sign * step);
@@ -1837,14 +2011,15 @@ PHP_FUNCTION(apcu_cas)
 	if (!apc_on) {
 		RETURN_FALSE;
 	}
-	arena_lock();
+	stash_shard *sh = key_shard(zend_string_hash_val(key));
+	spin_lock(&sh->lock);
 	stash_entry *e;
 	locate(key, &e);
 	bool ok = e && !expired(e) && !e->serialized && Z_TYPE(e->val) == IS_LONG && Z_LVAL(e->val) == old;
 	if (ok) {
 		__atomic_store_n(&e->val.value.lval, nw, __ATOMIC_RELAXED);
 	}
-	arena_unlock();
+	spin_unlock(&sh->lock);
 	RETURN_BOOL(ok);
 }
 
@@ -1854,17 +2029,25 @@ PHP_FUNCTION(apcu_clear_cache)
 	if (!apc_on) {
 		RETURN_TRUE;
 	}
-	arena_lock();
-	for (uint32_t i = 0; i < arena->nslots; i++) {
-		slot_t sl = arena->slots[i];
-		if (slot_live(sl)) {
-			__atomic_store_n(&arena->slots[i], SLOT_TOMB, __ATOMIC_RELEASE);
-			entry_die(slot_entry(sl));
-		}
+	for (uint32_t s = 0; s < arena->nshards; s++) { /* in order: two clears never deadlock */
+		spin_lock(&arena->shards[s].lock);
 	}
-	arena->expunges++;
+	for (uint32_t s = 0; s < arena->nshards; s++) {
+		stash_shard *sh = &arena->shards[s];
+		for (uint32_t i = 0; i <= sh->tab->mask; i++) {
+			slot_t sl = sh->tab->s[i];
+			__atomic_store_n(&sh->tab->s[i], 0, __ATOMIC_RELEASE);
+			if (slot_live(sl)) {
+				entry_die(slot_entry(sl));
+			}
+		}
+		sh->used = sh->nlive = 0;
+	}
+	__atomic_add_fetch(&arena->expunges, 1, __ATOMIC_RELAXED);
 	reclaim();
-	arena_unlock();
+	for (uint32_t s = 0; s < arena->nshards; s++) {
+		spin_unlock(&arena->shards[s].lock);
+	}
 	RETURN_TRUE;
 }
 
@@ -1957,11 +2140,8 @@ PHP_FUNCTION(apcu_cache_info)
 	uint64_t hits = 0, misses = 0;
 
 	borrow_begin(); /* pins, not the lock: building the list allocates */
-	for (uint32_t i = 0; i < arena->nslots; i++) {
-		stash_entry *e = slot_pin(i);
-		if (!e || expired(e)) {
-			continue;
-		}
+	stash_entry *e;
+	for (uint32_t sh = 0, i = 0; (e = scan_next(&sh, &i));) {
 		entries++;
 		if (!limited) {
 			zval row;
@@ -1979,8 +2159,8 @@ PHP_FUNCTION(apcu_cache_info)
 		}
 	}
 	borrow_end();
-	zend_long mem = arena->live_bytes;
-	uint64_t inserts = arena->inserts, expunges = arena->expunges;
+	zend_long mem = live_total();
+	uint64_t inserts = __atomic_load_n(&arena->inserts, __ATOMIC_RELAXED), expunges = arena->expunges;
 	time_t start = arena->start_time;
 	for (uint32_t i = 0; i < arena->nworkers; i++) {
 		hits += arena->workers[i].hits;
@@ -1988,7 +2168,7 @@ PHP_FUNCTION(apcu_cache_info)
 	}
 
 	array_init(return_value);
-	add_assoc_long(return_value, "num_slots", arena->nslots);
+	add_assoc_long(return_value, "num_slots", slots_total());
 	add_assoc_long(return_value, "ttl", ini_ttl);
 	add_assoc_long(return_value, "num_hits", hits);
 	add_assoc_long(return_value, "num_misses", misses);
@@ -2023,10 +2203,10 @@ PHP_FUNCTION(apcu_sma_info)
 	}
 
 	uint32_t run_at[STASH_MAX_SEGS], run_len[STASH_MAX_SEGS], runs = 0;
-	arena_lock(); /* no allocation in here */
-	double avail = (double) (arena_size - arena->header_size - arena->live_bytes);
+	spin_lock(&arena->pool); /* no allocation in here */
+	double avail = (double) (arena_size - arena->header_size - live_total());
 	for (uint32_t i = 0, start = 0, n = 0; !limited && i <= arena->nsegs; i++) { /* adjacent free segments form one block */
-		bool free_seg = i < arena->nsegs && (arena->segs[i].state == SEG_FREE || arena->segs[i].state == SEG_DEAD);
+		bool free_seg = i < arena->nsegs && (seg_state(i) == SEG_FREE || seg_state(i) == SEG_DEAD);
 		if (free_seg && !n++) {
 			start = i;
 		} else if (!free_seg && n) {
@@ -2035,7 +2215,7 @@ PHP_FUNCTION(apcu_sma_info)
 			n = 0;
 		}
 	}
-	arena_unlock();
+	spin_unlock(&arena->pool);
 
 	zval blocks;
 	array_init(&blocks);
@@ -2126,7 +2306,7 @@ PHP_MINIT_FUNCTION(stash)
 	while ((zend_long) nslots < ini_hint * 2 || (size_t) nslots < arena_size / 256) {
 		nslots <<= 1;
 	}
-	size_t header = (sizeof(stash_arena) + nslots * sizeof(slot_t) + 63) & ~(size_t) 63;
+	size_t header = sizeof(stash_arena) + STASH_MAX_SHARDS * sizeof(stash_table) + nslots * sizeof(slot_t);
 	seg_shift = 16;
 	while ((arena_size >> seg_shift) > STASH_MAX_SEGS) {
 		seg_shift++;
@@ -2142,13 +2322,23 @@ PHP_MINIT_FUNCTION(stash)
 	}
 	arena = p; /* zero-filled by the kernel */
 	arena->header_size = header;
-	arena->nslots = nslots;
-	slot_mask = nslots - 1;
 	seg_base = (char *) arena + header;
 	arena->nsegs = (arena_size - header) >> seg_shift;
 	arena->nfree = arena->nsegs;
-	for (int b = 0; b < TTL_BUCKETS; b++) {
-		arena->cur[b] = -1;
+	/* each shard keeps up to TTL_BUCKETS segments open: only shard arenas with room for it */
+	arena->nshards = 1;
+	while (arena->nshards < STASH_MAX_SHARDS && arena->nsegs / (arena->nshards * 2) >= 24) {
+		arena->nshards *= 2;
+	}
+	shard_mask = arena->nshards - 1;
+	uint32_t per = nslots / arena->nshards;
+	for (uint32_t s = 0; s < arena->nshards; s++) {
+		stash_table *t = (stash_table *) (arena->tables + (size_t) s * (sizeof(stash_table) + per * sizeof(slot_t)));
+		t->mask = per - 1;
+		arena->shards[s].tab = t;
+		for (int b = 0; b < TTL_BUCKETS; b++) {
+			arena->shards[s].cur[b] = -1;
+		}
 	}
 	arena->start_time = time(NULL);
 	pthread_atfork(NULL, NULL, atfork_child);

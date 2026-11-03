@@ -51,6 +51,6 @@ Symfony's default `cache.adapter.apcu` serializes values before they reach the e
 ## Known gaps
 
 No `preload_path`, no slam defense, no per-entry hit counts (would add a shared write per read),
-`apcu_entry` is not single-flight, fixed slot table, a writer dying inside the lock deadlocks all,
+`apcu_entry` is not single-flight, a writer dying inside the lock deadlocks all,
 no thread-safe (ZTS) builds yet (FrankenPHP, mod_php with a threaded MPM): the build refuses them.
 Values stored by side effect inside `stash_scope` dangle after the scope.

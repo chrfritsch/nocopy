@@ -12,8 +12,10 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 ## State (2026-11-03)
 
 Works, not released. Not a git repo yet, no license, no CI, only tried on PHP 8.7-dev (master), macOS arm64, NTS.
-- Own tests: `tests/001..014` pass (release and debug builds; 012 needs a PHP with `session`).
-- TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes`.
+- Own tests: `tests/001..018` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
+- TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes` and `shards`.
+- Sharded writes (2026-11-03): per-shard locks, a pool lock for segments; see ARCHITECTURE.md "Shards".
+- Growable slot tables (2026-11-03): a shard's table doubles into pool segments when it fills; `stash_stats()` has `slots`. 018 loops clean 60x on debug.
 - Review fixes (2026-11-03): arena strings no longer `IS_STR_PERMANENT` (PCRE kept them as process-wide cache keys);
   pins dropped in post-deactivate, not RSHUTDOWN (session's RSHUTDOWN serialized `$_SESSION` after ours: test 012 segfaulted);
   `apcu_cache_info`/`APCUIterator`/`apcu_sma_info` no longer allocate under the lock (OOM inside it deadlocked every worker: test 013); ZTS builds refused with `#error`.
@@ -79,7 +81,28 @@ TTL buckets (`run.php ttl`: 50k long-lived 1 KB values rewritten at random + a s
 Before, expired entries were swept only when an allocation failed (a full slot-table scan, at most once a second), so the arena filled with dead data and stores failed.
 The ~2300 slow stores left are this benchmark's heavy pressure (evacuation, ~80 MB copied in 5 s); APCu has fewer but much longer stalls.
 Regression from this change: `store int x16 workers` (oversubscribed, macOS) 9.3 -> 6.3 M ops/s; x4 and x8 are unchanged or better and I could not pin down why x16 moved
-(not the per-write expiry step, not the segment metadata layout; moving `time()` back inside the lock recovered x4).
+(not the per-write expiry step, not the segment metadata layout; moving `time()` back inside the lock recovered x4). Sharding (below) more than made up for it.
+
+Shards (8 at 512M; `contend`/`write`/`ttl`/`read`, median of 3) before -> after:
+
+| | before | after |
+|---|---|---|
+| store int, 4 workers (M ops/s) | 11.8 | 25.0 |
+| store int, 8 workers | 5.6 | 15.4 |
+| store int, 16 workers (oversubscribed) | 7.0 | 14.9 |
+| 4 readers fetch int while 4 writers run | 161 | 89 |
+| store int / inc / add, one process (ns) | 38 / 14.6 / 36.6 | 40.5 / 16.8 / 40.1 |
+| ttl churn (M stores/s, one process under heavy pressure) | 1.83 | 1.64 |
+| ttl churn slowest store | 1.9 ms | 1.0 ms |
+| fetches (zero-copy) | | within noise |
+
+The reader drop is CPU capacity, not stash: 4 plain PHP busy loops that never touch stash cut the same readers to 91-100 M ops/s on this 5P+6E Mac
+(before, the writers mostly sat in the lock's yield). Single-process writes pay ~2-4 ns (shard pick, pool lock per new segment); ttl churn ~10% (cross-shard help under pressure).
+
+Growable slot tables (same groups, median of 3, before -> after): everything within noise (store int 40.6 -> 42.2 ns, fetches -0.3 ns,
+parallel stores +-4%, 4 readers under 4 writers 80 -> 74 M ops/s, a figure that has moved 80-95 between runs of one build).
+The new cost is the grow stall: 3M unique puts at 512M grew 2M -> 4M slots, one ~2-2.8 ms put per shard.
+018's readers are not sensitive to the table-pointer re-check in `find()` (removing it still passes 30/30): the window needs a key overwritten and its segment reused mid-probe.
 
 Real Symfony 8.1 app, requests/s, median of 3 (`bench/sfapp.sh`):
 
@@ -109,9 +132,10 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 
 1. Symfony bundle: `cache.adapter.stash` pool without marshaller; document the default-pool finding for customers.
 2. Re-run on Linux + php-fpm; re-run the full Symfony Cache suite after the segment rewrite.
-3. Shard the table by key hash (MICA-style per-bucket versions) if writes still contend; robust process-shared lock on Linux (a writer dying inside the lock deadlocks everyone).
-   Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass. The 16-writer regression from the TTL change (see results).
+3. Robust process-shared locks on Linux (a writer dying inside a shard or the pool lock deadlocks everyone).
+   Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
+   Shards: expiry of a shard without writes waits for memory pressure.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).
 5. Milestone 3 features that justify a price: tags, single-flight `apcu_entry`, cross-server invalidation. Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
-6. Fixed slot table (no resize); `preload_path`; slam defense; `git init`, license, CI, test on released PHP versions.
+6. Slot tables only grow (never shrink, old ones never freed: ~one table's worth wasted, plus one segment per table for the header line); the rehash stalls the shard's writers (~2.5 ms per 200k entries), go incremental if that shows; `preload_path`; slam defense; `git init`, license, CI, test on released PHP versions.
 7. Values stored by side effect inside `stash_scope` dangle after the scope (documented contract).
