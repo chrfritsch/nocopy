@@ -45,7 +45,12 @@ PHP=... STASH_SO=... APCU_SO=... bench/all.sh
 | `stash.request_scope=0` | worker mode: fetch returns a copy unless inside `stash_scope(fn)` |
 | FrankenPHP worker + `stash.request_scope=1` | zero-copy, and each `frankenphp_handle_request()` ends like `stash_checkpoint()`: values kept past a request dangle |
 
-Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `stash_stats`. `stash_put()` throws on objects unless its 4th argument `$serialize` is true.
+Extra functions: `stash_put/get/delete`, `stash_remember`, `stash_scope`, `stash_checkpoint`, `stash_stats`. `stash_put()` throws on objects unless its 4th argument `$serialize` is true.
+
+`stash_remember($key, $callback, $ttl = 0, $beta = 1.0)` fetches, or runs `$callback($key)` and stores its result (objects serialized).
+Concurrent misses run the callback once: the first worker takes a lease, the others wait for its value (a dead holder is detected, a stuck one is ignored after 30 s, a recursive call on the same key does not wait).
+Before the TTL ends it refreshes early by XFetch (Vattani et al., VLDB 2015): with probability rising as expiry nears, scaled by the callback's measured run time × `$beta`; one worker refreshes, the others keep getting the current value. `$beta = 0` turns that off.
+`apcu_entry` is single-flight the same way (per key, not the whole cache like APCu), without early refresh.
 
 ## Symfony
 
@@ -69,6 +74,5 @@ The arena is split into up to 8 shards of at least 8 MB each (1 shard up to 8 MB
 ## Known gaps
 
 No `preload_path`, no slam defense, no per-entry hit counts (would add a shared write per read),
-`apcu_entry` is not single-flight,
 ZTS is tested with `parallel` and FrankenPHP only (not mod_php with a threaded MPM).
 Values stored by side effect inside `stash_scope` dangle after the scope.

@@ -78,6 +78,13 @@ under `auto` the worker switches to copy mode at its first handled request (it m
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
 `stash_scope(fn)` runs `fn` in zero-copy mode and `unshare_zval()`s the result before dropping the pins.
 
+## Single-flight and early refresh (`stash_remember`, `apcu_entry`)
+
+A lease is an ordinary entry, key `"\0stash_lease\0" . $key`, value `{owner id, worker slot}`, ttl 30 s, taken with an add (atomic under the shard lock).
+Waiters poll (50 us doubling to 5 ms) for the value; they drop a lease whose owner is dead (`owner_dead`, as for locks) and skip waiting for their own (recursion). Held leases are listed in module globals and dropped in post-deactivate if a callback bailed out.
+The callback's run time (ms) is kept in the stored value zval's `u2` (unused there; `ZVAL_COPY_VALUE` does not copy it, `stash_relocate` does). XFetch on a hit: refresh when `now - delta * beta * ln(rand) >= expires`; the refresher needs the lease, the rest return the current value.
+Leases are visible to `APCUIterator` / `apcu_cache_info` while held.
+
 ## APCu layer
 
 `stash.apcu_compat` (default 1, forced to 0 when APCu is loaded) decides in MINIT: `stash_apcu_minit()` registers the `apcu_*` functions (own stub, `stash_apcu_arginfo.h`), `APCUIterator` and the constants, and the sizing INI is registered as `apc.*`; with 0 none of that, and the sizing INI is `stash.*`.

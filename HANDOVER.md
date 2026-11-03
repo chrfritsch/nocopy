@@ -197,7 +197,7 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
    Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
    Shards: expiry of a shard without writes waits for memory pressure. Fixed slices: one hot shard cannot borrow from idle ones.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).
-5. Milestone 3 features that justify a price: tags, single-flight `apcu_entry`, cross-server invalidation. Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
+5. Milestone 3 features that justify a price: tags, cross-server invalidation (single-flight `apcu_entry` + `stash_remember` with XFetch: done, tests 030/031; APCu's own suite not re-run since). Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
 6. Packaging: license and vendor name undecided (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
    `preload_path`; slam defense; license.
 7. Values stored by side effect inside `stash_scope` dangle after the scope (documented contract).

@@ -11,6 +11,8 @@ ZEND_BEGIN_MODULE_GLOBALS(stash)
 	stash_ctx ctx;
 	int scope_depth; /* >0: this thread may be handed zero-copy pointers */
 	char *cursor;    /* write position inside the block being filled */
+	zend_string *leases[8]; /* lease keys held (persistent): dropped at request end if a callback bailed out */
+	int nleases;
 ZEND_END_MODULE_GLOBALS(stash)
 
 ZEND_EXTERN_MODULE_GLOBALS(stash)
@@ -38,6 +40,8 @@ stash_put_result stash_publish(stash_entry *e, bool add_only, bool locked); /* c
 bool stash_store(zend_string *key, zval *val, zend_long ttl, bool add_only, bool apcu_semantics);
 bool stash_fetch(zend_string *key, zval *rv);
 bool stash_drop(zend_string *key);
+/* Fetch, or run fci once across all workers (lease) and store its result. beta > 0: XFetch early refresh. */
+void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, zend_long ttl, double beta, bool apcu, zval *rv);
 
 void stash_apcu_minit(int module_number); /* apcu_* functions, APCUIterator, APC_* constants */
 

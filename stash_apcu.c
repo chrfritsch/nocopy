@@ -699,18 +699,7 @@ PHP_FUNCTION(apcu_entry)
 	if (!stash_tracked()) {
 		RETURN_THROWS();
 	}
-	if (stash_fetch(key, return_value)) {
-		return;
-	}
-	zval arg;
-	ZVAL_STR(&arg, key);
-	fci.param_count = 1;
-	fci.params = &arg;
-	fci.retval = return_value;
-	if (zend_call_function(&fci, &fcc) == FAILURE || EG(exception)) {
-		RETURN_THROWS();
-	}
-	stash_store(key, return_value, ttl, true, true);
+	stash_remember(key, &fci, &fcc, ttl, 0, true, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
