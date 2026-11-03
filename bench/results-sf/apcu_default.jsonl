@@ -1,0 +1,16 @@
+{"name":"Symfony get() hit: scalar","v":582.985,"unit":"ns\/op"}
+{"name":"Symfony get() hit: 100-row array","v":10097.03,"unit":"ns\/op"}
+{"name":"Symfony get() hit: 10k-row array","v":963302.664,"unit":"ns\/op"}
+{"name":"Symfony get() hit: 10k rows + read 1","v":952741.795,"unit":"ns\/op"}
+{"name":"Symfony get() hit: object graph","v":1259.465,"unit":"ns\/op"}
+{"name":"Symfony get() miss (callback builds scalar)","v":1637.754,"unit":"ns\/op"}
+{"name":"Symfony getItems() 10 x 100 rows","v":97265.08,"unit":"ns\/op"}
+{"name":"Symfony hasItem()","v":137.648,"unit":"ns\/op"}
+{"name":"Symfony save(): scalar","v":1021.24,"unit":"ns\/op"}
+{"name":"Symfony save(): 100-row array","v":21635.678,"unit":"ns\/op"}
+{"name":"Symfony save(): 10k-row array","v":3279967.351,"unit":"ns\/op"}
+{"name":"Symfony deleteItem()","v":181.353,"unit":"ns\/op"}
+{"name":"Symfony get() hit 100 rows x1 workers","v":98.584,"unit":"k ops\/s"}
+{"name":"Symfony get() hit 100 rows x2 workers","v":187.697,"unit":"k ops\/s"}
+{"name":"Symfony get() hit 100 rows x4 workers","v":344.7,"unit":"k ops\/s"}
+{"name":"Symfony get() hit 100 rows x8 workers","v":488.924,"unit":"k ops\/s"}

@@ -1,0 +1,30 @@
+{"name":"fetch int","v":37.751,"unit":"ns\/op"}
+{"name":"fetch string 100B","v":43.645,"unit":"ns\/op"}
+{"name":"fetch string 10KB","v":212.664,"unit":"ns\/op"}
+{"name":"fetch array 10 rows","v":2367.137,"unit":"ns\/op"}
+{"name":"fetch array 1k rows","v":241620.85,"unit":"ns\/op"}
+{"name":"fetch array 10k rows","v":2521816.833,"unit":"ns\/op"}
+{"name":"fetch 10k rows + read 1","v":2534104.167,"unit":"ns\/op"}
+{"name":"fetch 10k rows + sum ALL scores","v":2618683.87,"unit":"ns\/op"}
+{"name":"fetch 10k rows + modify 1 (COW)","v":2517883.872,"unit":"ns\/op"}
+{"name":"fetch object","v":640.687,"unit":"ns\/op"}
+{"name":"fetch miss","v":32.837,"unit":"ns\/op"}
+{"name":"exists","v":31.216,"unit":"ns\/op"}
+{"name":"fetch 10 keys (array form)","v":246.837,"unit":"ns\/op"}
+{"name":"store int","v":52.482,"unit":"ns\/op"}
+{"name":"store string 100B","v":57.973,"unit":"ns\/op"}
+{"name":"store array 10 rows","v":1694.247,"unit":"ns\/op"}
+{"name":"store array 1k rows","v":172334.624,"unit":"ns\/op"}
+{"name":"store object","v":292.219,"unit":"ns\/op"}
+{"name":"store+delete int","v":65.512,"unit":"ns\/op"}
+{"name":"inc counter","v":31.284,"unit":"ns\/op"}
+{"name":"add (exists, fails)","v":49.722,"unit":"ns\/op"}
+{"name":"parallel fetch int x1 workers","v":22.817,"unit":"M ops\/s"}
+{"name":"parallel fetch int x2 workers","v":7.321,"unit":"M ops\/s"}
+{"name":"parallel fetch int x4 workers","v":6.606,"unit":"M ops\/s"}
+{"name":"parallel fetch int x8 workers","v":3.726,"unit":"M ops\/s"}
+{"name":"parallel fetch arr1k x1 workers","v":0.004,"unit":"M ops\/s"}
+{"name":"parallel fetch arr1k x2 workers","v":0.008,"unit":"M ops\/s"}
+{"name":"parallel fetch arr1k x4 workers","v":0.015,"unit":"M ops\/s"}
+{"name":"parallel fetch arr1k x8 workers","v":0.022,"unit":"M ops\/s"}
+{"name":"4 readers + 1 writer (reader throughput)","v":12.151,"unit":"k ops\/s"}

@@ -1,0 +1,19 @@
+{
+    "name": "lab/stash",
+    "type": "php-ext",
+    "license": "BSD-3-Clause",
+    "description": "Describe your extension here",
+    "require": {
+        "php": "^8.3"
+    },
+    "php-ext": {
+        "extension-name": "stash",
+        "configure-options": [
+            {
+                "name": "enable-stash",
+                "needs-value": false,
+                "description": "whether to enable stash support"
+            }
+        ]
+    }
+}

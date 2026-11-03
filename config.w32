@@ -1,0 +1,7 @@
+ARG_ENABLE('stash', 'stash support', 'no');
+
+if (PHP_STASH != 'no') {
+	AC_DEFINE('HAVE_STASH', 1, "Define to 1 if the PHP extension 'stash' is available.");
+
+	EXTENSION('stash', 'stash.c', null, '/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1');
+}
