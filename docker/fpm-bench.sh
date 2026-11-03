@@ -4,7 +4,7 @@
 /src/docker/test.sh >/dev/null 2>&1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
-rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && chown -R www-data /app/var 2>/dev/null; mkdir -p /app/var && chown -R www-data /app/var
+rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && mkdir -p /app/stash-bundle && cp -r /src/symfony/src /app/stash-bundle/ && chown -R www-data /app/var 2>/dev/null; mkdir -p /app/var && chown -R www-data /app/var
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/bench.conf <<'EOF'
 server { listen 8099; access_log off; location / { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/public/index.php; } }

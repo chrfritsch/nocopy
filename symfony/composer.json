@@ -1,0 +1,14 @@
+{
+    "name": "lab/stash-bundle",
+    "type": "symfony-bundle",
+    "license": "proprietary",
+    "description": "Symfony cache adapter for the stash extension: cache.adapter.stash, zero-copy fetches",
+    "require": {
+        "php": ">=8.3",
+        "ext-stash": "*",
+        "symfony/framework-bundle": "^6.4 || ^7.0 || ^8.0"
+    },
+    "autoload": {
+        "psr-4": {"Lab\\StashBundle\\": "src/"}
+    }
+}

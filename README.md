@@ -48,8 +48,16 @@ Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `sta
 
 ## Symfony
 
-Symfony's default `cache.adapter.apcu` serializes values before they reach the extension, which hides the benefit. Use a pool without a marshaller
-(`new ApcuAdapter($ns, 0, null, null)`, see `bench/sfapp`): about 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x vs Symfony's default APCu pool (Linux, php-fpm; details in `HANDOVER.md`).
+Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Lab\StashBundle\StashBundle`) adds `cache.adapter.stash`, the same adapter without a marshaller:
+
+```yaml
+framework:
+    cache:
+        app: cache.adapter.stash
+```
+
+About 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x vs Symfony's default APCu pool (Linux, php-fpm; details in `HANDOVER.md`).
+`cache.system` already stores values unserialized. Check: `php -d extension=stash.so -d apc.enable_cli=1 -d zend.assertions=1 symfony/tests/smoke.php <dir with vendor/>`.
 
 ## When the cache is full
 
