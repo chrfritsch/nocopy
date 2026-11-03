@@ -53,6 +53,9 @@ if ($group === 'read') {
     bench('fetch object', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('obj'); });
     bench('fetch miss', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch('nokey'); });
     bench('exists', function ($n) { for ($i = 0; $i < $n; $i++) $x = apcu_exists('int'); });
+    $keys = []; for ($i = 0; $i < 100000; $i++) { $keys[] = "d$i"; apcu_store("d$i", $i); }
+    bench('fetch int, 100k distinct keys', function ($n) use ($keys) { for ($i = 0; $i < $n; $i++) $x = apcu_fetch($keys[$i % 100000]); });
+    bench('apcu_entry hit', function ($n) { $f = fn() => 1; for ($i = 0; $i < $n; $i++) $x = apcu_entry('int', $f); });
     bench('fetch 10 keys (array form)', function ($n) { $k = array_map(fn($i) => "m$i", range(0, 9)); for ($i = 0; $i < 10; $i++) apcu_store($k[$i], $i); for ($i = 0; $i < $n; $i++) $x = apcu_fetch($k); });
 }
 
