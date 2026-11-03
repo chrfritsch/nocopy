@@ -38,18 +38,18 @@ PHP=... STASH_SO=... APCU_SO=... bench/all.sh
 | INI | meaning |
 |---|---|
 | `apc.enabled`, `apc.enable_cli`, `apc.shm_size`, `apc.ttl` | as in APCu |
-| `stash.apcu_compat=1` (default) | `apcu_*`, `APCUIterator`, `APC_*` constants and `apc.*` INI. `0`: only `stash_*`, sized by `stash.shm_size`, `stash.entries_hint`, `stash.ttl`; real APCu can load too, the Symfony bundle (built on `apcu_*`) cannot be used |
+| `stash.apcu_compat=1` (default) | `apcu_*`, `APCUIterator`, `APC_*` constants and `apc.*` INI. `0`: only `stash_*`, sized by `stash.shm_size`, `stash.entries_hint`, `stash.ttl`; real APCu can load too |
 | `apc.entries_hint` | sizes the slot table, which never grows: ~2 slots per hinted entry, at least one per 256 bytes of `shm_size`. Raise it for many entries under ~300 bytes, or the cache evicts before its memory is full |
 | `stash.request_scope=auto` (default) | zero-copy for the whole request under fpm/cgi/apache/litespeed/FrankenPHP (classic); worker mode (below) under CLI, FrankenPHP worker scripts and others |
 | `stash.request_scope=1` | whole request may hold zero-copy values; pinned lazily on first handout. Only the segments actually handed out stay pinned until the request ends (or `stash_checkpoint()`) |
 | `stash.request_scope=0` | worker mode: fetch returns a copy unless inside `stash_scope(fn)` |
 | FrankenPHP worker + `stash.request_scope=1` | zero-copy, and each `frankenphp_handle_request()` ends like `stash_checkpoint()`: values kept past a request dangle |
 
-Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `stash_stats`.
+Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `stash_stats`. `stash_put()` throws on objects unless its 4th argument `$serialize` is true.
 
 ## Symfony
 
-Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Lab\StashBundle\StashBundle`) adds `cache.adapter.stash`, the same adapter without a marshaller:
+Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Lab\StashBundle\StashBundle`) adds `cache.adapter.stash`: `StashAdapter` on `stash_*`, no marshaller, so it also works with `stash.apcu_compat=0` and next to real APCu:
 
 ```yaml
 framework:
@@ -58,7 +58,8 @@ framework:
 ```
 
 About 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x vs Symfony's default APCu pool (Linux, php-fpm; details in `HANDOVER.md`).
-`cache.system` already stores values unserialized. Check: `php -d extension=stash.so -d apc.enable_cli=1 -d zend.assertions=1 symfony/tests/smoke.php <dir with vendor/>`.
+`clear()` bumps a namespace version (no prefix delete in `stash_*`): old entries stay until eviction drops them, unread ones first. The pool empties on each new container build, like APCu's.
+`cache.system` already stores values unserialized when the APCu layer is on. Check: `php -d extension=stash.so -d zend.assertions=1 symfony/tests/smoke.php <dir with vendor/>`.
 
 ## When the cache is full
 

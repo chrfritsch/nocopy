@@ -443,12 +443,14 @@ PHP_FUNCTION(stash_put)
 	zend_string *key;
 	zval *val;
 	zend_long ttl = 0;
+	bool serialize = false;
 
-	ZEND_PARSE_PARAMETERS_START(2, 3)
+	ZEND_PARSE_PARAMETERS_START(2, 4)
 		Z_PARAM_STR(key)
 		Z_PARAM_ZVAL(val)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(ttl)
+		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (ttl < 0) {
@@ -458,7 +460,7 @@ PHP_FUNCTION(stash_put)
 	if (!stash_tracked()) {
 		RETURN_THROWS();
 	}
-	bool ok = stash_store(key, val, ttl, false, false);
+	bool ok = stash_store(key, val, ttl, false, serialize);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}

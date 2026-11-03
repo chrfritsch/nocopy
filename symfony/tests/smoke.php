@@ -1,5 +1,5 @@
 <?php
-// php -d extension=stash.so -d apc.enable_cli=1 tests/smoke.php <dir with vendor/autoload.php>
+// php -d extension=stash.so -d zend.assertions=1 tests/smoke.php <dir with vendor/autoload.php>  (also with stash.apcu_compat=0)
 
 use Lab\StashBundle\StashBundle;
 use Symfony\Bundle\FrameworkBundle\FrameworkBundle;
@@ -9,6 +9,7 @@ use Symfony\Component\HttpKernel\Kernel;
 
 require ($argv[1] ?? __DIR__.'/..').'/vendor/autoload.php';
 require __DIR__.'/../src/StashBundle.php';
+require __DIR__.'/../src/StashAdapter.php';
 
 class SmokeKernel extends Kernel
 {
@@ -37,13 +38,18 @@ $k = new SmokeKernel('prod', false);
 $k->boot();
 $c = $k->getContainer();
 
-foreach (['cache.app', 'my.pool'] as $id) {
-    $pool = $c->get($id);
+$id = new ReflectionMethod(Symfony\Component\Cache\Adapter\AbstractAdapter::class, 'getId');
+foreach (['cache.app', 'my.pool'] as $name) {
+    $pool = $c->get($name);
+    assert($pool instanceof Lab\StashBundle\StashAdapter, "$name adapter");
     $pool->save($pool->getItem('k')->set(['rows' => [1, 2, 3]]));
-    assert($pool->getItem('k')->get() === ['rows' => [1, 2, 3]], "$id roundtrip");
+    $pool->save($pool->getItem('o')->set(new ArrayObject([1])));
+    assert($pool->getItem('k')->get() === ['rows' => [1, 2, 3]], "$name roundtrip");
+    assert($pool->getItem('o')->get() == new ArrayObject([1]), "$name object");
+    assert(is_array(stash_get($id->invoke($pool, 'k'))), "$name stores PHP values, not serialized strings");
+    assert($pool->deleteItem('o') && !$pool->hasItem('o') && $pool->hasItem('k'), "$name delete");
+    assert($pool->clear() && !$pool->hasItem('k'), "$name clear");
+    $pool->reset(); // next request: the new namespace version is read back from stash
+    assert(!$pool->getItem('k')->isHit(), "$name clear survives reset");
 }
-
-// stored as arrays, not serialized strings
-$raw = array_values(array_filter(iterator_to_array(new APCUIterator('/k$/')), fn ($e) => str_ends_with($e['key'], 'k')));
-assert(count($raw) === 2 && is_array($raw[0]['value']) && is_array($raw[1]['value']), 'unmarshalled values');
 echo "ok\n";

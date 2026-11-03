@@ -5,7 +5,8 @@
  * @generate-legacy-arginfo 80300
  */
 
-function stash_put(string $key, mixed $value, int $ttl = 0): bool {}
+/** $serialize: objects and shared references are stored serialized instead of throwing */
+function stash_put(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
 
 function stash_get(string $key, mixed &$hit = null): mixed {}
 
