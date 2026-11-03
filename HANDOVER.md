@@ -104,6 +104,13 @@ On Linux stash writes are 1.5-2.7x APCu with several writers, ~2x single-process
 Zero-copy raw pool: 4.8x APCu's default pool and 3.5x APCu raw on cache-heavy pages (macOS showed 2.1x / 1.7x). `request_scope=auto` picked zero-copy under fpm as intended.
 Open: `/hello` (barely touches the cache) is 6-16% lower with stash under fpm, but an in-process loop (fresh kernel per request) shows no gap (stash 179/167 us, APCu 168/181): likely noise at ~14k req/s with ab as the limit; repeat with wrk before trusting either way.
 
+Key dedupe (2026-11-03, Linux Docker arm64, `docker/ab.sh 5 read write`, best of 5, quiet host, load ~2): equal array keys stored once per entry, copied out once per fetch.
+Copy mode: fetch array 10 rows 796 -> 714 ns, 1k rows 86.5 -> 70.5 us (also with unserialized keys: 88.8 -> 73.0), 10k rows 909 -> 727 us (-20..25%). Arena bytes for `rows(1000)` 648 KB -> 520 KB (-20%).
+Price: store array 10 rows 511 -> 594 ns, 1k rows 49.3 -> 58.1 us (+15-17%: two table probes per key). Zero-copy reads, scalars, objects: within noise.
+`fetch 10 keys (array form)` copy reads 185 -> 205 ns (+9-11%) in every run, but callgrind counts +0.6% instructions (+2.5 per key): code alignment, not chased.
+The table first sat inside the module globals (8 KB): that alone moved `apcu_entry hit` +6%; it is a separate allocation now.
+
+
 ## Measured results (macOS, release -O2, single machine: treat as indicative)
 
 Micro (`bench/all.sh`): scalar fetch 2.3x APCu; zero-copy array fetch ~15 ns regardless of size (10k rows: 2.5 ms APCu php-serializer,
@@ -119,12 +126,6 @@ Contention (`run.php contend`, copy mode, median of 3, M ops/s) before -> after 
 | store int, 16 workers (oversubscribed) | 0.26 | 0.47 | 9.35 | 6.81 | 0.80 | 2.72 |
 | 4 readers fetch int, 4 writers running | 0.14 | 38 | 162 | 70 | 94 | 137 |
 | 4 readers fetch int, no writers | 7.7 | 200 | 199 | 199 | 198 | 200 |
-
-Key dedupe (2026-11-03, Linux Docker arm64, `docker/ab.sh 5 read write`, best of 5, quiet host, load ~2): equal array keys stored once per entry, copied out once per fetch.
-Copy mode: fetch array 10 rows 796 -> 714 ns, 1k rows 86.5 -> 70.5 us (also with unserialized keys: 88.8 -> 73.0), 10k rows 909 -> 727 us (-20..25%). Arena bytes for `rows(1000)` 648 KB -> 520 KB (-20%).
-Price: store array 10 rows 511 -> 594 ns, 1k rows 49.3 -> 58.1 us (+15-17%: two table probes per key). Zero-copy reads, scalars, objects: within noise.
-`fetch 10 keys (array form)` copy reads 185 -> 205 ns (+9-11%) in every run, but callgrind counts +0.6% instructions (+2.5 per key): code alignment, not chased.
-The table first sat inside the module globals (8 KB): that alone moved `apcu_entry hit` +6%; it is a separate allocation now.
 
 Single-process numbers did not move (store int 36 ns, store string 100B 83 -> 78 ns vs APCu 57, all fetches within noise):
 the remaining small-write gap is not the lock, look at `calc_zval`/`time()`/`locate` next.
