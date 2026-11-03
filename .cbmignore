@@ -1,0 +1,2 @@
+# ponytail: codebase-memory-mcp 0.9.0 blows up on use X\Kernel\T inside class Kernel
+bench/sfapp/src/Kernel.php
