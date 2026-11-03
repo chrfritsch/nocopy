@@ -32,7 +32,7 @@ $i = apcu_cache_info();
 var_dump(isset($i['num_hits'], $i['num_misses'], $i['cache_list'], $i['num_slots']), $i['num_entries'] > 0);
 var_dump(array_key_exists('cache_list', apcu_cache_info(true)));
 $m = apcu_sma_info();
-var_dump($m['num_seg'], $m['avail_mem'] > 0);
+var_dump($m['num_seg'] === stash_stats()['shards'], $m['avail_mem'] > 0);
 
 echo "-- atomic across workers\n";
 apcu_store('ctr', 0);
@@ -77,7 +77,7 @@ int(1)
 bool(true)
 bool(true)
 bool(false)
-int(1)
+bool(true)
 bool(true)
 -- atomic across workers
 int(2000)

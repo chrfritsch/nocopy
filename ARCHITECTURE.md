@@ -83,6 +83,7 @@ under `auto` the worker switches to copy mode at its first handled request (it m
 `stash.apcu_compat` (default 1, forced to 0 when APCu is loaded) decides in MINIT: `stash_apcu_minit()` registers the `apcu_*` functions (own stub, `stash_apcu_arginfo.h`), `APCUIterator` and the constants, and the sizing INI is registered as `apc.*`; with 0 none of that, and the sizing INI is `stash.*`.
 
 `apcu_*` functions are thin wrappers over `stash_store` / `stash_fetch` / `stash_drop`; `APCUIterator` and `apcu_cache_info` scan the slot tables lock-free (`stash_scan_next`: may skip or repeat entries a concurrent write moves).
+`apcu_sma_info` reports one segment per shard (its slice and that slice's free runs): an entry only fits into its own shard's free space.
 `apcu_inc/dec/cas` modify the integer in place under the shard lock with relaxed atomics (readers copy that word). `apcu_clear_cache` takes all shard locks in index order.
 
 ## Invariants worth remembering

@@ -130,8 +130,8 @@ typedef struct {
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
 } stash_stats_t;
 void stash_stats(stash_stats_t *s);
-/* Free (or dead) segments as runs, for apcu_sma_info: up to max (offset, bytes) pairs; returns how many. */
-uint32_t stash_free_runs(size_t *off, size_t *len, uint32_t max);
+/* A shard's free (or dead) segments as runs, for apcu_sma_info: up to max (offset from the slice start, bytes) pairs; returns how many. */
+uint32_t stash_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max);
 
 /* ---- inline read path ---- */
 

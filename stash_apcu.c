@@ -824,34 +824,35 @@ PHP_FUNCTION(apcu_sma_info)
 		RETURN_FALSE;
 	}
 
-	size_t run_at[STASH_MAX_SEGS], run_len[STASH_MAX_SEGS];
-	uint32_t runs = limited ? 0 : stash_free_runs(run_at, run_len, STASH_MAX_SEGS);
 	stash_stats_t st;
 	stash_stats(&st);
-	double avail = (double) (stash_a->size - stash_a->header_size - st.used);
+	uint32_t nsh = stash_a->nshards;
 
-	zval blocks;
-	array_init(&blocks);
-	for (uint32_t r = 0; r < runs; r++) {
-		zval row;
-		array_init(&row);
-		add_assoc_long(&row, "size", (zend_long) run_len[r]);
-		add_assoc_long(&row, "offset", (zend_long) run_at[r]);
-		add_next_index_zval(&blocks, &row);
-	}
-
+	/* one APCu "segment" per shard: an entry only fits into free space of its own shard's slice */
 	array_init(return_value);
-	add_assoc_long(return_value, "num_seg", 1);
-	add_assoc_double(return_value, "seg_size", (double) stash_a->size);
-	add_assoc_double(return_value, "avail_mem", avail);
+	add_assoc_long(return_value, "num_seg", nsh);
+	add_assoc_double(return_value, "seg_size", (double) ((size_t) (stash_a->nsegs / nsh) << stash_seg_shift));
+	add_assoc_double(return_value, "avail_mem", (double) (((size_t) stash_a->nsegs << stash_seg_shift) - st.used));
 	if (limited) {
-		zval_ptr_dtor(&blocks);
-	} else {
-		zval outer;
-		array_init(&outer);
-		add_next_index_zval(&outer, &blocks);
-		add_assoc_zval(return_value, "block_lists", &outer);
+		return;
 	}
+	zval outer;
+	array_init(&outer);
+	for (uint32_t s = 0; s < nsh; s++) {
+		size_t run_at[STASH_MAX_SEGS], run_len[STASH_MAX_SEGS];
+		uint32_t runs = stash_free_runs(s, run_at, run_len, STASH_MAX_SEGS);
+		zval blocks;
+		array_init(&blocks);
+		for (uint32_t r = 0; r < runs; r++) {
+			zval row;
+			array_init(&row);
+			add_assoc_long(&row, "size", (zend_long) run_len[r]);
+			add_assoc_long(&row, "offset", (zend_long) run_at[r]);
+			add_next_index_zval(&blocks, &row);
+		}
+		add_next_index_zval(&outer, &blocks);
+	}
+	add_assoc_zval(return_value, "block_lists", &outer);
 }
 
 void stash_apcu_minit(int module_number)

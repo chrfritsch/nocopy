@@ -749,16 +749,17 @@ void stash_stats(stash_stats_t *st)
 	st->lock_steals = __atomic_load_n(&stash_a->lock_steals, __ATOMIC_RELAXED);
 }
 
-uint32_t stash_free_runs(size_t *off, size_t *len, uint32_t max)
+uint32_t stash_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max)
 {
+	const stash_shard *sh = &stash_a->shards[shard];
 	uint32_t runs = 0;
-	for (uint32_t i = 0, start = 0, n = 0; i <= stash_a->nsegs && runs < max; i++) { /* adjacent free segments form one block */
-		uint8_t st = i < stash_a->nsegs ? __atomic_load_n(&stash_a->segs[i].state, __ATOMIC_RELAXED) : SEG_OPEN;
+	for (uint32_t i = sh->lo, start = 0, n = 0; i <= sh->hi && runs < max; i++) { /* adjacent free segments form one block */
+		uint8_t st = i < sh->hi ? __atomic_load_n(&stash_a->segs[i].state, __ATOMIC_RELAXED) : SEG_OPEN;
 		bool free_seg = st == SEG_FREE || st == SEG_DEAD;
 		if (free_seg && !n++) {
 			start = i;
 		} else if (!free_seg && n) {
-			off[runs] = (size_t) (seg_start(start) - (char *) stash_a);
+			off[runs] = (size_t) (start - sh->lo) << stash_seg_shift;
 			len[runs++] = (size_t) n << stash_seg_shift;
 			n = 0;
 		}
