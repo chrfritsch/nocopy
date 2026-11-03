@@ -102,8 +102,10 @@ extern uint64_t stash_self; /* this process's owner id */
 /* Supplied by the user: copy src's payload and key bytes into dst (same size and koff; header already set). Shard locked. */
 void stash_relocate(stash_entry *dst, const stash_entry *src);
 
-/* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error. */
-const char *stash_arena_create(size_t size, uint64_t hint);
+/* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error;
+ * STASH_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
+extern const char STASH_TOO_SMALL[];
+const char *stash_arena_create(size_t size, uint64_t hint, size_t *need);
 void stash_arena_destroy(void);
 
 bool stash_claim(stash_ctx *c);   /* false: no free worker slot */

@@ -768,7 +768,9 @@ uint32_t stash_free_runs(size_t *off, size_t *len, uint32_t max)
 
 /* ---- setup ---- */
 
-const char *stash_arena_create(size_t size, uint64_t hint)
+const char STASH_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
+
+const char *stash_arena_create(size_t size, uint64_t hint, size_t *need)
 {
 	/* shards only where each slice stays >= 8 MB (an entry must fit in one) and holds >= 16 segments */
 	unsigned shift = 16;
@@ -784,13 +786,14 @@ const char *stash_arena_create(size_t size, uint64_t hint)
 	while (per * nshards < hint * 2 || per * nshards < size / 256) {
 		per <<= 1;
 	}
-	if (per > ((uint64_t) 1 << 31)) {
-		return "apc.entries_hint is too large";
-	}
 	size_t header = STASH_ALIGN(sizeof(stash_arena)) + (size_t) nshards * per * sizeof(stash_slot);
 	header = (header + 63) & ~(size_t) 63;
-	if (size > ((size_t) 32 << 30) || size < header + ((size_t) 4 << shift)) {
-		return "apc.shm_size is too small or apc.entries_hint too large";
+	*need = header + ((size_t) 4 << shift);
+	if (per > ((uint64_t) 1 << 31) || size < *need) {
+		return STASH_TOO_SMALL;
+	}
+	if (size > ((size_t) 32 << 30)) {
+		return "larger than 32G";
 	}
 	void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	if (p == MAP_FAILED) {

@@ -669,9 +669,15 @@ PHP_MINIT_FUNCTION(stash)
 	zend_register_ini_entries(apcu_compat ? ini_apc : ini_stash, module_number);
 	stash_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
-	const char *err = stash_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0);
+	size_t need;
+	const char *err = stash_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0, &need);
+	const char *p = apcu_compat ? "apc" : "stash";
+	if (err == STASH_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
+		zend_error(E_CORE_ERROR, "Unable to allocate %zu bytes of shared memory for cache structures. Either %s.shm_size is too small or %s.entries_hint too large", need, p, p);
+		return FAILURE;
+	}
 	if (err) {
-		php_error_docref(NULL, E_CORE_ERROR, "stash: unable to create the %zu byte cache: %s", arena_size, err);
+		zend_error(E_CORE_ERROR, "stash: unable to create the %zu byte cache: %s", arena_size, err);
 		return FAILURE;
 	}
 	arena_size = stash_a->size;

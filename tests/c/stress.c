@@ -188,7 +188,7 @@ int main(int argc, char **argv)
 	size_t mb = argc > 1 ? (size_t) atoi(argv[1]) : 8;
 	nthreads = argc > 2 ? atoi(argv[2]) : 8;
 	seconds = argc > 3 ? atoi(argv[3]) : 3;
-	const char *err = stash_arena_create(mb << 20, 0);
+	const char *err = stash_arena_create(mb << 20, 0, &(size_t){0});
 	if (err) {
 		fprintf(stderr, "%s\n", err);
 		return 2;
