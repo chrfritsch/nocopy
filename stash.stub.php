@@ -1,6 +1,9 @@
 <?php
 
-/** @generate-class-entries */
+/**
+ * @generate-class-entries
+ * @generate-legacy-arginfo 80300
+ */
 
 function stash_put(string $key, mixed $value, int $ttl = 0): bool {}
 

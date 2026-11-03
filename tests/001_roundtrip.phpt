@@ -41,7 +41,7 @@ array(3) interned {
   ["a"]=>
   int(1)
   ["b"]=>
-  array(5) packed interned {
+  array(5) %Sinterned {
     [0]=>
     int(1)
     [1]=>

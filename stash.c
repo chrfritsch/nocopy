@@ -1386,7 +1386,11 @@ static bool row_matches(stash_iter *it, zend_string *key)
 	if (it->pce) {
 		zval rv;
 		ZVAL_UNDEF(&rv);
+#if PHP_VERSION_ID >= 80400
 		php_pcre_match_impl(it->pce, key, &rv, NULL, 0, 0, 0);
+#else
+		php_pcre_match_impl(it->pce, key, &rv, NULL, 0, 0, 0, 0);
+#endif
 		bool m = Z_TYPE(rv) == IS_LONG && Z_LVAL(rv) > 0;
 		zval_ptr_dtor(&rv);
 		return m;

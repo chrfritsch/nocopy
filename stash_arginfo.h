@@ -1,5 +1,5 @@
 /* This is a generated file, edit stash.stub.php instead.
- * Stub hash: 8da254c03c0da8f783f10c9e117b9aca06135c1b */
+ * Stub hash: dbee976db78d0d83492eef2e2051a5fd06b2f015 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_stash_put, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
@@ -179,7 +179,11 @@ static zend_class_entry *register_class_APCUIterator(zend_class_entry *class_ent
 	zend_class_entry ce, *class_entry;
 
 	INIT_CLASS_ENTRY(ce, "APCUIterator", class_APCUIterator_methods);
+#if (PHP_VERSION_ID >= 80400)
 	class_entry = zend_register_internal_class_with_flags(&ce, NULL, 0);
+#else
+	class_entry = zend_register_internal_class_ex(&ce, NULL);
+#endif
 	zend_class_implements(class_entry, 1, class_entry_Iterator);
 
 	return class_entry;

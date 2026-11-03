@@ -11,7 +11,8 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 
 ## State (2026-11-03)
 
-Works, not released. Git repo, no license, no CI. Tried on PHP 8.7-dev (macOS arm64) and PHP 8.4 / 8.5 (Linux arm64 in Docker), NTS only.
+Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64, `docker/test.sh` + `docker/stress.sh 30`; not run on GitHub yet: no remote).
+Tried on PHP 8.7-dev (macOS arm64) and PHP 8.3 / 8.4 / 8.5 (Linux arm64 and amd64 in Docker), NTS only.
 - Own tests: `tests/001..021` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
 - TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes` and `shards`.
 - Sharded writes (2026-11-03): per-shard locks, a pool lock for segments; see ARCHITECTURE.md "Shards".
@@ -26,8 +27,9 @@ Works, not released. Git repo, no license, no CI. Tried on PHP 8.7-dev (macOS ar
   pins dropped in post-deactivate, not RSHUTDOWN (session's RSHUTDOWN serialized `$_SESSION` after ours: test 012 segfaulted);
   `apcu_cache_info`/`APCUIterator`/`apcu_sma_info` no longer allocate under the lock (OOM inside it deadlocked every worker: test 013); ZTS builds refused with `#error`.
 - APCu's own .phpt suite: 59 pass / 2 fail. Failures are non-goals: `apc54_014` (preload_path), `ghbug335` (slam defense).
-- Symfony Cache: `ApcuAdapterTest` 154 tests / 285 assertions / 6 skipped (same as real APCu); full Cache suite
-  was identical to real APCu before the segment rewrite (6841 tests / 5403 assertions / 4066 skipped) and has NOT been re-run since.
+- Symfony Cache: `Tests/Adapter/ApcuAdapterTest.php` passes like real APCu (154 tests / 285 assertions / 6 skipped, 2026-11-03, PHP 8.7-dev macOS).
+  It is the only file in the suite that touches the extension (without it loaded: 154 skipped, the other ~6700 tests still run), so the full suite adds nothing: run just this file before releases and for the Symfony bundle.
+- PHP 8.3 support (2026-11-03): stub regenerated with `@generate-legacy-arginfo 80300`, `php_pcre_match_impl` signature guarded; 001 accepts 8.3's `debug_zval_dump` (no "packed").
 
 ## Rebuild the toolchain (nothing but the source lives in this directory)
 
@@ -172,11 +174,12 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 
 0. Eviction is FIFO: no hit information. Segcache-style merge (keep recently read entries) if hit rates in a full cache matter.
 1. Symfony bundle: `cache.adapter.stash` pool without marshaller; document the default-pool finding for customers.
-2. Linux runs exist now (Docker, above); still: x86_64, a real (non-VM) box, wrk instead of ab, the full Symfony Cache suite after the segment rewrite; CI from `docker/`.
+2. Linux runs exist now (Docker, above); still: a real (non-VM) x86_64 box for numbers, wrk instead of ab; push to GitHub so CI actually runs.
 3. Lock takeover: a dead holder's recycled pid looks alive (store a start time next to the pid); segments leaked by takeovers are never recovered.
    Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
    Shards: expiry of a shard without writes waits for memory pressure.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).
 5. Milestone 3 features that justify a price: tags, single-flight `apcu_entry`, cross-server invalidation. Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
-6. Slot tables only grow (never shrink, old ones never freed: ~one table's worth wasted, plus one segment per table for the header line); the rehash stalls the shard's writers (~2.5 ms per 200k entries), go incremental if that shows; `preload_path`; slam defense; `git init`, license, CI, test on released PHP versions.
+6. Packaging: license and vendor name undecided (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
+   Slot tables only grow (never shrink, old ones never freed: ~one table's worth wasted, plus one segment per table for the header line); the rehash stalls the shard's writers (~2.5 ms per 200k entries), go incremental if that shows; `preload_path`; slam defense; `git init`, license, CI, test on released PHP versions.
 7. Values stored by side effect inside `stash_scope` dangle after the scope (documented contract).

@@ -1,0 +1,16 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.3", "8.4", "8.5"]
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg PHP=${{ matrix.php }} -t stash-linux docker
+      - run: docker run --rm -v "$PWD":/src:ro stash-linux /src/docker/test.sh
+      # release build, loop: races show up only sometimes (see ARCHITECTURE.md invariants)
+      - run: docker run --rm -v "$PWD":/src:ro stash-linux /src/docker/stress.sh 30

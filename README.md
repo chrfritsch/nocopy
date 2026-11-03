@@ -16,7 +16,7 @@ phpize && ./configure && make
 php -d extension=modules/stash.so -d apc.enable_cli=1 -r 'apcu_store("a", [1,2,3]); var_dump(apcu_fetch("a"));'
 ```
 
-Built and tested against PHP 8.7-dev (master); not yet tried on released versions.
+Tested on PHP 8.3, 8.4, 8.5 (Linux amd64/arm64) and 8.7-dev (macOS), NTS only. Linux in Docker: `docker/` (`test.sh`, `stress.sh`, `bench.sh`, `fpm-bench.sh`).
 Cannot be loaded together with real APCu (same function names).
 
 ## Test
