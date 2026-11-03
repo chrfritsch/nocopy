@@ -50,7 +50,7 @@ When an allocation fails: `reclaim()` -> `expire_step()` with a large budget -> 
 
 `merge()` picks up to 4 victims among the shard's sealed segments:
 - if there are at least two sparse ones (<= 1/4 live, together <= one segment): compaction, every live entry moves forward (`relocate`: same TTL bucket, slot repointed), nothing is lost;
-- else the 4 oldest (`born`, the inserts counter when the segment was taken): entries read since they were written or last moved (`hot`) move forward, up to one segment's worth, the rest is evicted (`expunges` counts the round, before the unlinks).
+- else the 4 oldest (`born`, the inserts counter when the segment was taken): entries read since they were written or last moved (`hot`) move forward, up to one segment's worth, the rest is evicted (`expunges` counts the round, before the unlinks; the shard's `evicted` / `expired` count the entries).
   A moved copy starts unread, so it must be read again to survive the next round (CLOCK). A big entry's run is evicted when oldest, unless it was read: then it goes to the back once.
 `hot` is a byte in the entry header: a reader sets it only if it is 0, so a hot key costs one write per merge round and its cache line stays shared otherwise (per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.

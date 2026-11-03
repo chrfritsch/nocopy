@@ -545,6 +545,8 @@ PHP_FUNCTION(stash_stats)
 	add_assoc_long(return_value, "entries", s.entries);
 	add_assoc_long(return_value, "hits", s.hits);
 	add_assoc_long(return_value, "misses", s.misses);
+	add_assoc_long(return_value, "evicted", s.evicted);
+	add_assoc_long(return_value, "expired", s.expired);
 	add_assoc_long(return_value, "evacuated_bytes", s.evacuated);
 	add_assoc_long(return_value, "shards", s.shards);
 	add_assoc_long(return_value, "slots", s.slots);

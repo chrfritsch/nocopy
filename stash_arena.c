@@ -450,6 +450,7 @@ static bool expire_step(stash_shard *sh, time_t now, int budget)
 				sh->exp_off += e->size;
 				if (e->live) {
 					entry_unlink(sh, e);
+					sh->expired++;
 					did = true;
 				}
 			}
@@ -585,6 +586,11 @@ static bool merge(stash_shard *sh, bool evict_only)
 			stash_entry *e = (stash_entry *) p;
 			p += e->size;
 			if (e->live) {
+				if (stash_expired(e)) {
+					sh->expired++;
+				} else {
+					sh->evicted++;
+				}
 				entry_unlink(sh, e);
 			}
 		}
@@ -727,6 +733,8 @@ void stash_stats(stash_stats_t *st)
 		st->used += __atomic_load_n(&sh->live_bytes, __ATOMIC_RELAXED);
 		st->entries += __atomic_load_n(&sh->nlive, __ATOMIC_RELAXED);
 		st->evacuated += __atomic_load_n(&sh->evacuated, __ATOMIC_RELAXED);
+		st->evicted += __atomic_load_n(&sh->evicted, __ATOMIC_RELAXED);
+		st->expired += __atomic_load_n(&sh->expired, __ATOMIC_RELAXED);
 		st->free_segments += __atomic_load_n(&sh->nfree, __ATOMIC_RELAXED);
 		st->dead_segments += __atomic_load_n(&sh->ndead, __ATOMIC_RELAXED);
 	}
