@@ -50,9 +50,9 @@ When an allocation fails: `reclaim()` -> `expire_step()` with a large budget -> 
 
 `merge()` picks up to 4 victims among the shard's sealed segments:
 - if there are at least two sparse ones (<= 1/4 live, together <= one segment): compaction, every live entry moves forward (`relocate`: same TTL bucket, slot repointed), nothing is lost;
-- else the 4 oldest (`born`, the inserts counter when the segment was taken): entries read since they were written or last moved (`hot`) move forward, up to one segment's worth, the rest is evicted (`expunges` counts the round, before the unlinks; the shard's `evicted` / `expired` count the entries).
-  A moved copy starts unread, so it must be read again to survive the next round (CLOCK). A big entry's run is evicted when oldest, unless it was read: then it goes to the back once.
-`hot` is a byte in the entry header: a reader sets it only if it is 0, so a hot key costs one write per merge round and its cache line stays shared otherwise (per-entry hit counters would write on every read).
+- else the 4 oldest (`born`, the inserts counter when the segment was taken): of the entries read since they were written or last moved, the most-read move forward, up to one segment's worth, the rest is evicted (`expunges` counts the round, before the unlinks; the shard's `evicted` / `expired` count the entries).
+  Ranking: bytes per `hot` level are summed over the victims; levels that fit the budget all move, the next level down fills what is left first come. A moved copy keeps half its count (aging), so it must be read again to stay on top. A big entry's run is evicted when oldest, unless it was read: then it goes to the back once (count halved).
+`hot` is a byte in the entry header, a Morris-style read counter (0-15): the first read sets 1, later reads add 1 with probability 1/2^hot (per-worker xorshift), so a hot key writes its cache line ~log2(reads) times between merges and it stays shared otherwise (exact per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.
 
 ## Reads (lock-free) and pins

@@ -137,6 +137,7 @@ bool stash_claim(stash_ctx *c)
 				while (cur < (uint32_t) i + 1
 				 && !__atomic_compare_exchange_n(&stash_a->nworkers, &cur, i + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
 				c->slot = i;
+				c->rng = (uint32_t) (stash_self ^ (stash_self >> 32)) * 2654435761u + (uint32_t) i | 1;
 				return true;
 			}
 		}
@@ -479,6 +480,7 @@ static bool relocate(stash_shard *sh, stash_entry *old)
 	n->klen = old->klen;
 	n->koff = old->koff;
 	n->flags = old->flags;
+	n->hot = __atomic_load_n(&old->hot, __ATOMIC_RELAXED) >> 1; /* aging: must be read again to stay on top */
 	stash_relocate(n, old);
 	sh->evacuated += n->size;
 	stash_slot *sp = slot_of(sh, old);
@@ -545,8 +547,9 @@ static bool merge(stash_shard *sh, bool evict_only)
 		}
 		if (oldest_run != UINT32_MAX && (!nv || stash_a->segs[oldest_run].born < stash_a->segs[v[0]].born)) {
 			stash_entry *e = (stash_entry *) seg_start(oldest_run);
-			if (e->live && __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) {
-				__atomic_store_n(&e->hot, 0, __ATOMIC_RELAXED);
+			uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
+			if (e->live && f) {
+				__atomic_store_n(&e->hot, f >> 1, __ATOMIC_RELAXED);
 				stash_a->segs[oldest_run].born = __atomic_load_n(&stash_a->inserts, __ATOMIC_RELAXED);
 				return true;
 			}
@@ -558,12 +561,43 @@ static bool merge(stash_shard *sh, bool evict_only)
 		}
 		budget = nv > 2 ? seg_size : 0; /* survivors fill at most one segment: frees at least one */
 	}
+	/* lossy: keep the most-read entries; levels >= cut all fit, level cut-1 fills what is left (first come) */
+	uint8_t cut = 1;
+	size_t spare = budget;
+	if (!lossless && budget) {
+		size_t by[STASH_HOT_MAX + 1] = {0};
+		for (uint32_t i = 0; i < nv; i++) {
+			for (char *p = seg_start(v[i]), *end = p + stash_a->segs[v[i]].used; p < end; p += ((stash_entry *) p)->size) {
+				stash_entry *e = (stash_entry *) p;
+				if (e->live && !stash_expired(e)) {
+					by[__atomic_load_n(&e->hot, __ATOMIC_RELAXED)] += e->size;
+				}
+			}
+		}
+		size_t sum = 0;
+		for (cut = STASH_HOT_MAX + 1; cut > 1 && sum + by[cut - 1] <= budget; cut--) {
+			sum += by[cut - 1];
+		}
+		spare = budget - sum;
+	}
 	for (uint32_t i = 0; i < nv && budget; i++) {
 		for (char *p = seg_start(v[i]), *end = p + stash_a->segs[v[i]].used; p < end && budget;) {
 			stash_entry *e = (stash_entry *) p;
 			p += e->size;
-			if (!e->live || stash_expired(e) || !(lossless || __atomic_load_n(&e->hot, __ATOMIC_RELAXED))) {
+			if (!e->live || stash_expired(e)) {
 				continue;
+			}
+			if (!lossless) {
+				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED); /* readers may raise it meanwhile: cut is a hint */
+				if (f < cut - 1 || f == 0) {
+					continue;
+				}
+				if (f < cut) {
+					if (e->size > spare) {
+						continue;
+					}
+					spare -= e->size;
+				}
 			}
 			if (e->size > budget || !relocate(sh, e)) {
 				budget = 0;

@@ -26,7 +26,7 @@ typedef struct stash_entry {
 	uint32_t klen;
 	uint8_t koff;     /* key bytes at (char *) e + koff */
 	uint8_t live;     /* published and not yet unlinked */
-	uint8_t hot;      /* read since it was written or last merged: merge keeps it */
+	uint8_t hot;      /* reads since written, log2-ish (stash_find); halved when merge moves it */
 	uint8_t flags;    /* the user's */
 } stash_entry;
 
@@ -86,6 +86,7 @@ typedef struct {
 	int slot;
 	int pin_refs;     /* calls currently reading the arena */
 	bool transient;   /* mine has bits that are not in keep */
+	uint32_t rng;     /* xorshift state for the read counter */
 	uint64_t mine[STASH_SEG_WORDS]; /* published as pinned */
 	uint64_t keep[STASH_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
 } stash_ctx;
@@ -210,6 +211,15 @@ static inline void stash_borrow_end(stash_ctx *c)
 	}
 }
 
+#define STASH_HOT_MAX 15
+
+static inline uint32_t stash_rand(stash_ctx *c)
+{
+	uint32_t x = c->rng;
+	x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+	return c->rng = x;
+}
+
 /* Lock-free; between borrow_begin/end. The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
 static inline stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
@@ -236,8 +246,9 @@ static inline stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, u
 				if (stash_expired(e)) {
 					return NULL;
 				}
-				if (!__atomic_load_n(&e->hot, __ATOMIC_RELAXED)) {
-					__atomic_store_n(&e->hot, 1, __ATOMIC_RELAXED); /* once per merge round: hot keys stay read-only lines */
+				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
+				if (f < STASH_HOT_MAX && (!f || !(stash_rand(c) & ((1u << f) - 1)))) {
+					__atomic_store_n(&e->hot, f + 1, __ATOMIC_RELAXED); /* p = 1/2^f: ~log2(reads) writes, the line stays shared */
 				}
 				return e;
 			}
