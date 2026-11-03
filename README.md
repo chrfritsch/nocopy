@@ -41,11 +41,13 @@ PHP=... STASH_SO=... APCU_SO=... bench/all.sh
 | `stash.apcu_compat=1` (default) | `apcu_*`, `APCUIterator`, `APC_*` constants and `apc.*` INI. `0`: only `stash_*`, sized by `stash.shm_size`, `stash.entries_hint`, `stash.ttl`; real APCu can load too |
 | `apc.entries_hint` | sizes the slot table, which never grows: ~2 slots per hinted entry, at least one per 256 bytes of `shm_size`. Raise it for many entries under ~300 bytes, or the cache evicts before its memory is full |
 | `stash.request_scope=auto` (default) | zero-copy for the whole request under fpm/cgi/apache/litespeed/FrankenPHP (classic); worker mode (below) under CLI, FrankenPHP worker scripts and others |
-| `stash.request_scope=1` | whole request may hold zero-copy values; pinned lazily on first handout. Only the segments actually handed out stay pinned until the request ends (or `stash_checkpoint()`) |
-| `stash.request_scope=0` | worker mode: fetch returns a copy unless inside `stash_scope(fn)` |
-| FrankenPHP worker + `stash.request_scope=1` | zero-copy, and each `frankenphp_handle_request()` ends like `stash_checkpoint()`: values kept past a request dangle |
+| `stash.request_scope=1` | zero-copy for the whole request, also under CLI. The segments handed out stay pinned until the request ends: a long-running script holds every segment it read, so use `0` there |
+| `stash.request_scope=0` | worker mode: fetch always returns a private copy |
+| FrankenPHP worker | copy mode from its first `frankenphp_handle_request()` on, whatever `stash.request_scope` says |
 
-Extra functions: `stash_put/get/delete`, `stash_remember`, `stash_scope`, `stash_checkpoint`, `stash_stats`. `stash_put()` throws on objects unless its 4th argument `$serialize` is true.
+A fetched value can never outlive the memory it points to: zero-copy is offered only where the request ends.
+
+Extra functions: `stash_put/get/delete`, `stash_remember`, `stash_stats`. `stash_put()` throws on objects unless its 4th argument `$serialize` is true.
 
 `stash_remember($key, $callback, $ttl = 0, $beta = 1.0)` fetches, or runs `$callback($key)` and stores its result (objects serialized).
 Concurrent misses run the callback once: the first worker takes a lease, the others wait for its value (a dead holder is detected, a stuck one is ignored after 30 s, a recursive call on the same key does not wait).
@@ -75,4 +77,3 @@ The arena is split into up to 8 shards of at least 8 MB each (1 shard up to 8 MB
 
 No `preload_path`, no slam defense, no per-entry hit counts (would add a shared write per read),
 ZTS is tested with `parallel` and FrankenPHP only (not mod_php with a threaded MPM).
-Values stored by side effect inside `stash_scope` dangle after the scope.

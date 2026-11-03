@@ -61,7 +61,7 @@ Victims that readers pin die but stay allocated until unpinned; the next round m
 
 `stash_find()`: load the slot, compare tag, then `stash_hold(entry)` = publish the entry's segment bit in this worker's bitmap (seq_cst store + fence), re-check the slot is unchanged, only then dereference.
 Slot tables never move, so readers use a process-local copy of their addresses (`stash_tabs`) and touch no header cache line that writers write.
-Bits set during a call are dropped at its end (`stash_borrow_end`), except segments a zero-copy pointer escaped from (`stash_keep`): those stay until post-deactivate (not RSHUTDOWN: session and other built-ins run their RSHUTDOWN after ours and still serialize user values), `stash_checkpoint()`, the end of `stash_scope()`, or (FrankenPHP worker, `request_scope=1`) the end of each handled request.
+Bits set during a call are dropped at its end (`stash_borrow_end`), except segments a zero-copy pointer escaped from (`stash_keep`): those stay until post-deactivate (not RSHUTDOWN: session and other built-ins run their RSHUTDOWN after ours and still serialize user values). There is no earlier release: userland can keep any value until the request ends.
 `reclaim()` first collects the shard's DEAD set, then a seq_cst fence, then ORs the bitmaps of all workers up to the high-water mark `nworkers`, and frees DEAD and unpinned segments.
 That order matters: reading pins first would let a segment that died afterwards be freed under a reader that pinned it just before.
 A worker whose bits block a free has its owner checked (at most once a second per slot); a dead one has its bits cleared. Forked children get a new owner id and worker slot (`pthread_atfork`) and inherit the parent's bits.
@@ -71,14 +71,13 @@ A worker whose bits block a free has its owner checked (at most once a second pe
 Per-thread state (`stash_ctx`: worker slot and pin bitmaps; scope depth; persist cursor) lives in module globals: plain globals under NTS, TSRM under ZTS. Each thread claims a worker slot in RINIT and gives it back in GSHUTDOWN (thread end).
 Threads share the owner id of their process: a lock held by a thread is only taken over once its whole process is gone.
 FrankenPHP: classic requests are short, so `auto` gives them zero-copy. A worker script serves many requests inside one PHP request through `frankenphp_handle_request()`, whose handler stash wraps:
-under `auto` the worker switches to copy mode at its first handled request (it may keep fetched values across requests: Symfony's container does); with `stash.request_scope=1` it stays zero-copy and each handled request ends like `stash_checkpoint()`.
+the worker switches to copy mode at its first handled request, also with `stash.request_scope=1` (it may keep fetched values across requests: Symfony's container does). Values fetched while booting stay pinned until the worker ends.
 
 ## Fetch modes
 
-- zero-copy (inside a scope): returns the arena pointer; the segment stays pinned.
-- copy (`scope_depth==0`): `copy_out` = `zend_array_dup` + `unshare_contents` (repoint arena strings/keys).
+- zero-copy (`zero_copy`, set in RINIT from `request_scope`): returns the arena pointer; the segment stays pinned until the request ends.
+- copy: `copy_out` = `zend_array_dup` + `unshare_contents` (repoint arena strings/keys).
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
-`stash_scope(fn)` runs `fn` in zero-copy mode and `unshare_zval()`s the result before dropping the pins.
 
 ## Single-flight and early refresh (`stash_remember`, `apcu_entry`)
 

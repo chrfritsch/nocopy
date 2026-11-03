@@ -30,7 +30,7 @@ for ($i = 0; $i < 6000; $i++) {
             if (isset($model[$k])) { $held[$k] = [stash_get($k), $model[$k]]; } // zero-copy value held across later churn
             break;
         case 7:
-            if ($held && mt_rand(0, 3) === 0) { $held = []; stash_checkpoint(); }
+            if ($held && mt_rand(0, 3) === 0) { $held = []; } // pins stay until the request ends
             break;
         default:
             $got = stash_get($k, $hit);

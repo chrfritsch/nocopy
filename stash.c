@@ -26,7 +26,7 @@ ZEND_DECLARE_MODULE_GLOBALS(stash)
 static size_t arena_size = 32 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long stash_ini_ttl;
-static bool ini_enabled = true, ini_enable_cli, request_scope, scope_explicit, apcu_compat = true;
+static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
 bool stash_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
@@ -267,12 +267,11 @@ static void unshare_contents(zend_array *a, int depth)
 	}
 }
 
-/* Rewrites a user value in place so nothing in it (values or keys) points into the arena.
- * ponytail: does not look inside objects; values stored there escape the scope. */
+/* Replaces an arena string or array inside a copied-out array with a private copy. */
 static void unshare_zval(zval *z, int depth)
 {
 	if (depth > STASH_MAX_DEPTH) {
-		zend_value_error("stash: scope result is nested too deeply");
+		zend_value_error("stash: value is nested too deeply");
 		return;
 	}
 	switch (Z_TYPE_P(z)) {
@@ -292,8 +291,6 @@ static void unshare_zval(zval *z, int depth)
 				zval t;
 				copy_out(&t, z);
 				ZVAL_COPY_VALUE(z, &t);
-			} else if (!(GC_FLAGS(a) & IS_ARRAY_IMMUTABLE)) {
-				unshare_contents(a, depth);
 			}
 			break;
 		}
@@ -414,11 +411,11 @@ static bool cache_unserialize(zval *rv, const char *buf, size_t len)
 	return true;
 }
 
-/* Fetch into rv. Outside a scope the result is a private copy; inside, zero-copy. exp/delta: the entry's expiry and compute time (ms). */
+/* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	stash_ctx *c = &STASH_G(ctx);
-	bool copy = STASH_G(scope_depth) == 0;
+	bool copy = !STASH_G(zero_copy);
 	stash_borrow_begin(c);
 	stash_entry *e = stash_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
 	bool hit = e != NULL;
@@ -435,7 +432,7 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 			copy_out(rv, v);
 		} else {
 			ZVAL_COPY_VALUE(rv, v);
-			stash_keep(c, e); /* a pointer into the arena escaped: stay pinned until the scope ends */
+			stash_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
 		}
 	}
 	uint64_t *ctr = hit ? &stash_a->workers[c->slot].hits : &stash_a->workers[c->slot].misses;
@@ -645,13 +642,6 @@ PHP_FUNCTION(stash_delete)
 	RETURN_BOOL(stash_drop(key));
 }
 
-/* For long-running workers: promise that no earlier stash_get() result is used again. */
-PHP_FUNCTION(stash_checkpoint)
-{
-	ZEND_PARSE_PARAMETERS_NONE();
-	stash_keep_release(&STASH_G(ctx));
-}
-
 PHP_FUNCTION(stash_remember)
 {
 	zend_string *key;
@@ -678,30 +668,6 @@ PHP_FUNCTION(stash_remember)
 	stash_remember(key, &fci, &fcc, ttl, beta, false, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
-	}
-}
-
-/* Zero-copy reads inside $callback; the result is made safe to keep afterwards. */
-PHP_FUNCTION(stash_scope)
-{
-	zend_fcall_info fci;
-	zend_fcall_info_cache fcc;
-
-	ZEND_PARSE_PARAMETERS_START(1, 1)
-		Z_PARAM_FUNC(fci, fcc)
-	ZEND_PARSE_PARAMETERS_END();
-
-	if (!stash_tracked()) {
-		RETURN_THROWS();
-	}
-	STASH_G(scope_depth)++;
-	fci.retval = return_value;
-	zend_call_function(&fci, &fcc);
-	if (STASH_G(scope_depth) == 1 && !EG(exception)) {
-		unshare_zval(return_value, 0); /* must run before the pin is dropped: it reads the arena */
-	}
-	if (--STASH_G(scope_depth) == 0) {
-		stash_keep_release(&STASH_G(ctx));
 	}
 }
 
@@ -733,18 +699,11 @@ PHP_FUNCTION(stash_stats)
 
 /* ---- FrankenPHP worker mode ---- */
 
-/* frankenphp_handle_request() serves one request inside a long-lived worker script. Under "auto" the worker gets copy mode
- * (it may keep fetched values across requests); with stash.request_scope=1 it stays zero-copy and each handled request
- * ends like stash_checkpoint(): values kept from it past the request dangle. */
+/* frankenphp_handle_request() serves many requests inside one worker script, which may keep values across them: copy mode. */
 static ZEND_NAMED_FUNCTION(stash_handle_request)
 {
-	if (!scope_explicit) {
-		STASH_G(scope_depth) = 0; /* values fetched while booting stay pinned until the worker ends */
-	}
+	STASH_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
 	orig_handle_request(INTERNAL_FUNCTION_PARAM_PASSTHRU);
-	if (scope_explicit && request_scope && STASH_G(scope_depth) == 1) {
-		stash_keep_release(&STASH_G(ctx));
-	}
 }
 
 /* ---- module ---- */
@@ -766,8 +725,7 @@ static ZEND_INI_MH(OnBool)
 /* "auto" (default): zero-copy for the whole request only under SAPIs whose requests are short. */
 static ZEND_INI_MH(OnRequestScope)
 {
-	scope_explicit = !zend_string_equals_literal_ci(new_value, "auto");
-	if (!scope_explicit) {
+	if (zend_string_equals_literal_ci(new_value, "auto")) {
 		static const char *const short_lived[] = {"fpm-fcgi", "cgi-fcgi", "apache2handler", "apache2filter", "litespeed", "fcgi", "cli-server", "frankenphp", NULL};
 		request_scope = false;
 		for (int i = 0; short_lived[i]; i++) {
@@ -889,13 +847,13 @@ PHP_RINIT_FUNCTION(stash)
 	if (STASH_G(ctx).slot < 0) {
 		stash_claim(&STASH_G(ctx));
 	}
-	STASH_G(scope_depth) = request_scope ? 1 : 0;
+	STASH_G(zero_copy) = request_scope;
 	return SUCCESS;
 }
 
 PHP_RSHUTDOWN_FUNCTION(stash)
 {
-	STASH_G(scope_depth) = 0;
+	STASH_G(zero_copy) = false;
 	return SUCCESS;
 }
 

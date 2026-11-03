@@ -11,7 +11,7 @@ stash_put("x", [$k, "y", "z" => $k]);
 $a = stash_get("x");
 $m = [$a[0] => 1];
 var_dump(isset($m[$k]), array_flip($a)["y"], array_search($k, $a, true), isset(array_count_values($a)[$k]));
-var_dump(stash_scope(fn() => isset([stash_get("x")["z"] => 1][$k])));
+var_dump(isset([stash_get("x")["z"] => 1][$k]));
 ?>
 --EXPECT--
 bool(true)

@@ -20,7 +20,7 @@ Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (P
 - Slot tables fixed (no `grow()`), sized from `apc.entries_hint` / shm size; full table evicts. Backward-shift deletes (no tombstones); readers retry a miss if the shard's `mseq` moved. Test 018 checks that and fails reliably with the retry removed.
 - Eviction: Segcache-style merge (sparse segments compacted losslessly; otherwise the 4 oldest, keeping entries read since written, `hot` byte). Replaces evacuate + FIFO evict.
 - Locks: still TTAS spin. Robust pthread mutexes measured (C, Linux arm64, 1-16 processes): 59 vs 70 M/s uncontended, 4-13 vs 12-64 M/s contended, also with a trylock spin in front. Instead the owner id is pid + process start time: a recycled pid no longer looks alive (locks and worker slots).
-- ZTS: per-thread state in module globals; slot per thread (RINIT/GSHUTDOWN). Tested: whole suite on `php:8.4-zts` + 023 (8 `parallel` threads); FrankenPHP 8.4 classic (zero-copy) and worker mode (`auto`: copy mode; `request_scope=1`: zero-copy, pins released per handled request) via `docker/frankenphp.sh`.
+- ZTS: per-thread state in module globals; slot per thread (RINIT/GSHUTDOWN). Tested: whole suite on `php:8.4-zts` + 023 (8 `parallel` threads); FrankenPHP 8.4 classic (zero-copy) and worker mode (copy mode, also with `request_scope=1`) via `docker/frankenphp.sh`.
 - Tests: 016/017/018 rewritten (shard slices, fixed table, shifts under readers), 006's fill loop counts evictions (a key read in the loop now survives eviction), 022 (merge keeps read entries), 023 (threads).
 - Performance vs the previous core, Linux arm64 Docker, same session, interleaved (`docker/ab.sh`): the host was loaded (load ~18 on 11 cores), timings moved +-10-25% between identical code paths,
   so instruction counts (callgrind, per op) are the reliable figure: fetch -7, store int/string -25, store+delete -49, inc -10, fetch miss +13 (mseq check), failing add +15.
@@ -182,13 +182,13 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 ## Key decisions (why things are the way they are)
 
 - Zero-copy needs lifetime guarantees; they come from per-worker pin bitmaps over segments (see ARCHITECTURE.md). Replaced an epoch + per-entry retire list that piled up garbage.
-- `stash.request_scope=auto`: zero-copy for the whole request only under fpm/cgi/apache/litespeed/cli-server; CLI and workers use copy mode (`stash_scope()` opts in per callback).
+- `stash.request_scope=auto`: zero-copy for the whole request only under fpm/cgi/apache/litespeed/cli-server; CLI and workers use copy mode.
 - Objects/shared references/arrays with refcount>1 references fall back to `serialize()`; resources are refused with APCu's warning.
 - `serialize`/`unserialize` inside the extension need `BG(serialize_lock)++` (re-entrancy; APCu bug #76145).
 - Per-entry hit counts are intentionally unsupported (would be a shared write per read).
 - Comments in code: one short line only (user preference).
 - Slot tables are fixed rather than growable: no stall, no frozen tables, no table re-check on hits; the price is evicting by entry count when entries are tiny (`apc.entries_hint`).
-- FrankenPHP worker mode defaults to copy mode: long-lived apps keep fetched values across requests, which would dangle after a checkpoint.
+- No way to release zero-copy pins before the request ends (`stash_checkpoint`, `stash_scope` and FrankenPHP `request_scope=1` zero-copy were removed 2026-11-03): each relied on userland not keeping a value, and a broken promise was a use-after-free. Long-lived workers get copy mode.
 
 ## Known gaps / next steps (rough priority)
 
@@ -202,4 +202,3 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 5. Milestone 3 features that justify a price: tags, cross-server invalidation (single-flight `apcu_entry` + `stash_remember` with XFetch: done, tests 030/031; APCu's own suite not re-run since). Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
 6. Packaging: license and vendor name undecided (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
    `preload_path`; slam defense; license.
-7. Values stored by side effect inside `stash_scope` dangle after the scope (documented contract).

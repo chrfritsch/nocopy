@@ -5,7 +5,7 @@ stash
 parallel
 --INI--
 apc.shm_size=64M
-stash.request_scope=1
+stash.request_scope=0
 --FILE--
 <?php
 stash_put('shared', ['a' => range(1, 100)]);
@@ -28,9 +28,7 @@ $work = function (int $t) {
             $got = stash_get($k, $hit);
             if ($hit ? !isset($model[$k]) || $got !== $model[$k][0] : isset($model[$k]) && stash_stats()['expunges'] === $model[$k][1]) $bad++;
         }
-        if ($i % 50 == 0) stash_checkpoint(); // end of a "request": zero-copy pins go
     }
-    stash_checkpoint(); // parallel keeps its threads (and their requests) alive after a task
     return $bad;
 };
 $futures = [];

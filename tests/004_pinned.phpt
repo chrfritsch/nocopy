@@ -1,5 +1,5 @@
 --TEST--
-stash: a value fetched in this request survives replacement until checkpoint
+stash: a value fetched in this request survives replacement for the rest of the request
 --EXTENSIONS--
 stash
 --INI--
@@ -15,11 +15,7 @@ for ($i = 0; $i < 200; $i++) {       // far more than the arena holds: segments 
 }
 var_dump($held === $orig);                  // the pinned segment was never reused
 var_dump(stash_stats()['pinned_segments']); // ...and exactly that one is held back
-unset($held);
-stash_checkpoint();
-var_dump(stash_stats()['pinned_segments']);
 ?>
 --EXPECT--
 bool(true)
 int(1)
-int(0)

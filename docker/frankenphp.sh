@@ -1,5 +1,5 @@
 #!/bin/sh
-# FrankenPHP (ZTS, threads): classic requests, worker mode under "auto", worker mode with stash.request_scope=1.
+# FrankenPHP (ZTS, threads): classic requests, worker mode under "auto" and with stash.request_scope=1 (both copy mode).
 #   docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
 set -e
 command -v gcc >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl >/dev/null 2>&1; }
