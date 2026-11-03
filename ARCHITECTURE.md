@@ -1,59 +1,75 @@
 # Architecture
 
-Single file `stash.c`. Everything below lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so forked workers share it at the same address (pointers are valid everywhere).
+Three files:
+- `stash_arena.c/.h`: the shared-memory store. No PHP in it: entries are a header plus the caller's bytes. The read path (`stash_find`, pins, the lock fast path) is inline in the header.
+- `stash.c`: PHP values in and out of the arena (persist, copy-out, unserialize), `stash_*`, the module, FrankenPHP's worker hook.
+- `stash_apcu.c`: `apcu_*` and `APCUIterator` on top of `stash.c`.
+
+`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`). It supplies its own `stash_relocate()`, the one callback the arena needs from its user (copy an entry's payload when a merge moves it).
+
+Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so forked workers share it at the same address (pointers are valid everywhere); threads (ZTS) share it anyway.
 
 ## Layout
 
-`[ header | shards | worker slots | segment table | initial slot tables ][ segment 0 ][ segment 1 ] ...`
+`[ header | workers | segment table | slot tables ][ segment 0 ][ segment 1 ] ...`
 - Segment size = power of two so that there are at most 256 segments (min 64 KB). Entries larger than half a segment take a run of contiguous segments.
-- Entry = `stash_entry` header + key string + value, all in one block. Strings and arrays are written as opcache-style immutable structures
+- Entry = `stash_entry` header (hash, size, expiry, seq, key length/offset, live/hot/flags: 48 bytes) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
-- Slot table: open addressing, 64-bit slots = `{ offset/8 (32 bit), hash tag (32 bit) }`; 0 empty, 1 tombstone. A probe compares the tag first and only dereferences on a match.
-  `slot_clear` turns a deleted slot into empty when the next slot is empty (no tombstone build-up under churn).
-- Each shard has its own table (`stash_table`: mask on its own cache line, then the slots). The first ones sit in the header (`apc.entries_hint` sizes them).
-  `grow()` (in `commit`, shard locked, when 3/4 of the slots are non-empty and half are live) doubles it into a run of pool segments (`SEG_TABLE`),
-  rehashes the live slots and publishes it with a seq_cst store to `shard->tab`. The old table is frozen from then on and never freed.
-  Cost: the shard's writers wait for the rehash (~2.5 ms for 200k entries); readers and other shards don't.
+- Slot: 64 bits = `{ offset/8 (32 bit), low 32 bits of the hash }`; 0 empty. The low bits are the home slot and the probe filter: a probe compares them first and only dereferences on a match.
 
-## Shards (MICA-style partitions)
+## Shards: fixed slices
 
-The key hash picks one of up to 8 shards (`shard_of`: Fibonacci mix, because DJB hashes of short keys barely vary in their high bits; 8 shards from ~16 MB, fewer for small arenas).
-A shard owns: its lock (test-and-test-and-set, yields after 128 spins, alone on its cache line), its slot table (`tab`, on a read-mostly cache line),
-one open segment per TTL bucket, its expiry cursor, its live-byte count, and `used`/`nlive` (non-empty/live slots of its table). Every write takes only its key's shard lock.
-A segment belongs to the shard that opened it (`owner`); all entries of a key live in its shard's segments, so a segment's `used/live/pending/max_exp` are only touched under its owner's lock.
-The **pool lock** guards the segment pool: FREE -> OPEN/SEALED/CONT (taking a segment, once per segment, not per write) and DEAD -> FREE (`reclaim`).
-Lock order: shard, then pool; never the other way.
-Lock word = the holder's pid. A waiter that has yielded ~1000 times checks `pid_dead(holder)` (gone, or a zombie: `kill(pid, 0)` succeeds on an unreaped child,
-so on macOS `sysctl(KERN_PROC_PID)`, on Linux `/proc/<pid>/stat`) and takes the lock over with a CAS (`lock_steals` in `stash_stats()`).
-Nothing is repaired: what the dead holder was doing stays half done, which is safe because publishing is one atomic slot store; an allocated, unpublished entry
-leaks its segment (pending never drops). Measured: about half of random kill -9s of a writer land in a lock, takeover within ~3 ms, ~0.5 segment leaked per takeover. Segment `state` is read with `seg_state()` (atomic) wherever the other lock may be the one held.
+The key hash (Fibonacci mix of the high bits) picks one of up to 8 shards. Shards exist only while each one keeps >= 8 MB and >= 16 segments: 1 shard up to 8 MB, 2 at 16 MB, 4 at 32 MB (default), 8 from 64 MB.
+A shard owns, for the arena's life: its lock (alone on its cache line), a fixed slot table, a fixed contiguous slice of segments `[lo, hi)`, one open segment per TTL bucket, its expiry cursor, live bytes and `nlive`.
+Every write takes only its key's shard lock and only ever touches that shard's slots and segments: there is no shared pool and no cross-shard work, so a walk over a segment cannot race another shard reusing it.
+Price: an entry must fit in one slice (larger ones are refused), and a shard full of data cannot borrow memory from an idle one (keys hash evenly, so this matters only for a few huge keys).
+
+Locks: test-and-test-and-set, inline fast path (`stash_lock`), slow path `stash_lock_wait` yields after 128 spins. The lock word is the holder's owner id = pid | process start time << 32.
+A waiter that has yielded ~1000 times checks `owner_dead(holder)` (gone, a zombie, or the pid now belongs to a newer process: start time differs; Linux `/proc/<pid>/stat`, macOS `sysctl(KERN_PROC_PID)`)
+and takes the lock over with a CAS (`lock_steals` in `stash_stats()`). Nothing is repaired: publishing is one atomic slot store, so a half-done write leaves at worst an unpublished entry that leaks its segment.
+Robust pthread mutexes would let the kernel report a dead holder, but measured on Linux they are 15% slower uncontended and 2-8x slower with 2-16 contending processes (futex sleeps, also with a trylock spin in front). Not used.
+
+## Slot tables: fixed, backward-shift deletes
+
+Sized once: ~2 slots per `apc.entries_hint` and at least one per 256 bytes of arena (3% of it), split evenly over the shards. A shard holds at most 3/4 of its slots (`cap`);
+an insert into a full table evicts (merge, below) like a full memory does. So a cache of very small entries evicts before its memory is full: raise `apc.entries_hint` for that.
+Deletes use backward shift (linear probing without tombstones): later entries of the probe run move back into the hole, so probe runs never fill up with tombstones.
+A reader that probes past a key while a delete moves it back would miss it: deletes that move anything bump the shard's `mseq` (odd while moving, its own cache line),
+and `stash_find` reads `mseq` before probing and treats a miss as real only if it is unchanged and even (seqlock); hits need no check (pin + slot re-check below).
 
 ## Writes
 
-`build_entry`: size the value (`calc_zval`), lock the shard, `alloc_entry` (bump-allocate in the shard's open segment, or take a fresh one / a run from the pool), copy the value in (`persist_*`),
-`commit`: `locate` the slot, publish with a release store, mark the old entry dead, unlock. Blocks up to `STASH_INLINE_PUT` (2 KB) do all of this in one critical section;
-larger ones unlock after `alloc_entry`, copy outside the lock and relock in `commit`. `time()` is called inside the lock: measured faster under contention than before it.
-Per segment: `used` (bytes appended), `live` (bytes of live entries), `pending` (allocated, unpublished). Dead entries just subtract `live`.
-A sealed segment with `live==0 && pending==0` becomes DEAD; `reclaim()` frees DEAD segments that no worker pins.
-TTL buckets (Segcache): one open segment per bucket (ttl 0, < 8 s, < 64 s, < 512 s, < 4096 s, < 32768 s, longer), so entries that expire together share segments;
-each segment keeps `max_exp`, the latest expiry of its entries (0 in bucket 0 = never). Every write runs `expire_step()` on its shard: a cursor (`exp_next`/`exp_gen`/`exp_off`) walks the entries of
-the shard's segments with `max_exp <= now`, at most 64 per write, and unlinks them; after a full pass with nothing to do it idles until the next second. No full slot-table scan.
-`exp_gen` is compared with the segment's `gen` (bumped on every free) so a cursor never resumes mid-entry in a reused segment.
-When an allocation fails: `reclaim()` -> `expire_step()` with a large budget -> expire other shards (`help_others`, trylock only: we hold our shard)
--> `evacuate()` (copy the shard's sparsest sealed segment, <= 50% live, forward, dropping expired entries, keeping each entry in its TTL bucket; one free segment is kept in reserve)
--> evacuate other shards (trylock) -> `evict()` the shard's oldest sealed segment (FIFO by `born`, the inserts counter when it left the pool: every live entry in it is unlinked)
--> evict in other shards (trylock) -> give up. Each eviction counts in `expunges`. A pinned victim dies but stays allocated until unpinned; the loop moves on to the next oldest.
-Expiry is driven by writes per shard: a shard without writes keeps its expired entries (reads already treat them as misses) until some shard needs memory.
+`stash_build` (stash.c): size the value (`calc_zval`), lock the shard, `stash_alloc` (bump-allocate in the shard's open segment for the entry's TTL bucket, or take a fresh one / a run), fill header + block (`persist_*`),
+`stash_commit`: locate the slot, publish with a release store, mark the old entry dead. Blocks up to 2 KB are filled under the lock (one critical section); larger ones unlock after `stash_alloc`, fill outside and relock for the commit.
+Per segment: `used` (bytes appended), `live`, `pending` (allocated, unpublished). A sealed segment with `live==0 && pending==0` becomes DEAD (`seg_check`); `reclaim()` frees DEAD segments no worker pins, under the shard lock.
+TTL buckets (Segcache): one open segment per bucket (ttl 0, < 8 s, < 64 s, < 512 s, < 4096 s, < 32768 s, longer); each segment keeps `max_exp`. Every write runs `expire_step()` on its shard: a cursor walks the entries of
+the shard's segments with `max_exp <= now`, at most 64 per write, and unlinks them; after a full pass with nothing to do it idles until the next second. `exp_gen` vs the segment's `gen` (bumped on every free) keeps a cursor from resuming mid-entry in a reused segment.
+When an allocation fails: `reclaim()` -> `expire_step()` with a large budget -> `merge()` repeatedly.
+
+## Merge (Segcache-style): compaction and eviction in one
+
+`merge()` picks up to 4 victims among the shard's sealed segments:
+- if there are at least two sparse ones (<= 1/4 live, together <= one segment): compaction, every live entry moves forward (`relocate`: same TTL bucket, slot repointed), nothing is lost;
+- else the 4 oldest (`born`, the inserts counter when the segment was taken): entries read since they were written or last moved (`hot`) move forward, up to one segment's worth, the rest is evicted (`expunges` counts the round, before the unlinks).
+  A moved copy starts unread, so it must be read again to survive the next round (CLOCK). A big entry's run is evicted when oldest, unless it was read: then it goes to the back once.
+`hot` is a byte in the entry header: a reader sets it only if it is 0, so a hot key costs one write per merge round and its cache line stays shared otherwise (per-entry hit counters would write on every read).
+Victims that readers pin die but stay allocated until unpinned; the next round moves on.
 
 ## Reads (lock-free) and pins
 
-`find()`: load the shard's table, load slot, compare tag, then `seg_hold(entry)` = publish the entry's segment bit in this worker's bitmap (seq_cst store + fence), re-check the slot is unchanged, only then dereference.
-It also re-checks that `shard->tab` is still the table it probed, on every hit: a replaced table's slots may name entries freed since, even in a segment this worker already pins. On a change it retries on the new table.
-Bits set during a call are dropped at the end of the call (`borrow_end`), except segments from which a zero-copy pointer escaped (`keep`): those stay until post-deactivate (not RSHUTDOWN: session and other built-ins run their RSHUTDOWN after ours and still serialize user values), `stash_checkpoint()` or the end of `stash_scope()`.
-Readers touch only read-mostly header lines: the shard mask is a process-local copy, `shard->tab` and the table mask are alone on their cache lines.
-`reclaim()` (pool lock) first collects the DEAD set, then a seq_cst fence, then ORs the bitmaps of all workers up to the high-water mark `nworkers`, and frees DEAD and unpinned segments.
-That order matters since shards turn segments DEAD concurrently: reading pins first lets a segment that died afterwards be freed under a reader that pinned it just before (seen as 0x5A reads in the debug build).
-A worker whose pid is gone (`kill(pid,0)==ESRCH`) has its bits cleared. Forked children claim a new worker slot (`pthread_atfork`) and inherit the parent's bits.
+`stash_find()`: load the slot, compare tag, then `stash_hold(entry)` = publish the entry's segment bit in this worker's bitmap (seq_cst store + fence), re-check the slot is unchanged, only then dereference.
+Slot tables never move, so readers use a process-local copy of their addresses (`stash_tabs`) and touch no header cache line that writers write.
+Bits set during a call are dropped at its end (`stash_borrow_end`), except segments a zero-copy pointer escaped from (`stash_keep`): those stay until post-deactivate (not RSHUTDOWN: session and other built-ins run their RSHUTDOWN after ours and still serialize user values), `stash_checkpoint()`, the end of `stash_scope()`, or (FrankenPHP worker, `request_scope=1`) the end of each handled request.
+`reclaim()` first collects the shard's DEAD set, then a seq_cst fence, then ORs the bitmaps of all workers up to the high-water mark `nworkers`, and frees DEAD and unpinned segments.
+That order matters: reading pins first would let a segment that died afterwards be freed under a reader that pinned it just before.
+A worker whose bits block a free has its owner checked (at most once a second per slot); a dead one has its bits cleared. Forked children get a new owner id and worker slot (`pthread_atfork`) and inherit the parent's bits.
+
+## Threads (ZTS) and FrankenPHP
+
+Per-thread state (`stash_ctx`: worker slot and pin bitmaps; scope depth; persist cursor) lives in module globals: plain globals under NTS, TSRM under ZTS. Each thread claims a worker slot in RINIT and gives it back in GSHUTDOWN (thread end).
+Threads share the owner id of their process: a lock held by a thread is only taken over once its whole process is gone.
+FrankenPHP: classic requests are short, so `auto` gives them zero-copy. A worker script serves many requests inside one PHP request through `frankenphp_handle_request()`, whose handler stash wraps:
+under `auto` the worker switches to copy mode at its first handled request (it may keep fetched values across requests: Symfony's container does); with `stash.request_scope=1` it stays zero-copy and each handled request ends like `stash_checkpoint()`.
 
 ## Fetch modes
 
@@ -64,23 +80,19 @@ A worker whose pid is gone (`kill(pid,0)==ESRCH`) has its bits cleared. Forked c
 
 ## APCu layer
 
-`apcu_*` functions are thin wrappers over `do_store` / `fetch_value` / `do_delete`; `APCUIterator`, `apcu_cache_info` and `stash_stats` scan the slot table lock-free (`slot_pin`).
+`apcu_*` functions are thin wrappers over `stash_store` / `stash_fetch` / `stash_drop`; `APCUIterator` and `apcu_cache_info` scan the slot tables lock-free (`stash_scan_next`: may skip or repeat entries a concurrent write moves).
 `apcu_inc/dec/cas` modify the integer in place under the shard lock with relaxed atomics (readers copy that word). `apcu_clear_cache` takes all shard locks in index order.
-INI and constants mirror APCu. `apcu_cache_info` / `apcu_sma_info` report live bytes and free-segment runs.
 
 ## Invariants worth remembering
 
-- Never allocate (emalloc, zvals) while holding a shard or the pool lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker.
-- Never wait for a second shard lock while holding one (trylock only); shard before pool.
+- Never allocate (emalloc, zvals) while holding a shard lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker. `stash_relocate` runs under the lock: it only copies.
+- Never take a second shard lock while holding one, except `apcu_clear_cache` (all, in index order).
 - Arena strings are `IS_STR_INTERNED` but never `IS_STR_PERMANENT`: that flag promises process lifetime and PCRE then keeps the pointer as a cache key.
-- Only keys (entry keys, array keys) carry a hash. Value strings are stored with `h == 0` (hashing every value was 0.4 ns/byte); PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race. stash itself must only read `ZSTR_H` of keys.
-- Never dereference an entry before `seg_hold` + re-check (the debug build poisons freed segments with 0x5A to catch this).
-- A live entry is always reachable from exactly one slot; `evacuate()` relies on it.
-- A walk over a segment's entries (`expire_step`, `evacuate`, `evict`) re-checks `seg_mine()` before every entry: unlinking the last live entry makes the segment DEAD,
-  another process's `reclaim()` may free it and another shard reuse it at once. While we hold our shard lock, "SEALED/OPEN and ours" proves it was not freed
-  (only our shard, under this lock, could take it back). Missing this hung a writer inside its lock on Linux (an entry header read from reused memory had size 0);
-  the debug build hides it because poisoned memory gives a huge size that ends the walk.
-- `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`. DEAD only ends in `reclaim()`.
-- Only `grow()` writes `shard->tab`; writers only ever modify the current table. Tables are never freed, so a stale table pointer is always readable.
-- Tests that must see pressure use a small `apc.shm_size` (2M-4M, 1-2 shards); tests 004/006/011 depend on that. 015 (16M, 8 shards, 8 processes) is the concurrency stress test:
-  run it in a loop on a debug build after touching locking or reclamation, a single pass catches races only sometimes. 018 = readers during table growth.
+- Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
+- Never dereference an entry before `stash_hold` + re-check (`-DSTASH_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
+- A live entry is always reachable from exactly one slot; `relocate()` relies on it.
+- Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
+- `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
+- The slot table never holds more than `cap` (3/4) entries: probes and backward shifts rely on an empty slot ending every run.
+- Tests that must see pressure use a small `apc.shm_size` (2M-4M, one shard). 015 (16M, 2 shards, 8 processes) and 018 (deletes shifting keys under readers) are the concurrency tests:
+  run `docker/stress.sh` after touching locking, reclamation or the slot table; a single pass catches races only sometimes. 018 fails reliably if `stash_find` stops retrying misses.

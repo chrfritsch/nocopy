@@ -103,7 +103,7 @@ AS_VAR_IF([PHP_STASH], [no],, [
 
   dnl Configure extension sources and compilation flags.
   PHP_NEW_EXTENSION([stash],
-    [stash.c],
+    [stash.c stash_apcu.c],
     [$ext_shared],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1])
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden])
 ])

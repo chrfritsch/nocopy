@@ -14,3 +14,16 @@ jobs:
       - run: docker run --rm -v "$PWD":/src:ro stash-linux /src/docker/test.sh
       # release build, loop: races show up only sometimes (see ARCHITECTURE.md invariants)
       - run: docker run --rm -v "$PWD":/src:ro stash-linux /src/docker/stress.sh 30
+      # the arena alone, from threads: plain and ThreadSanitizer
+      - run: docker run --rm -v "$PWD":/src:ro stash-linux /src/tests/c/run.sh 5
+  zts:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t stash-zts docker
+      - run: docker run --rm -v "$PWD":/src:ro stash-zts /src/docker/test.sh
+      - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh

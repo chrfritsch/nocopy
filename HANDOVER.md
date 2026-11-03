@@ -11,8 +11,24 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 
 ## State (2026-11-03)
 
-Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64, `docker/test.sh` + `docker/stress.sh 30`; not run on GitHub yet: no remote).
-Tried on PHP 8.7-dev (macOS arm64) and PHP 8.3 / 8.4 / 8.5 (Linux arm64 and amd64 in Docker), NTS only.
+Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
+
+### Rebuild of the core (2026-11-03, second half of the day)
+- Split: `stash_arena.c/.h` (no PHP; read path inline in the header), `stash.c` (values, `stash_*`, module; `#include`s stash_arena.c so the write path inlines: one unit), `stash_apcu.c`. `-fvisibility=hidden`: only `get_module` is exported.
+- `tests/c/stress.c` + `tests/c/run.sh`: 8 threads on the arena alone, model-checked, plain and ThreadSanitizer: clean (TSAN on gcc ignores fences: only false alarms possible, none seen). Also builds and passes natively on macOS.
+- Shards own fixed segment slices (>= 8 MB, >= 16 segments each): no pool lock, no cross-shard help; an entry must fit in a slice.
+- Slot tables fixed (no `grow()`), sized from `apc.entries_hint` / shm size; full table evicts. Backward-shift deletes (no tombstones); readers retry a miss if the shard's `mseq` moved. Test 018 checks that and fails reliably with the retry removed.
+- Eviction: Segcache-style merge (sparse segments compacted losslessly; otherwise the 4 oldest, keeping entries read since written, `hot` byte). Replaces evacuate + FIFO evict.
+- Locks: still TTAS spin. Robust pthread mutexes measured (C, Linux arm64, 1-16 processes): 59 vs 70 M/s uncontended, 4-13 vs 12-64 M/s contended, also with a trylock spin in front. Instead the owner id is pid + process start time: a recycled pid no longer looks alive (locks and worker slots).
+- ZTS: per-thread state in module globals; slot per thread (RINIT/GSHUTDOWN). Tested: whole suite on `php:8.4-zts` + 023 (8 `parallel` threads); FrankenPHP 8.4 classic (zero-copy) and worker mode (`auto`: copy mode; `request_scope=1`: zero-copy, pins released per handled request) via `docker/frankenphp.sh`.
+- Tests: 016/017/018 rewritten (shard slices, fixed table, shifts under readers), 006's fill loop counts evictions (a key read in the loop now survives eviction), 022 (merge keeps read entries), 023 (threads).
+- Performance vs the previous core, Linux arm64 Docker, same session, interleaved (`docker/ab.sh`): the host was loaded (load ~18 on 11 cores), timings moved +-10-25% between identical code paths,
+  so instruction counts (callgrind, per op) are the reliable figure: fetch -7, store int/string -25, store+delete -49, inc -10, fetch miss +13 (mseq check), failing add +15.
+  Timings where they were stable: single-process fetches/miss/exists within +-5%; parallel stores x8/x16 +10%; ttl churn: fewer slow stores (>50 us: ~1150 vs ~1780), slowest store noisy (1.3-5 ms both).
+  Not yet measured on a quiet machine: repeat `docker/ab.sh 5` there before quoting numbers (old tree: `git archive 55eec4a`).
+- macOS (8.7-dev) not re-run with PHP since the rebuild (no local PHP build left); the arena itself passes tests/c natively on macOS.
+
+### Before the rebuild
 - Own tests: `tests/001..021` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
 - TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes` and `shards`.
 - Sharded writes (2026-11-03): per-shard locks, a pool lock for segments; see ARCHITECTURE.md "Shards".
@@ -169,17 +185,19 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 - `serialize`/`unserialize` inside the extension need `BG(serialize_lock)++` (re-entrancy; APCu bug #76145).
 - Per-entry hit counts are intentionally unsupported (would be a shared write per read).
 - Comments in code: one short line only (user preference).
+- Slot tables are fixed rather than growable: no stall, no frozen tables, no table re-check on hits; the price is evicting by entry count when entries are tiny (`apc.entries_hint`).
+- FrankenPHP worker mode defaults to copy mode: long-lived apps keep fetched values across requests, which would dangle after a checkpoint.
 
 ## Known gaps / next steps (rough priority)
 
-0. Eviction is FIFO: no hit information. Segcache-style merge (keep recently read entries) if hit rates in a full cache matter.
+0. Merge eviction keeps read entries only up to one segment per 4 merged; tune MERGE_N / the budget if hit rates in a full cache need it. A failing `apcu_add` costs 15 instructions more than before (not chased).
 1. Symfony bundle: `cache.adapter.stash` pool without marshaller; document the default-pool finding for customers.
 2. Linux runs exist now (Docker, above); still: a real (non-VM) x86_64 box for numbers, wrk instead of ab; push to GitHub so CI actually runs.
-3. Lock takeover: a dead holder's recycled pid looks alive (store a start time next to the pid); segments leaked by takeovers are never recovered.
+3. Lock takeover: segments leaked by takeovers are never recovered.
    Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
-   Shards: expiry of a shard without writes waits for memory pressure.
+   Shards: expiry of a shard without writes waits for memory pressure. Fixed slices: one hot shard cannot borrow from idle ones.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).
 5. Milestone 3 features that justify a price: tags, single-flight `apcu_entry`, cross-server invalidation. Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
 6. Packaging: license and vendor name undecided (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
-   Slot tables only grow (never shrink, old ones never freed: ~one table's worth wasted, plus one segment per table for the header line); the rehash stalls the shard's writers (~2.5 ms per 200k entries), go incremental if that shows; `preload_path`; slam defense; `git init`, license, CI, test on released PHP versions.
+   `preload_path`; slam defense; license.
 7. Values stored by side effect inside `stash_scope` dangle after the scope (documented contract).
