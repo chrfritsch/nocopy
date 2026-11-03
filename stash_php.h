@@ -39,6 +39,6 @@ bool stash_store(zend_string *key, zval *val, zend_long ttl, bool add_only, bool
 bool stash_fetch(zend_string *key, zval *rv);
 bool stash_drop(zend_string *key);
 
-void stash_apcu_minit(zend_class_entry *iterator_ce, int module_number); /* constants, and the APCUIterator class registered by stash.c */
+void stash_apcu_minit(int module_number); /* apcu_* functions, APCUIterator, APC_* constants */
 
 #endif

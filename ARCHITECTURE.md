@@ -3,7 +3,7 @@
 Three files:
 - `stash_arena.c/.h`: the shared-memory store. No PHP in it: entries are a header plus the caller's bytes. The read path (`stash_find`, pins, the lock fast path) is inline in the header.
 - `stash.c`: PHP values in and out of the arena (persist, copy-out, unserialize), `stash_*`, the module, FrankenPHP's worker hook.
-- `stash_apcu.c`: `apcu_*` and `APCUIterator` on top of `stash.c`.
+- `stash_apcu.c`: `apcu_*` and `APCUIterator` on top of `stash.c`, registered only with `stash.apcu_compat=1`.
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`). It supplies its own `stash_relocate()`, the one callback the arena needs from its user (copy an entry's payload when a merge moves it).
 
@@ -79,6 +79,8 @@ under `auto` the worker switches to copy mode at its first handled request (it m
 `stash_scope(fn)` runs `fn` in zero-copy mode and `unshare_zval()`s the result before dropping the pins.
 
 ## APCu layer
+
+`stash.apcu_compat` (default 1, forced to 0 when APCu is loaded) decides in MINIT: `stash_apcu_minit()` registers the `apcu_*` functions (own stub, `stash_apcu_arginfo.h`), `APCUIterator` and the constants, and the sizing INI is registered as `apc.*`; with 0 none of that, and the sizing INI is `stash.*`.
 
 `apcu_*` functions are thin wrappers over `stash_store` / `stash_fetch` / `stash_drop`; `APCUIterator` and `apcu_cache_info` scan the slot tables lock-free (`stash_scan_next`: may skip or repeat entries a concurrent write moves).
 `apcu_inc/dec/cas` modify the integer in place under the shard lock with relaxed atomics (readers copy that word). `apcu_clear_cache` takes all shard locks in index order.

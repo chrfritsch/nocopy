@@ -8,6 +8,7 @@
 #include "zend_interfaces.h"
 #include "zend_exceptions.h"
 #include "ext/pcre/php_pcre.h"
+#include "stash_apcu_arginfo.h"
 
 /* ---- snapshots and the iterator ---- */
 
@@ -853,8 +854,9 @@ PHP_FUNCTION(apcu_sma_info)
 	}
 }
 
-void stash_apcu_minit(zend_class_entry *iterator_ce, int module_number)
+void stash_apcu_minit(int module_number)
 {
+	zend_register_functions(NULL, ext_functions, NULL, MODULE_PERSISTENT);
 	REGISTER_LONG_CONSTANT("APC_LIST_ACTIVE", APC_LIST_ACTIVE, CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("APC_LIST_DELETED", APC_LIST_DELETED, CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("APC_ITER_TYPE", APC_ITER_TYPE, CONST_PERSISTENT);
@@ -871,7 +873,7 @@ void stash_apcu_minit(zend_class_entry *iterator_ce, int module_number)
 	REGISTER_LONG_CONSTANT("APC_ITER_NONE", 0, CONST_PERSISTENT);
 	REGISTER_LONG_CONSTANT("APC_ITER_ALL", APC_ITER_ALL, CONST_PERSISTENT);
 
-	iter_ce = iterator_ce;
+	iter_ce = register_class_APCUIterator(zend_ce_iterator);
 	iter_ce->create_object = iter_create;
 	memcpy(&iter_handlers, &std_object_handlers, sizeof(zend_object_handlers));
 	iter_handlers.offset = offsetof(stash_iter, std);

@@ -42,7 +42,7 @@ Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (P
 - Review fixes (2026-11-03): arena strings no longer `IS_STR_PERMANENT` (PCRE kept them as process-wide cache keys);
   pins dropped in post-deactivate, not RSHUTDOWN (session's RSHUTDOWN serialized `$_SESSION` after ours: test 012 segfaulted);
   `apcu_cache_info`/`APCUIterator`/`apcu_sma_info` no longer allocate under the lock (OOM inside it deadlocked every worker: test 013); ZTS builds refused with `#error`.
-- APCu's own .phpt suite: 59 pass / 2 fail. Failures are non-goals: `apc54_014` (preload_path), `ghbug335` (slam defense).
+- APCu's own .phpt suite on Linux (PHP 8.5, APCu fb2c942, 2026-11-03): 56 pass / 3 fail (apc54_014, apcu_sma_info, not_enough_shm; same before `stash.apcu_compat`), not chased yet. Earlier, macOS 8.7-dev: 59 pass / 2 fail. Failures are non-goals: `apc54_014` (preload_path), `ghbug335` (slam defense).
 - Symfony Cache: `Tests/Adapter/ApcuAdapterTest.php` passes like real APCu (154 tests / 285 assertions / 6 skipped, 2026-11-03, PHP 8.7-dev macOS).
   It is the only file in the suite that touches the extension (without it loaded: 154 skipped, the other ~6700 tests still run), so the full suite adds nothing: run just this file before releases and for the Symfony bundle.
 - PHP 8.3 support (2026-11-03): stub regenerated with `@generate-legacy-arginfo 80300`, `php_pcre_match_impl` signature guarded; 001 accepts 8.3's `debug_zval_dump` (no "packed").

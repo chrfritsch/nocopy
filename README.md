@@ -17,7 +17,7 @@ php -d extension=modules/stash.so -d apc.enable_cli=1 -r 'apcu_store("a", [1,2,3
 ```
 
 Tested on PHP 8.3, 8.4, 8.5 (Linux arm64, CI also amd64), NTS and ZTS (8.4, incl. FrankenPHP classic and worker mode). Linux in Docker: `docker/` (`test.sh`, `stress.sh`, `bench.sh`, `ab.sh`, `fpm-bench.sh`, `frankenphp.sh`, `Dockerfile.zts`).
-Cannot be loaded together with real APCu (same function names).
+Loads next to real APCu only with `stash.apcu_compat=0` (stash switches to it by itself, with a startup warning, when APCu is loaded).
 
 ## Test
 
@@ -38,6 +38,7 @@ PHP=... STASH_SO=... APCU_SO=... bench/all.sh
 | INI | meaning |
 |---|---|
 | `apc.enabled`, `apc.enable_cli`, `apc.shm_size`, `apc.ttl` | as in APCu |
+| `stash.apcu_compat=1` (default) | `apcu_*`, `APCUIterator`, `APC_*` constants and `apc.*` INI. `0`: only `stash_*`, sized by `stash.shm_size`, `stash.entries_hint`, `stash.ttl`; real APCu can load too, the Symfony bundle (built on `apcu_*`) cannot be used |
 | `apc.entries_hint` | sizes the slot table, which never grows: ~2 slots per hinted entry, at least one per 256 bytes of `shm_size`. Raise it for many entries under ~300 bytes, or the cache evicts before its memory is full |
 | `stash.request_scope=auto` (default) | zero-copy for the whole request under fpm/cgi/apache/litespeed/FrankenPHP (classic); worker mode (below) under CLI, FrankenPHP worker scripts and others |
 | `stash.request_scope=1` | whole request may hold zero-copy values; pinned lazily on first handout. Only the segments actually handed out stay pinned until the request ends (or `stash_checkpoint()`) |

@@ -24,7 +24,7 @@ ZEND_DECLARE_MODULE_GLOBALS(stash)
 static size_t arena_size = 32 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long stash_ini_ttl;
-static bool ini_enabled = true, ini_enable_cli, request_scope, scope_explicit;
+static bool ini_enabled = true, ini_enable_cli, request_scope, scope_explicit, apcu_compat = true;
 bool stash_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
@@ -571,10 +571,13 @@ static ZEND_NAMED_FUNCTION(stash_handle_request)
 static ZEND_INI_MH(OnBool)
 {
 	bool v = zend_ini_parse_bool(new_value);
-	if (zend_string_equals_literal(entry->name, "apc.enabled")) {
+	const char *name = strchr(ZSTR_VAL(entry->name), '.') + 1;
+	if (strcmp(name, "enabled") == 0) {
 		ini_enabled = v;
-	} else if (zend_string_equals_literal(entry->name, "apc.enable_cli")) {
+	} else if (strcmp(name, "enable_cli") == 0) {
 		ini_enable_cli = v;
+	} else if (strcmp(name, "apcu_compat") == 0) {
+		apcu_compat = v;
 	}
 	return SUCCESS;
 }
@@ -614,13 +617,21 @@ static ZEND_INI_MH(OnTtl)
 }
 
 PHP_INI_BEGIN()
+	PHP_INI_ENTRY("stash.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
+	PHP_INI_ENTRY("stash.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
+PHP_INI_END()
+
+/* Sizing: apc.* with the APCu layer, stash.* without it (so real APCu can load too). */
+#define SIZING_INI(p) \
+	PHP_INI_ENTRY(p "shm_size", "32M", PHP_INI_SYSTEM, OnShmSize) \
+	PHP_INI_ENTRY(p "entries_hint", "4096", PHP_INI_SYSTEM, OnHint) \
+	PHP_INI_ENTRY(p "ttl", "0", PHP_INI_SYSTEM, OnTtl)
+static const zend_ini_entry_def ini_apc[] = {
 	PHP_INI_ENTRY("apc.enabled", "1", PHP_INI_SYSTEM, OnBool)
 	PHP_INI_ENTRY("apc.enable_cli", "0", PHP_INI_SYSTEM, OnBool)
-	PHP_INI_ENTRY("apc.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
-	PHP_INI_ENTRY("apc.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
-	PHP_INI_ENTRY("apc.ttl", "0", PHP_INI_SYSTEM, OnTtl)
-	PHP_INI_ENTRY("stash.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
-PHP_INI_END()
+	SIZING_INI("apc.") {0}
+};
+static const zend_ini_entry_def ini_stash[] = { SIZING_INI("stash.") {0} };
 
 static void atfork_child(void)
 {
@@ -649,6 +660,11 @@ static PHP_GSHUTDOWN_FUNCTION(stash)
 PHP_MINIT_FUNCTION(stash)
 {
 	REGISTER_INI_ENTRIES();
+	if (apcu_compat && zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
+		php_error_docref(NULL, E_CORE_WARNING, "stash: APCu is loaded, running without the apcu_* layer (stash.apcu_compat=0)");
+		apcu_compat = false;
+	}
+	zend_register_ini_entries(apcu_compat ? ini_apc : ini_stash, module_number);
 	stash_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
 	const char *err = stash_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0);
@@ -664,7 +680,9 @@ PHP_MINIT_FUNCTION(stash)
 		orig_handle_request = hr->internal_function.handler;
 		hr->internal_function.handler = stash_handle_request;
 	}
-	stash_apcu_minit(register_class_APCUIterator(zend_ce_iterator), module_number);
+	if (apcu_compat) {
+		stash_apcu_minit(module_number);
+	}
 	return SUCCESS;
 }
 
