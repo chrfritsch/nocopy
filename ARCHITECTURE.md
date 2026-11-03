@@ -22,7 +22,11 @@ A shard owns: its lock (test-and-test-and-set, yields after 128 spins, alone on 
 one open segment per TTL bucket, its expiry cursor, its live-byte count, and `used`/`nlive` (non-empty/live slots of its table). Every write takes only its key's shard lock.
 A segment belongs to the shard that opened it (`owner`); all entries of a key live in its shard's segments, so a segment's `used/live/pending/max_exp` are only touched under its owner's lock.
 The **pool lock** guards the segment pool: FREE -> OPEN/SEALED/CONT (taking a segment, once per segment, not per write) and DEAD -> FREE (`reclaim`).
-Lock order: shard, then pool; never the other way. Segment `state` is read with `seg_state()` (atomic) wherever the other lock may be the one held.
+Lock order: shard, then pool; never the other way.
+Lock word = the holder's pid. A waiter that has yielded ~1000 times checks `pid_dead(holder)` (gone, or a zombie: `kill(pid, 0)` succeeds on an unreaped child,
+so on macOS `sysctl(KERN_PROC_PID)`, on Linux `/proc/<pid>/stat`) and takes the lock over with a CAS (`lock_steals` in `stash_stats()`).
+Nothing is repaired: what the dead holder was doing stays half done, which is safe because publishing is one atomic slot store; an allocated, unpublished entry
+leaks its segment (pending never drops). Measured: about half of random kill -9s of a writer land in a lock, takeover within ~3 ms, ~0.5 segment leaked per takeover. Segment `state` is read with `seg_state()` (atomic) wherever the other lock may be the one held.
 
 ## Writes
 
@@ -56,7 +60,7 @@ A worker whose pid is gone (`kill(pid,0)==ESRCH`) has its bits cleared. Forked c
 - zero-copy (inside a scope): returns the arena pointer; the segment stays pinned.
 - copy (`scope_depth==0`): `copy_out` = `zend_array_dup` + `unshare_contents` (repoint arena strings/keys).
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
-`stash_scope(fn)` runs `fn` in zero-copy mode and `unshare()`s the result before dropping the pins.
+`stash_scope(fn)` runs `fn` in zero-copy mode and `unshare_zval()`s the result before dropping the pins.
 
 ## APCu layer
 
@@ -72,6 +76,10 @@ INI and constants mirror APCu. `apcu_cache_info` / `apcu_sma_info` report live b
 - Only keys (entry keys, array keys) carry a hash. Value strings are stored with `h == 0` (hashing every value was 0.4 ns/byte); PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race. stash itself must only read `ZSTR_H` of keys.
 - Never dereference an entry before `seg_hold` + re-check (the debug build poisons freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `evacuate()` relies on it.
+- A walk over a segment's entries (`expire_step`, `evacuate`, `evict`) re-checks `seg_mine()` before every entry: unlinking the last live entry makes the segment DEAD,
+  another process's `reclaim()` may free it and another shard reuse it at once. While we hold our shard lock, "SEALED/OPEN and ours" proves it was not freed
+  (only our shard, under this lock, could take it back). Missing this hung a writer inside its lock on Linux (an entry header read from reused memory had size 0);
+  the debug build hides it because poisoned memory gives a huge size that ends the walk.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`. DEAD only ends in `reclaim()`.
 - Only `grow()` writes `shard->tab`; writers only ever modify the current table. Tables are never freed, so a stale table pointer is always readable.
 - Tests that must see pressure use a small `apc.shm_size` (2M-4M, 1-2 shards); tests 004/006/011 depend on that. 015 (16M, 8 shards, 8 processes) is the concurrency stress test:

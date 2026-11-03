@@ -46,7 +46,7 @@ Extra functions: `stash_put/get/delete`, `stash_scope`, `stash_checkpoint`, `sta
 ## Symfony
 
 Symfony's default `cache.adapter.apcu` serializes values before they reach the extension, which hides the benefit. Use a pool without a marshaller
-(`new ApcuAdapter($ns, 0, null, null)`, see `bench/sfapp`): about 2x requests/s on cache-heavy endpoints in our benchmark (details in `HANDOVER.md`).
+(`new ApcuAdapter($ns, 0, null, null)`, see `bench/sfapp`): about 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x vs Symfony's default APCu pool (Linux, php-fpm; details in `HANDOVER.md`).
 
 ## When the cache is full
 
@@ -55,6 +55,6 @@ Unlike APCu, which wipes the whole cache, stash evicts its oldest segments (FIFO
 ## Known gaps
 
 No `preload_path`, no slam defense, no per-entry hit counts (would add a shared write per read),
-`apcu_entry` is not single-flight, a writer dying inside the lock deadlocks all,
+`apcu_entry` is not single-flight,
 no thread-safe (ZTS) builds yet (FrankenPHP, mod_php with a threaded MPM): the build refuses them.
 Values stored by side effect inside `stash_scope` dangle after the scope.

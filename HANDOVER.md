@@ -11,10 +11,14 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 
 ## State (2026-11-03)
 
-Works, not released. Not a git repo yet, no license, no CI, only tried on PHP 8.7-dev (master), macOS arm64, NTS.
-- Own tests: `tests/001..020` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
+Works, not released. Git repo, no license, no CI. Tried on PHP 8.7-dev (macOS arm64) and PHP 8.4 / 8.5 (Linux arm64 in Docker), NTS only.
+- Own tests: `tests/001..021` pass (release and debug builds; 012 needs a PHP with `session`). 015 = 8-process stress: loop it on a debug build after locking changes.
 - TTL-bucketed segments with incremental expiry (2026-11-03, see ARCHITECTURE.md); `stash_stats()` has `evacuated_bytes` and `shards`.
 - Sharded writes (2026-11-03): per-shard locks, a pool lock for segments; see ARCHITECTURE.md "Shards".
+- Linux (2026-11-03, Docker `php:8.4-fpm`/`php:8.5-fpm`, arm64, `docker/`): did not compile (glibc's `unshare(2)` clashed: renamed `unshare_zval`);
+  then 015 failed 1 in ~150 runs and could hang: segment walks read entries of a segment freed and reused by another shard after their own last unlink (fixed, see ARCHITECTURE invariants).
+  Now 21/21 on both, 015 loops 400 (8.4) / 250 (8.5) clean.
+- Dead lock holders (2026-11-03): locks store the holder's pid; waiters take over a lock whose holder is dead or a zombie (021: 30 random kill -9s of a writer, parent writes before reaping; old code deadlocked). Leaks ~0.5 segment per takeover. Contention benchmarks unchanged.
 - FIFO eviction when full (2026-11-03): APCu wipes everything, stash used to refuse every write (187k of 200k stores failed in an 8M arena). Tests 011/015 accept a miss only if `expunges` moved since the store.
 - Value strings are no longer hashed when stored (2026-11-03): `store string 100B` 76 -> 49 ns (APCu 57).
 - Growable slot tables (2026-11-03): a shard's table doubles into pool segments when it fills; `stash_stats()` has `slots`. 018 loops clean 60x on debug.
@@ -52,7 +56,35 @@ Works, not released. Not a git repo yet, no license, no CI, only tried on PHP 8.
 Gotchas: zsh scripts (`${=VAR}` for word splitting); `-n` to ignore php.ini; the benchmark scripts guard against a
 misconfigured APCu `shm_size`; in macOS `sed -i ''`; run-tests.php is the one installed with PHP, not APCu's.
 
-## Measured results (macOS, release -O2, single machine: treat as indicative; re-run on Linux)
+## Measured results on Linux (2026-11-03, Docker on the same Mac: OrbStack VM, 11 CPUs, arm64, PHP 8.5.12 official image, APCu from pecl)
+
+Run: `docker build --build-arg PHP=8.5 -t stash-linux:8.5 docker`, then `docker/bench.sh` (micro, median of 3) and `docker/fpm-bench.sh` (Symfony app, nginx + php-fpm, 8 static workers, ab -c 8, 20000 requests, median of 3).
+
+| micro (ns/op unless noted) | APCu | stash copy | stash zero-copy |
+|---|---|---|---|
+| fetch int / string 100B | 28.6 / 34.9 | 15.5 / 19.9 | 13.0 / 13.0 |
+| fetch array 1k rows | 202 us | 91 us | 13 ns |
+| store int / string 100B / array 1k rows | 55.7 / 81.8 / 183 us | 29.3 / 34.6 / 51 us | same as copy |
+| parallel fetch int, 8 workers (M ops/s) | 3.8 | 154 | 221 |
+| store int, 4 / 8 / 16 workers (M ops/s) | 10.2 / 10.9 / 8.8 | 27.6 / 15.9 / 15.4 | same |
+| 4 readers fetch int while 4 writers run (M ops/s) | 7.2 | 93 | 131 |
+| ttl churn: M stores/s, slowest store | 0.89, 133 ms | 2.81, 3.1 ms | 2.86, 2.7 ms |
+
+CORRECTION of the macOS numbers: APCu's write throughput under contention does NOT collapse on Linux (10.9 M ops/s with 8 writers vs 0.26 on macOS): the macOS "20-40x vs APCu" write rows were a macOS lock artifact.
+On Linux stash writes are 1.5-2.7x APCu with several writers, ~2x single-process; reads are where the big gap is (40-60x with 8 readers, APCu's read lock).
+
+| fpm, requests/s | /hello | /products | /product/77 | /validate |
+|---|---|---|---|---|
+| APCu, Symfony default pool | 14108 | 2975 | 3020 | 7803 |
+| stash, default pool | 12607 | 3136 | 3112 | 7885 |
+| APCu, raw pool | 15059 | 4116 | 4087 | 7892 |
+| stash copy, raw pool | 14210 | 4553 | 4362 | 8127 |
+| **stash zero-copy, raw pool** | 12702 | **14231** | **13959** | 8401 |
+
+Zero-copy raw pool: 4.8x APCu's default pool and 3.5x APCu raw on cache-heavy pages (macOS showed 2.1x / 1.7x). `request_scope=auto` picked zero-copy under fpm as intended.
+Open: `/hello` (barely touches the cache) is 6-16% lower with stash under fpm, but an in-process loop (fresh kernel per request) shows no gap (stash 179/167 us, APCu 168/181): likely noise at ~14k req/s with ab as the limit; repeat with wrk before trusting either way.
+
+## Measured results (macOS, release -O2, single machine: treat as indicative)
 
 Micro (`bench/all.sh`): scalar fetch 2.3x APCu; zero-copy array fetch ~15 ns regardless of size (10k rows: 2.5 ms APCu php-serializer,
 1.0 ms APCu default serializer); copy mode (worker-safe) array fetch only ~0.8x of APCu default serializer; 8 workers parallel scalar fetch ~50x
@@ -140,8 +172,8 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 
 0. Eviction is FIFO: no hit information. Segcache-style merge (keep recently read entries) if hit rates in a full cache matter.
 1. Symfony bundle: `cache.adapter.stash` pool without marshaller; document the default-pool finding for customers.
-2. Re-run on Linux + php-fpm; re-run the full Symfony Cache suite after the segment rewrite.
-3. Robust process-shared locks on Linux (a writer dying inside a shard or the pool lock deadlocks everyone).
+2. Linux runs exist now (Docker, above); still: x86_64, a real (non-VM) box, wrk instead of ab, the full Symfony Cache suite after the segment rewrite; CI from `docker/`.
+3. Lock takeover: a dead holder's recycled pid looks alive (store a start time next to the pid); segments leaked by takeovers are never recovered.
    Copy mode: dedupe array keys at persist time (pointer-keyed; PDO rows share key strings) and copy out in one pass.
    Shards: expiry of a shard without writes waits for memory pressure.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`; faster `copy_out` (one pass).

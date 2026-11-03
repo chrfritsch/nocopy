@@ -20,6 +20,11 @@
 #include <sched.h>
 #include <signal.h>
 #include <unistd.h>
+#ifdef __APPLE__
+# include <sys/sysctl.h>
+#else
+# include <fcntl.h>
+#endif
 
 #ifdef ZTS
 # error "stash does not support thread-safe (ZTS) PHP builds yet"
@@ -111,6 +116,7 @@ typedef struct {
 	uint32_t nworkers; /* high-water mark of claimed worker slots: scans stop here */
 	time_t start_time;
 	uint64_t expunges;
+	uint32_t lock_steals; /* locks taken over from a dead holder */
 	uint64_t inserts __attribute__((aligned(64))); /* atomic, insertion order for iterators */
 	stash_shard shards[STASH_MAX_SHARDS];
 	stash_worker workers[STASH_MAX_WORKERS];
@@ -160,17 +166,56 @@ static inline void cpu_relax(void)
 #endif
 }
 
-/* Test-and-test-and-set; yields once the wait gets long (holder preempted or compacting).
- * ponytail: a writer dying inside the lock deadlocks everyone; robust pthread mutex (EOWNERDEAD) on Linux */
+static int my_pid;
+
+/* Gone or a zombie: kill(pid, 0) still succeeds on a killed child its parent has not reaped (yet: it may be us, waiting). */
+static bool pid_dead(int pid)
+{
+	if (kill(pid, 0) == -1) {
+		return errno == ESRCH;
+	}
+#ifdef __APPLE__
+	struct kinfo_proc kp; /* proc_pidinfo() fails for zombies: no task left */
+	size_t len = sizeof kp;
+	int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+	return sysctl(mib, 4, &kp, &len, NULL, 0) == 0 && len == sizeof kp && kp.kp_proc.p_stat == SZOMB;
+#else
+	char path[32], buf[512];
+	snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		return false;
+	}
+	ssize_t n = read(fd, buf, sizeof buf - 1);
+	close(fd);
+	if (n <= 0) {
+		return false;
+	}
+	buf[n] = 0;
+	char *st = strrchr(buf, ')'); /* "pid (comm) S ...": comm may hold anything */
+	return st && st[1] == ' ' && st[2] == 'Z';
+#endif
+}
+
+/* Test-and-test-and-set holding the owner's pid; yields once the wait gets long (holder preempted or compacting),
+ * and takes the lock over from a holder that died (kill -9, OOM killer, segfault) instead of deadlocking every worker.
+ * What the dead holder was in the middle of stays as it was: at worst an unpublished entry or a half-taken run leaks its segments.
+ * ponytail: a dead holder's pid recycled by a new process looks alive; store a start time next to the pid if that shows. */
 static void spin_lock(int *l)
 {
-	unsigned spins = 0;
-	while (__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) {
-		while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
-			if (++spins < 128) {
-				cpu_relax();
-			} else {
-				sched_yield();
+	for (unsigned spins = 0;;) {
+		int h = __atomic_load_n(l, __ATOMIC_RELAXED);
+		if (!h) {
+			if (__atomic_compare_exchange_n(l, &h, my_pid, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+				return;
+			}
+		} else if (++spins < 128) {
+			cpu_relax();
+		} else {
+			sched_yield();
+			if (!(spins & 1023) && pid_dead(h) && __atomic_compare_exchange_n(l, &h, my_pid, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+				__atomic_add_fetch(&arena->lock_steals, 1, __ATOMIC_RELAXED);
+				return;
 			}
 		}
 	}
@@ -183,7 +228,8 @@ static void spin_unlock(int *l)
 
 static bool spin_trylock(int *l)
 {
-	return !__atomic_load_n(l, __ATOMIC_RELAXED) && !__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE);
+	int h = 0;
+	return !__atomic_load_n(l, __ATOMIC_RELAXED) && __atomic_compare_exchange_n(l, &h, my_pid, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
 /* ---- workers and pins ---- */
@@ -197,7 +243,7 @@ static void bits_clear(int slot)
 
 static int claim_worker(void)
 {
-	int me = getpid();
+	int me = my_pid = getpid();
 	for (int i = 0; i < STASH_MAX_WORKERS; i++) {
 		int expect = 0;
 		if (__atomic_compare_exchange_n(&arena->workers[i].pid, &expect, me, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
@@ -209,7 +255,7 @@ static int claim_worker(void)
 	}
 	for (int i = 0; i < STASH_MAX_WORKERS; i++) {
 		int p = arena->workers[i].pid;
-		if (kill(p, 0) == -1 && errno == ESRCH
+		if (p && pid_dead(p)
 		 && __atomic_compare_exchange_n(&arena->workers[i].pid, &p, me, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
 			bits_clear(i);
 			return i;
@@ -366,7 +412,7 @@ static void reclaim(void)
 			continue;
 		}
 		int pid = arena->workers[i].pid;
-		if (pid && kill(pid, 0) == -1 && errno == ESRCH) {
+		if (pid && pid_dead(pid)) {
 			bits_clear(i); /* died holding pins */
 			continue;
 		}
@@ -551,7 +597,7 @@ static bool expire_step(stash_shard *sh, time_t now, int budget)
 				sh->exp_gen = g->gen;
 				sh->exp_off = 0;
 			}
-			while (sh->exp_off < g->used) {
+			while (seg_mine(sh, s, true) && sh->exp_off < g->used) { /* our last unlink may hand it to the pool */
 				if (budget-- <= 0) {
 					return did; /* resume here on the next write */
 				}
@@ -585,7 +631,7 @@ static bool evacuate(stash_shard *sh)
 		return false;
 	}
 	char *p = seg_start(victim), *end = p + arena->segs[victim].used;
-	while (p < end) {
+	while (seg_mine(sh, victim, false) && p < end) { /* moving the last live entry kills it: stop before the pool reuses it */
 		stash_entry *old = (stash_entry *) p;
 		p += old->size;
 		if (!old->live) {
@@ -639,14 +685,14 @@ static bool evict(stash_shard *sh)
 	if (victim == UINT32_MAX) {
 		return false;
 	}
-	for (char *p = seg_start(victim), *end = p + arena->segs[victim].used; p < end;) {
+	__atomic_add_fetch(&arena->expunges, 1, __ATOMIC_RELAXED); /* before the unlinks: a reader that misses then sees it (release slot stores) */
+	for (char *p = seg_start(victim), *end = p + arena->segs[victim].used; seg_mine(sh, victim, false) && p < end;) {
 		stash_entry *e = (stash_entry *) p;
 		p += e->size;
 		if (e->live) {
 			entry_unlink(e);
 		}
 	}
-	__atomic_add_fetch(&arena->expunges, 1, __ATOMIC_RELAXED);
 	return true;
 }
 
@@ -876,7 +922,7 @@ static bool in_arena(const void *p)
 	return (uintptr_t) p - (uintptr_t) arena < arena_size;
 }
 
-static void unshare(zval *z, int depth);
+static void unshare_zval(zval *z, int depth);
 static void unshare_contents(zend_array *a, int depth);
 
 /* Deep copy of an arena value into ordinary request memory. */
@@ -908,7 +954,7 @@ static void unshare_contents(zend_array *a, int depth)
 	if (HT_IS_PACKED(a)) {
 		zval *v;
 		ZEND_HASH_PACKED_FOREACH_VAL(a, v) {
-			unshare(v, depth + 1);
+			unshare_zval(v, depth + 1);
 		} ZEND_HASH_FOREACH_END();
 	} else {
 		Bucket *b;
@@ -918,14 +964,14 @@ static void unshare_contents(zend_array *a, int depth)
 				ZSTR_H(b->key) = b->h;
 				HT_FLAGS(a) &= ~HASH_FLAG_STATIC_KEYS;
 			}
-			unshare(&b->val, depth + 1);
+			unshare_zval(&b->val, depth + 1);
 		} ZEND_HASH_FOREACH_END();
 	}
 }
 
 /* Rewrites a user value in place so nothing in it (values or keys) points into the arena.
  * ponytail: does not look inside objects; values stored there escape the scope. */
-static void unshare(zval *z, int depth)
+static void unshare_zval(zval *z, int depth)
 {
 	if (depth > STASH_MAX_DEPTH) {
 		zend_value_error("stash: scope result is nested too deeply");
@@ -933,7 +979,7 @@ static void unshare(zval *z, int depth)
 	}
 	switch (Z_TYPE_P(z)) {
 		case IS_REFERENCE:
-			unshare(Z_REFVAL_P(z), depth + 1);
+			unshare_zval(Z_REFVAL_P(z), depth + 1);
 			break;
 		case IS_STRING:
 			if (in_arena(Z_STR_P(z))) {
@@ -1703,7 +1749,7 @@ PHP_FUNCTION(stash_scope)
 	fci.retval = return_value;
 	zend_call_function(&fci, &fcc);
 	if (scope_depth == 1 && !EG(exception)) {
-		unshare(return_value, 0); /* must run before the pin is dropped: it reads the arena */
+		unshare_zval(return_value, 0); /* must run before the pin is dropped: it reads the arena */
 	}
 	if (--scope_depth == 0) {
 		keep_release();
@@ -1750,6 +1796,7 @@ PHP_FUNCTION(stash_stats)
 	add_assoc_long(return_value, "shards", arena->nshards);
 	add_assoc_long(return_value, "slots", slots_total());
 	add_assoc_long(return_value, "expunges", __atomic_load_n(&arena->expunges, __ATOMIC_RELAXED));
+	add_assoc_long(return_value, "lock_steals", __atomic_load_n(&arena->lock_steals, __ATOMIC_RELAXED));
 }
 
 /* ---- apcu_* ---- */
