@@ -20,7 +20,7 @@
 typedef struct stash_entry {
 	uint64_t h;       /* key hash */
 	size_t size;      /* whole block */
-	time_t expires;   /* 0: never */
+	time_t expires;   /* last second it is alive; 0: never */
 	time_t created;
 	uint64_t seq;     /* insertion order, for iterators */
 	uint32_t klen;
@@ -145,7 +145,8 @@ static inline stash_shard *stash_shard_of(uint64_t h)
 	return &stash_a->shards[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask];
 }
 static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
-static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires <= time(NULL); }
+/* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
+static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
 
 static inline void stash_cpu_relax(void)
 {

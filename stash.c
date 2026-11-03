@@ -528,7 +528,7 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 			return;
 		}
 		double r = ((stash_rand(&STASH_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
-		if (now_s(CLOCK_REALTIME) - delta / 1000.0 * beta * log(r) < (double) exp) {
+		if (now_s(CLOCK_REALTIME) - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
 		zend_string *lkey = zend_string_concat2(ZEND_STRL("\0stash_lease\0"), ZSTR_VAL(key), ZSTR_LEN(key));

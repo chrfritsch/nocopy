@@ -438,7 +438,7 @@ static bool expire_step(stash_shard *sh, time_t now, int budget)
 	for (uint32_t seen = 0; seen < n; seen++) {
 		uint32_t s = sh->exp_next;
 		stash_seg *g = &stash_a->segs[s];
-		if ((g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp <= now) {
+		if ((g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp < now) {
 			if (sh->exp_gen != g->gen) { /* freed and reused since the cursor stopped here: entry boundaries moved */
 				sh->exp_gen = g->gen;
 				sh->exp_off = 0;
