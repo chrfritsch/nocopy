@@ -8,6 +8,7 @@ use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Database\Database;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\nocopy\Cache\NocopyBackend;
+use Drupal\nocopy\Cache\NocopyBackendFactory;
 use Drupal\nocopy\Cache\NocopyCacheTagsChecksum;
 use Drupal\nocopy\Cache\NocopyJournal;
 use PHPUnit\Framework\Attributes\Group;
@@ -110,6 +111,20 @@ class NocopyJournalTest extends KernelTestBase {
     $this->nextRequest();
     $this->assertFalse($behind->get('k'));
     $this->assertSame(2, $current->get('k')->data);
+  }
+
+  // As chainedfast's fast layer the database is the source of truth: no journal writes, no journal reads.
+  public function testFastLayerSkipsTheJournal(): void {
+    // Tags stay with core's database checksum in this setup.
+    $fast = new NocopyBackendFactory($this->root, "sites/$this->site", \Drupal::service('cache_tags.invalidator.checksum'), \Drupal::service('datetime.time'), TRUE);
+    $bin = $fast->get('b');
+    Database::startLog('fast');
+    $bin->set('k', 1);
+    $this->nextRequest();
+    $this->assertSame(1, $bin->get('k')->data);
+    $queries = array_filter(Database::getLog('fast'), fn($q) => str_contains($q['query'], 'nocopy_journal'));
+    $this->assertSame([], $queries);
+    $this->assertSame('0', (string) Database::getConnection()->query('SELECT COUNT(*) FROM {nocopy_journal}')->fetchField());
   }
 
   public function testWorksWithoutJournalTable(): void {

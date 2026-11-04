@@ -26,7 +26,8 @@ class NocopyBackend implements CacheBackendInterface {
     protected string $sitePrefix,
     protected CacheTagsChecksumInterface $checksumProvider,
     protected TimeInterface $time,
-    protected NocopyJournal $journal = new NocopyJournal(),
+    // NULL: no journal (fast layer, the database is the source of truth).
+    protected ?NocopyJournal $journal = new NocopyJournal(),
   ) {}
 
   protected ?float $replayedFor = NULL;
@@ -53,7 +54,7 @@ class NocopyBackend implements CacheBackendInterface {
 
   // Web requests: apply what CLI processes wrote since this bin last looked, once per request.
   protected function replay(): void {
-    if ($this->journal->writer || $this->replayedFor === NocopyJournal::request()) {
+    if (!$this->journal || $this->journal->writer || $this->replayedFor === NocopyJournal::request()) {
       return;
     }
     $this->replayedFor = NocopyJournal::request();
@@ -127,7 +128,7 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function set($cid, $data, $expire = CacheBackendInterface::CACHE_PERMANENT, array $tags = []) {
     $this->store($cid, $data, $expire, $tags);
-    $this->journal->record($this->bin, [$cid]);
+    $this->journal?->record($this->bin, [$cid]);
   }
 
   protected function store($cid, $data, $expire, array $tags): void {
@@ -153,7 +154,7 @@ class NocopyBackend implements CacheBackendInterface {
     foreach ($items as $cid => $item) {
       $this->store($cid, $item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
     }
-    $this->journal->record($this->bin, array_keys($items));
+    $this->journal?->record($this->bin, array_keys($items));
   }
 
   public function delete($cid) {
@@ -164,13 +165,13 @@ class NocopyBackend implements CacheBackendInterface {
     foreach ($cids as $cid) {
       nocopy_delete($this->key((string) $cid));
     }
-    $this->journal->record($this->bin, $cids);
+    $this->journal?->record($this->bin, $cids);
   }
 
   // Old entries leave through eviction.
   public function deleteAll() {
     nocopy_put($this->binKey('version'), bin2hex(random_bytes(6)));
-    $this->journal->record($this->bin, NULL);
+    $this->journal?->record($this->bin, NULL);
   }
 
   public function invalidate($cid) {
@@ -186,14 +187,14 @@ class NocopyBackend implements CacheBackendInterface {
         $this->put((string) $cid, $item);
       }
     }
-    $this->journal->record($this->bin, $cids);
+    $this->journal?->record($this->bin, $cids);
   }
 
   public function invalidateAll() {
     @trigger_error("CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622", E_USER_DEPRECATED);
     // Rounded like 'created', so every item created up to now compares <=.
     nocopy_put($this->binKey('invalidated_at'), [$this->state()[0], round(microtime(TRUE), 3)]);
-    $this->journal->record($this->bin, NULL);
+    $this->journal?->record($this->bin, NULL);
   }
 
   public function garbageCollection() {

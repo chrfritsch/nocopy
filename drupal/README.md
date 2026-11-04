@@ -46,6 +46,8 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 
 **Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
+It uses `cache.backend.nocopy_fast`, which keeps no journal (chainedfast already checks the database on every request) and falls back to
+the database alone where the extension is not loaded, like core's APCu fast layer. Works on several web servers.
 
 ## Trade-offs
 

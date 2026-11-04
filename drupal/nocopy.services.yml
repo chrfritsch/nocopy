@@ -2,3 +2,7 @@ services:
   cache.backend.nocopy:
     class: Drupal\nocopy\Cache\NocopyBackendFactory
     arguments: ['%app.root%', '%site.path%', '@cache_tags.invalidator.checksum', '@datetime.time']
+  # As ChainedFastBackend's fast layer: no journal, and no fast layer where the extension is missing.
+  cache.backend.nocopy_fast:
+    class: Drupal\nocopy\Cache\NocopyBackendFactory
+    arguments: ['%app.root%', '%site.path%', '@cache_tags.invalidator.checksum', '@datetime.time', true]

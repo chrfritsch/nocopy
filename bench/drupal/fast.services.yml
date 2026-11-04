@@ -2,6 +2,6 @@
 services:
   cache.backend.chainedfast:
     class: Drupal\Core\Cache\ChainedFastBackendFactory
-    arguments: ['@settings', null, 'cache.backend.nocopy']
+    arguments: ['@settings', null, 'cache.backend.nocopy_fast']
     calls:
       - [setContainer, ['@service_container']]
