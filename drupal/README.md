@@ -57,6 +57,6 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 - **Do not set `nocopy.ttl`** (or `apc.ttl`): it would expire cache tag tokens, and a lost token for a common tag such as `rendered`
   invalidates most of the site at once.
 - **The cache is empty after a php-fpm restart or reload,** so the first requests rebuild it. In the benchmark, the first logged-in
-  request after a restart took 537 ms (stock: 223 ms, where the database caches survive), and requests were back to normal from the third one.
+  request after a restart took 547–735 ms (stock: 253–297 ms, where the database caches survive), and requests were back to normal from the third one.
 - **Memory:** `nocopy.shm_size` must hold the cache, render cache included. When it is full, nocopy evicts entries (cache misses, not errors).
   Check `nocopy_stats()['used']` after warm-up: the 2,000-node benchmark site used 11 MB.

@@ -1,0 +1,3026 @@
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.170 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    4272.21 [#/sec] (mean)
+Time per request:       1.873 [ms] (mean)
+Time per request:       0.234 [ms] (mean, across all concurrent requests)
+Transfer rate:          132905.83 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.7      2      14
+Waiting:        1    2   0.7      2      14
+Total:          1    2   0.7      2      14
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%     14 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.322 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    3781.73 [#/sec] (mean)
+Time per request:       2.115 [ms] (mean)
+Time per request:       0.264 [ms] (mean, across all concurrent requests)
+Transfer rate:          117647.28 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.9      2      15
+Waiting:        1    2   0.9      2      15
+Total:          1    2   0.9      2      15
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      3
+  90%      3
+  95%      4
+  98%      4
+  99%      5
+ 100%     15 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.372 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    3644.07 [#/sec] (mean)
+Time per request:       2.195 [ms] (mean)
+Time per request:       0.274 [ms] (mean, across all concurrent requests)
+Transfer rate:          113364.76 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.8      2       7
+Waiting:        1    2   0.8      2       7
+Total:          1    2   0.8      2       7
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      3
+  95%      4
+  98%      5
+  99%      5
+ 100%      7 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.113 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112989915 bytes
+HTML transferred:       112519887 bytes
+Requests per second:    898.09 [#/sec] (mean)
+Time per request:       8.908 [ms] (mean)
+Time per request:       1.113 [ms] (mean, across all concurrent requests)
+Transfer rate:          99096.80 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     5    9   2.3      8      30
+Waiting:        5    9   2.2      8      22
+Total:          5    9   2.3      8      31
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%      9
+  75%     10
+  80%     10
+  90%     12
+  95%     13
+  98%     14
+  99%     15
+ 100%     31 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.115 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112988000 bytes
+HTML transferred:       112518000 bytes
+Requests per second:    896.79 [#/sec] (mean)
+Time per request:       8.921 [ms] (mean)
+Time per request:       1.115 [ms] (mean, across all concurrent requests)
+Transfer rate:          98952.14 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     5    9   2.1      8      18
+Waiting:        5    9   2.1      8      18
+Total:          5    9   2.1      8      18
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%      9
+  75%     10
+  80%     10
+  90%     12
+  95%     13
+  98%     14
+  99%     15
+ 100%     18 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.101 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112988000 bytes
+HTML transferred:       112518000 bytes
+Requests per second:    907.87 [#/sec] (mean)
+Time per request:       8.812 [ms] (mean)
+Time per request:       1.101 [ms] (mean, across all concurrent requests)
+Transfer rate:          100174.35 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     5    9   2.2      8      18
+Waiting:        5    9   2.1      8      18
+Total:          5    9   2.2      8      18
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%      9
+  75%     10
+  80%     11
+  90%     12
+  95%     13
+  98%     14
+  99%     15
+ 100%     18 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.349 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3707.42 [#/sec] (mean)
+Time per request:       2.158 [ms] (mean)
+Time per request:       0.270 [ms] (mean, across all concurrent requests)
+Transfer rate:          47443.45 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.9      2      11
+Waiting:        1    2   0.9      2      11
+Total:          1    2   1.0      2      11
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      3
+  95%      4
+  98%      5
+  99%      5
+ 100%     11 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.487 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3361.75 [#/sec] (mean)
+Time per request:       2.380 [ms] (mean)
+Time per request:       0.297 [ms] (mean, across all concurrent requests)
+Transfer rate:          43019.85 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     1    2   1.3      2      23
+Waiting:        1    2   1.3      2      22
+Total:          1    2   1.3      2      23
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      4
+  95%      5
+  98%      6
+  99%      7
+ 100%     23 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.223 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    4089.00 [#/sec] (mean)
+Time per request:       1.956 [ms] (mean)
+Time per request:       0.245 [ms] (mean, across all concurrent requests)
+Transfer rate:          52326.46 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.7      2       8
+Waiting:        1    2   0.7      2       7
+Total:          1    2   0.7      2       8
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%      8 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.293 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96189000 bytes
+HTML transferred:       95720000 bytes
+Requests per second:    773.54 [#/sec] (mean)
+Time per request:       10.342 [ms] (mean)
+Time per request:       1.293 [ms] (mean, across all concurrent requests)
+Transfer rate:          72662.31 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     6   10   2.8     10      40
+Waiting:        6   10   2.8     10      40
+Total:          6   10   2.8     10      40
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     12
+  90%     14
+  95%     15
+  98%     17
+  99%     19
+ 100%     40 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.393 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96189000 bytes
+HTML transferred:       95720000 bytes
+Requests per second:    717.67 [#/sec] (mean)
+Time per request:       11.147 [ms] (mean)
+Time per request:       1.393 [ms] (mean, across all concurrent requests)
+Transfer rate:          67414.17 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   2.8     11      23
+Waiting:        6   11   2.8     10      23
+Total:          6   11   2.8     11      23
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     12
+  75%     13
+  80%     13
+  90%     15
+  95%     16
+  98%     18
+  99%     19
+ 100%     23 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.347 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96189000 bytes
+HTML transferred:       95720000 bytes
+Requests per second:    742.30 [#/sec] (mean)
+Time per request:       10.777 [ms] (mean)
+Time per request:       1.347 [ms] (mean, across all concurrent requests)
+Transfer rate:          69727.64 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   3.1     10      24
+Waiting:        6   11   3.1     10      24
+Total:          6   11   3.1     10      24
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     13
+  80%     13
+  90%     15
+  95%     17
+  98%     19
+  99%     20
+ 100%     24 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.112 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4497.32 [#/sec] (mean)
+Time per request:       1.779 [ms] (mean)
+Time per request:       0.222 [ms] (mean, across all concurrent requests)
+Transfer rate:          52391.20 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.6      2       7
+Waiting:        1    2   0.6      2       6
+Total:          1    2   0.6      2       7
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      3
+  99%      4
+ 100%      7 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.100 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4545.46 [#/sec] (mean)
+Time per request:       1.760 [ms] (mean)
+Time per request:       0.220 [ms] (mean, across all concurrent requests)
+Transfer rate:          52951.98 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.5      2       6
+Waiting:        1    2   0.5      2       6
+Total:          1    2   0.5      2       6
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      2
+  95%      3
+  98%      3
+  99%      3
+ 100%      6 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.057 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4730.19 [#/sec] (mean)
+Time per request:       1.691 [ms] (mean)
+Time per request:       0.211 [ms] (mean, across all concurrent requests)
+Transfer rate:          55103.99 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.5      2       5
+Waiting:        1    2   0.5      2       5
+Total:          1    2   0.5      2       5
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      2
+  95%      3
+  98%      3
+  99%      3
+ 100%      5 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.398 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95333000 bytes
+HTML transferred:       94864000 bytes
+Requests per second:    715.25 [#/sec] (mean)
+Time per request:       11.185 [ms] (mean)
+Time per request:       1.398 [ms] (mean, across all concurrent requests)
+Transfer rate:          66588.44 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     6   11   3.2     11      27
+Waiting:        6   11   3.2     10      27
+Total:          6   11   3.2     11      27
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     12
+  75%     13
+  80%     13
+  90%     15
+  95%     17
+  98%     19
+  99%     22
+ 100%     27 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.381 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95333000 bytes
+HTML transferred:       94864000 bytes
+Requests per second:    723.97 [#/sec] (mean)
+Time per request:       11.050 [ms] (mean)
+Time per request:       1.381 [ms] (mean, across all concurrent requests)
+Transfer rate:          67400.36 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   2.7     10      28
+Waiting:        6   11   2.7     10      28
+Total:          6   11   2.7     10      28
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     12
+  75%     13
+  80%     13
+  90%     15
+  95%     16
+  98%     17
+  99%     19
+ 100%     28 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.339 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95333000 bytes
+HTML transferred:       94864000 bytes
+Requests per second:    746.94 [#/sec] (mean)
+Time per request:       10.710 [ms] (mean)
+Time per request:       1.339 [ms] (mean, across all concurrent requests)
+Transfer rate:          69538.87 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   2.5     10      22
+Waiting:        6   10   2.5     10      22
+Total:          6   11   2.5     10      22
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     13
+  90%     14
+  95%     16
+  98%     17
+  99%     19
+ 100%     22 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.457 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    10933.24 [#/sec] (mean)
+Time per request:       0.732 [ms] (mean)
+Time per request:       0.091 [ms] (mean, across all concurrent requests)
+Transfer rate:          340126.25 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     0    1   0.4      1       4
+Waiting:        0    1   0.4      1       4
+Total:          0    1   0.4      1       4
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      2
+  99%      2
+ 100%      4 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.427 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    11716.41 [#/sec] (mean)
+Time per request:       0.683 [ms] (mean)
+Time per request:       0.085 [ms] (mean, across all concurrent requests)
+Transfer rate:          364490.09 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     0    1   0.3      1       3
+Waiting:        0    1   0.3      1       3
+Total:          0    1   0.3      1       3
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      1
+  99%      2
+ 100%      3 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.375 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    13350.14 [#/sec] (mean)
+Time per request:       0.599 [ms] (mean)
+Time per request:       0.075 [ms] (mean, across all concurrent requests)
+Transfer rate:          415314.41 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     0    1   0.2      1       2
+Waiting:        0    1   0.2      0       2
+Total:          0    1   0.2      1       2
+ERROR: The median and mean for the waiting time are more than twice the standard
+       deviation apart. These results are NOT reliable.
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      1
+  99%      1
+ 100%      2 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.870 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112988915 bytes
+HTML transferred:       112518887 bytes
+Requests per second:    1149.34 [#/sec] (mean)
+Time per request:       6.961 [ms] (mean)
+Time per request:       0.870 [ms] (mean, across all concurrent requests)
+Transfer rate:          126818.96 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     4    7   1.7      7      13
+Waiting:        4    7   1.7      7      13
+Total:          4    7   1.7      7      13
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      7
+  75%      8
+  80%      8
+  90%      9
+  95%     10
+  98%     11
+  99%     12
+ 100%     13 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.143 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112987000 bytes
+HTML transferred:       112517000 bytes
+Requests per second:    874.78 [#/sec] (mean)
+Time per request:       9.145 [ms] (mean)
+Time per request:       1.143 [ms] (mean, across all concurrent requests)
+Transfer rate:          96522.28 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     4    9   4.1      8      44
+Waiting:        3    9   4.1      8      44
+Total:          4    9   4.1      8      44
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%     10
+  75%     11
+  80%     12
+  90%     14
+  95%     16
+  98%     21
+  99%     24
+ 100%     44 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.823 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112987000 bytes
+HTML transferred:       112517000 bytes
+Requests per second:    1215.30 [#/sec] (mean)
+Time per request:       6.583 [ms] (mean)
+Time per request:       0.823 [ms] (mean, across all concurrent requests)
+Transfer rate:          134094.35 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     4    6   1.7      6      16
+Waiting:        3    6   1.7      6      16
+Total:          4    7   1.7      6      16
+
+Percentage of the requests served within a certain time (ms)
+  50%      6
+  66%      7
+  75%      7
+  80%      8
+  90%      9
+  95%     10
+  98%     11
+  99%     13
+ 100%     16 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.452 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    11058.28 [#/sec] (mean)
+Time per request:       0.723 [ms] (mean)
+Time per request:       0.090 [ms] (mean, across all concurrent requests)
+Transfer rate:          141511.39 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     0    1   0.5      1       8
+Waiting:        0    1   0.5      1       8
+Total:          0    1   0.6      1       8
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      2
+  99%      4
+ 100%      8 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.439 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    11397.49 [#/sec] (mean)
+Time per request:       0.702 [ms] (mean)
+Time per request:       0.088 [ms] (mean, across all concurrent requests)
+Transfer rate:          145852.28 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       4
+Processing:     0    1   0.4      1       7
+Waiting:        0    1   0.4      1       7
+Total:          0    1   0.4      1       7
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      2
+  99%      3
+ 100%      7 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.384 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    13019.48 [#/sec] (mean)
+Time per request:       0.614 [ms] (mean)
+Time per request:       0.077 [ms] (mean, across all concurrent requests)
+Transfer rate:          166608.62 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     0    1   0.2      1       2
+Waiting:        0    1   0.2      1       2
+Total:          0    1   0.2      1       2
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      1
+  99%      1
+ 100%      2 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.997 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96188000 bytes
+HTML transferred:       95719000 bytes
+Requests per second:    1003.36 [#/sec] (mean)
+Time per request:       7.973 [ms] (mean)
+Time per request:       0.997 [ms] (mean, across all concurrent requests)
+Transfer rate:          94248.76 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     4    8   1.9      8      15
+Waiting:        4    8   1.9      8      15
+Total:          4    8   1.9      8      15
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%      9
+  75%      9
+  80%      9
+  90%     10
+  95%     11
+  98%     13
+  99%     13
+ 100%     15 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.913 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96188000 bytes
+HTML transferred:       95719000 bytes
+Requests per second:    1095.71 [#/sec] (mean)
+Time per request:       7.301 [ms] (mean)
+Time per request:       0.913 [ms] (mean, across all concurrent requests)
+Transfer rate:          102924.12 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     4    7   1.7      7      15
+Waiting:        4    7   1.7      7      15
+Total:          4    7   1.7      7      15
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      8
+  75%      8
+  80%      9
+  90%     10
+  95%     11
+  98%     11
+  99%     12
+ 100%     15 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.895 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96188000 bytes
+HTML transferred:       95719000 bytes
+Requests per second:    1116.92 [#/sec] (mean)
+Time per request:       7.163 [ms] (mean)
+Time per request:       0.895 [ms] (mean, across all concurrent requests)
+Transfer rate:          104916.11 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     4    7   1.6      7      17
+Waiting:        4    7   1.6      7      17
+Total:          4    7   1.6      7      17
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      8
+  75%      8
+  80%      8
+  90%      9
+  95%     10
+  98%     11
+  99%     12
+ 100%     17 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.505 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    9909.66 [#/sec] (mean)
+Time per request:       0.807 [ms] (mean)
+Time per request:       0.101 [ms] (mean, across all concurrent requests)
+Transfer rate:          115441.77 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     0    1   0.4      1       4
+Waiting:        0    1   0.4      1       4
+Total:          0    1   0.4      1       4
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      2
+  98%      2
+  99%      2
+ 100%      4 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.412 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    12149.46 [#/sec] (mean)
+Time per request:       0.658 [ms] (mean)
+Time per request:       0.082 [ms] (mean, across all concurrent requests)
+Transfer rate:          141534.06 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     0    1   0.3      1       3
+Waiting:        0    1   0.3      1       3
+Total:          0    1   0.3      1       4
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      1
+  99%      2
+ 100%      4 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.379 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    13187.05 [#/sec] (mean)
+Time per request:       0.607 [ms] (mean)
+Time per request:       0.076 [ms] (mean, across all concurrent requests)
+Transfer rate:          153621.35 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     0    1   0.2      1       2
+Waiting:        0    1   0.2      1       2
+Total:          0    1   0.2      1       2
+
+Percentage of the requests served within a certain time (ms)
+  50%      1
+  66%      1
+  75%      1
+  80%      1
+  90%      1
+  95%      1
+  98%      1
+  99%      1
+ 100%      2 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.933 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95332000 bytes
+HTML transferred:       94863000 bytes
+Requests per second:    1072.28 [#/sec] (mean)
+Time per request:       7.461 [ms] (mean)
+Time per request:       0.933 [ms] (mean, across all concurrent requests)
+Transfer rate:          99826.99 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     4    7   1.8      7      16
+Waiting:        4    7   1.8      7      16
+Total:          4    7   1.8      7      16
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      8
+  75%      8
+  80%      9
+  90%     10
+  95%     11
+  98%     12
+  99%     13
+ 100%     16 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.934 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95332000 bytes
+HTML transferred:       94863000 bytes
+Requests per second:    1070.42 [#/sec] (mean)
+Time per request:       7.474 [ms] (mean)
+Time per request:       0.934 [ms] (mean, across all concurrent requests)
+Transfer rate:          99653.99 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     4    7   1.8      7      17
+Waiting:        4    7   1.8      7      17
+Total:          4    7   1.8      7      17
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      8
+  75%      8
+  80%      9
+  90%     10
+  95%     11
+  98%     12
+  99%     12
+ 100%     17 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   0.920 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95332000 bytes
+HTML transferred:       94863000 bytes
+Requests per second:    1086.89 [#/sec] (mean)
+Time per request:       7.360 [ms] (mean)
+Time per request:       0.920 [ms] (mean, across all concurrent requests)
+Transfer rate:          101187.17 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     4    7   1.9      7      17
+Waiting:        4    7   1.9      7      17
+Total:          4    7   1.9      7      17
+
+Percentage of the requests served within a certain time (ms)
+  50%      7
+  66%      8
+  75%      8
+  80%      9
+  90%     10
+  95%     11
+  98%     12
+  99%     13
+ 100%     17 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.222 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    4092.16 [#/sec] (mean)
+Time per request:       1.955 [ms] (mean)
+Time per request:       0.244 [ms] (mean, across all concurrent requests)
+Transfer rate:          127304.39 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.7      2      10
+Waiting:        0    2   0.7      2      10
+Total:          1    2   0.7      2      10
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%     10 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.176 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    4253.14 [#/sec] (mean)
+Time per request:       1.881 [ms] (mean)
+Time per request:       0.235 [ms] (mean, across all concurrent requests)
+Transfer rate:          132312.64 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     1    2   0.6      2       5
+Waiting:        1    2   0.6      2       5
+Total:          1    2   0.6      2       5
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      3
+  99%      4
+ 100%      5 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.193 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    4191.74 [#/sec] (mean)
+Time per request:       1.909 [ms] (mean)
+Time per request:       0.239 [ms] (mean, across all concurrent requests)
+Transfer rate:          130402.31 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.6      2       7
+Waiting:        1    2   0.6      2       7
+Total:          1    2   0.6      2       7
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%      7 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.405 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112995915 bytes
+HTML transferred:       112525887 bytes
+Requests per second:    711.54 [#/sec] (mean)
+Time per request:       11.243 [ms] (mean)
+Time per request:       1.405 [ms] (mean, across all concurrent requests)
+Transfer rate:          78516.84 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   4.1     10      35
+Waiting:        6   11   4.0     10      35
+Total:          6   11   4.1     10      35
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     12
+  75%     13
+  80%     14
+  90%     16
+  95%     19
+  98%     24
+  99%     26
+ 100%     35 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.596 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112994000 bytes
+HTML transferred:       112524000 bytes
+Requests per second:    626.44 [#/sec] (mean)
+Time per request:       12.771 [ms] (mean)
+Time per request:       1.596 [ms] (mean, across all concurrent requests)
+Transfer rate:          69124.62 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   13   4.4     11      32
+Waiting:        6   12   4.3     11      32
+Total:          6   13   4.4     12      32
+
+Percentage of the requests served within a certain time (ms)
+  50%     12
+  66%     14
+  75%     16
+  80%     16
+  90%     19
+  95%     21
+  98%     24
+  99%     25
+ 100%     32 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.220 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112994000 bytes
+HTML transferred:       112524000 bytes
+Requests per second:    819.68 [#/sec] (mean)
+Time per request:       9.760 [ms] (mean)
+Time per request:       1.220 [ms] (mean, across all concurrent requests)
+Transfer rate:          90447.89 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     6   10   2.4      9      19
+Waiting:        6   10   2.4      9      19
+Total:          6   10   2.4      9      20
+
+Percentage of the requests served within a certain time (ms)
+  50%      9
+  66%     10
+  75%     11
+  80%     12
+  90%     13
+  95%     14
+  98%     16
+  99%     17
+ 100%     20 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.099 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    4548.34 [#/sec] (mean)
+Time per request:       1.759 [ms] (mean)
+Time per request:       0.220 [ms] (mean, across all concurrent requests)
+Transfer rate:          58204.55 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.5      2       5
+Waiting:        1    2   0.5      2       5
+Total:          1    2   0.5      2       5
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      2
+  95%      3
+  98%      3
+  99%      3
+ 100%      5 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.143 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    4373.27 [#/sec] (mean)
+Time per request:       1.829 [ms] (mean)
+Time per request:       0.229 [ms] (mean, across all concurrent requests)
+Transfer rate:          55964.15 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.6      2       5
+Waiting:        1    2   0.6      2       5
+Total:          1    2   0.6      2       5
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      3
+  99%      4
+ 100%      5 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.334 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3748.83 [#/sec] (mean)
+Time per request:       2.134 [ms] (mean)
+Time per request:       0.267 [ms] (mean, across all concurrent requests)
+Transfer rate:          47973.36 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       6
+Processing:     1    2   1.0      2      18
+Waiting:        1    2   1.0      2      18
+Total:          1    2   1.1      2      18
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      3
+  90%      3
+  95%      4
+  98%      5
+  99%      6
+ 100%     18 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.426 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96195000 bytes
+HTML transferred:       95726000 bytes
+Requests per second:    701.16 [#/sec] (mean)
+Time per request:       11.410 [ms] (mean)
+Time per request:       1.426 [ms] (mean, across all concurrent requests)
+Transfer rate:          65867.04 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   11   2.7     11      24
+Waiting:        6   11   2.7     11      24
+Total:          6   11   2.7     11      24
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     12
+  75%     13
+  80%     14
+  90%     15
+  95%     16
+  98%     18
+  99%     19
+ 100%     24 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.331 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96195000 bytes
+HTML transferred:       95726000 bytes
+Requests per second:    751.23 [#/sec] (mean)
+Time per request:       10.649 [ms] (mean)
+Time per request:       1.331 [ms] (mean, across all concurrent requests)
+Transfer rate:          70571.04 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     6   11   2.4     10      20
+Waiting:        6   10   2.4     10      18
+Total:          6   11   2.4     10      20
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     13
+  90%     14
+  95%     15
+  98%     16
+  99%     17
+ 100%     20 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.409 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96195000 bytes
+HTML transferred:       95726000 bytes
+Requests per second:    709.79 [#/sec] (mean)
+Time per request:       11.271 [ms] (mean)
+Time per request:       1.409 [ms] (mean, across all concurrent requests)
+Transfer rate:          66677.52 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     6   11   2.6     11      20
+Waiting:        6   11   2.6     11      20
+Total:          6   11   2.6     11      20
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     12
+  75%     13
+  80%     14
+  90%     15
+  95%     16
+  98%     18
+  99%     19
+ 100%     20 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.448 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    3454.17 [#/sec] (mean)
+Time per request:       2.316 [ms] (mean)
+Time per request:       0.290 [ms] (mean, across all concurrent requests)
+Transfer rate:          40239.02 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     1    2   0.9      2       8
+Waiting:        1    2   0.9      2       8
+Total:          1    2   0.9      2       8
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      4
+  95%      4
+  98%      5
+  99%      5
+ 100%      8 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.188 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4210.50 [#/sec] (mean)
+Time per request:       1.900 [ms] (mean)
+Time per request:       0.238 [ms] (mean, across all concurrent requests)
+Transfer rate:          49049.88 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       2
+Processing:     1    2   0.7      2       6
+Waiting:        1    2   0.7      2       6
+Total:          1    2   0.7      2       6
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%      6 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.203 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4156.36 [#/sec] (mean)
+Time per request:       1.925 [ms] (mean)
+Time per request:       0.241 [ms] (mean, across all concurrent requests)
+Transfer rate:          48419.15 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.8      2       7
+Waiting:        1    2   0.8      2       7
+Total:          1    2   0.8      2       7
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      5
+ 100%      7 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.429 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95339000 bytes
+HTML transferred:       94870000 bytes
+Requests per second:    699.83 [#/sec] (mean)
+Time per request:       11.431 [ms] (mean)
+Time per request:       1.429 [ms] (mean, across all concurrent requests)
+Transfer rate:          65157.47 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       3
+Processing:     6   11   2.7     11      23
+Waiting:        6   11   2.7     11      23
+Total:          6   11   2.7     11      23
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     12
+  75%     13
+  80%     14
+  90%     15
+  95%     16
+  98%     18
+  99%     19
+ 100%     23 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.361 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95339000 bytes
+HTML transferred:       94870000 bytes
+Requests per second:    734.85 [#/sec] (mean)
+Time per request:       10.887 [ms] (mean)
+Time per request:       1.361 [ms] (mean, across all concurrent requests)
+Transfer rate:          68417.43 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     6   11   2.7     10      24
+Waiting:        6   11   2.7     10      24
+Total:          6   11   2.7     10      24
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     12
+  90%     14
+  95%     16
+  98%     18
+  99%     19
+ 100%     24 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.639 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95339000 bytes
+HTML transferred:       94870000 bytes
+Requests per second:    609.97 [#/sec] (mean)
+Time per request:       13.115 [ms] (mean)
+Time per request:       1.639 [ms] (mean, across all concurrent requests)
+Transfer rate:          56791.32 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     7   13   3.5     12      33
+Waiting:        7   13   3.5     12      33
+Total:          7   13   3.5     12      34
+
+Percentage of the requests served within a certain time (ms)
+  50%     12
+  66%     14
+  75%     15
+  80%     15
+  90%     17
+  95%     19
+  98%     21
+  99%     24
+ 100%     34 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.280 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    3906.50 [#/sec] (mean)
+Time per request:       2.048 [ms] (mean)
+Time per request:       0.256 [ms] (mean, across all concurrent requests)
+Transfer rate:          121528.78 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.7      2       6
+Waiting:        1    2   0.7      2       6
+Total:          1    2   0.7      2       6
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      3
+  90%      3
+  95%      3
+  98%      4
+  99%      5
+ 100%      6 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.471 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    3398.36 [#/sec] (mean)
+Time per request:       2.354 [ms] (mean)
+Time per request:       0.294 [ms] (mean, across all concurrent requests)
+Transfer rate:          105720.78 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   1.1      2      10
+Waiting:        1    2   1.0      2      10
+Total:          1    2   1.1      2      11
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      4
+  95%      4
+  98%      5
+  99%      6
+ 100%     11 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.530 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      159280000 bytes
+HTML transferred:       157055000 bytes
+Requests per second:    3268.17 [#/sec] (mean)
+Time per request:       2.448 [ms] (mean)
+Time per request:       0.306 [ms] (mean, across all concurrent requests)
+Transfer rate:          101670.87 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   1.1      2      10
+Waiting:        0    2   1.1      2      10
+Total:          1    2   1.1      2      10
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      3
+  75%      3
+  80%      3
+  90%      4
+  95%      5
+  98%      6
+  99%      7
+ 100%     10 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.218 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112985915 bytes
+HTML transferred:       112515887 bytes
+Requests per second:    820.93 [#/sec] (mean)
+Time per request:       9.745 [ms] (mean)
+Time per request:       1.218 [ms] (mean, across all concurrent requests)
+Transfer rate:          90580.04 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     6   10   2.4      9      27
+Waiting:        5    9   2.4      9      20
+Total:          6   10   2.4      9      27
+
+Percentage of the requests served within a certain time (ms)
+  50%      9
+  66%     10
+  75%     11
+  80%     12
+  90%     13
+  95%     14
+  98%     15
+  99%     16
+ 100%     27 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.494 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112984000 bytes
+HTML transferred:       112514000 bytes
+Requests per second:    669.45 [#/sec] (mean)
+Time per request:       11.950 [ms] (mean)
+Time per request:       1.494 [ms] (mean, across all concurrent requests)
+Transfer rate:          73864.12 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     6   12   5.0     11      47
+Waiting:        6   12   5.0     11      47
+Total:          6   12   5.0     11      48
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     13
+  75%     14
+  80%     14
+  90%     17
+  95%     20
+  98%     25
+  99%     37
+ 100%     48 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.602 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      112984000 bytes
+HTML transferred:       112514000 bytes
+Requests per second:    624.22 [#/sec] (mean)
+Time per request:       12.816 [ms] (mean)
+Time per request:       1.602 [ms] (mean, across all concurrent requests)
+Transfer rate:          68873.61 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     5   13   6.3     11      49
+Waiting:        5   13   6.3     11      49
+Total:          5   13   6.3     11      49
+
+Percentage of the requests served within a certain time (ms)
+  50%     11
+  66%     13
+  75%     15
+  80%     17
+  90%     21
+  95%     26
+  98%     31
+  99%     38
+ 100%     49 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.477 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3385.92 [#/sec] (mean)
+Time per request:       2.363 [ms] (mean)
+Time per request:       0.295 [ms] (mean, across all concurrent requests)
+Transfer rate:          43329.18 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       5
+Processing:     1    2   1.9      2      51
+Waiting:        1    2   1.9      2      51
+Total:          1    2   2.0      2      51
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      3
+  95%      4
+  98%      6
+  99%      9
+ 100%     51 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.256 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3980.68 [#/sec] (mean)
+Time per request:       2.010 [ms] (mean)
+Time per request:       0.251 [ms] (mean, across all concurrent requests)
+Transfer rate:          50940.30 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   1.0      2      13
+Waiting:        0    2   1.0      2      13
+Total:          1    2   1.0      2      13
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      5
+  99%      6
+ 100%     13 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.388 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      65520000 bytes
+HTML transferred:       63295000 bytes
+Requests per second:    3601.79 [#/sec] (mean)
+Time per request:       2.221 [ms] (mean)
+Time per request:       0.278 [ms] (mean, across all concurrent requests)
+Transfer rate:          46091.68 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.9      2       8
+Waiting:        1    2   0.9      2       8
+Total:          1    2   0.9      2       8
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      3
+  80%      3
+  90%      3
+  95%      4
+  98%      5
+  99%      5
+ 100%      8 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.312 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96185000 bytes
+HTML transferred:       95716000 bytes
+Requests per second:    762.30 [#/sec] (mean)
+Time per request:       10.494 [ms] (mean)
+Time per request:       1.312 [ms] (mean, across all concurrent requests)
+Transfer rate:          71603.75 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   10   2.6     10      21
+Waiting:        6   10   2.6     10      21
+Total:          6   10   2.6     10      21
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     13
+  90%     14
+  95%     15
+  98%     17
+  99%     18
+ 100%     21 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.532 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96185000 bytes
+HTML transferred:       95716000 bytes
+Requests per second:    652.75 [#/sec] (mean)
+Time per request:       12.256 [ms] (mean)
+Time per request:       1.532 [ms] (mean, across all concurrent requests)
+Transfer rate:          61313.24 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   12   3.3     12      23
+Waiting:        6   12   3.3     12      23
+Total:          6   12   3.3     12      23
+
+Percentage of the requests served within a certain time (ms)
+  50%     12
+  66%     13
+  75%     14
+  80%     15
+  90%     17
+  95%     18
+  98%     20
+  99%     21
+ 100%     23 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /node/76
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.356 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      96185000 bytes
+HTML transferred:       95716000 bytes
+Requests per second:    737.63 [#/sec] (mean)
+Time per request:       10.846 [ms] (mean)
+Time per request:       1.356 [ms] (mean, across all concurrent requests)
+Transfer rate:          69286.34 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     6   11   3.2     10      28
+Waiting:        6   11   3.2     10      28
+Total:          6   11   3.2     10      28
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     12
+  75%     12
+  80%     13
+  90%     15
+  95%     17
+  98%     19
+  99%     23
+ 100%     28 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.183 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4226.79 [#/sec] (mean)
+Time per request:       1.893 [ms] (mean)
+Time per request:       0.237 [ms] (mean, across all concurrent requests)
+Transfer rate:          49239.66 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.7      2       6
+Waiting:        1    2   0.7      2       6
+Total:          1    2   0.7      2       6
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%      6 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.184 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    4222.84 [#/sec] (mean)
+Time per request:       1.894 [ms] (mean)
+Time per request:       0.237 [ms] (mean, across all concurrent requests)
+Transfer rate:          49193.66 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       1
+Processing:     1    2   0.6      2       6
+Waiting:        0    2   0.6      2       6
+Total:          1    2   0.6      2       6
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      3
+  95%      3
+  98%      4
+  99%      4
+ 100%      6 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.486 seconds
+Complete requests:      5000
+Failed requests:        0
+Total transferred:      59645000 bytes
+HTML transferred:       57420000 bytes
+Requests per second:    3364.31 [#/sec] (mean)
+Time per request:       2.378 [ms] (mean)
+Time per request:       0.297 [ms] (mean, across all concurrent requests)
+Transfer rate:          39192.29 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.2      0       8
+Processing:     1    2   2.9      2      61
+Waiting:        1    2   2.8      2      55
+Total:          1    2   2.9      2      61
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      3
+  90%      3
+  95%      4
+  98%      7
+  99%     13
+ 100%     61 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.404 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95329000 bytes
+HTML transferred:       94860000 bytes
+Requests per second:    712.35 [#/sec] (mean)
+Time per request:       11.230 [ms] (mean)
+Time per request:       1.404 [ms] (mean, across all concurrent requests)
+Transfer rate:          66315.76 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       2
+Processing:     6   11   3.5     10      33
+Waiting:        6   11   3.5     10      33
+Total:          6   11   3.6     10      33
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     12
+  75%     13
+  80%     13
+  90%     15
+  95%     17
+  98%     22
+  99%     25
+ 100%     33 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.310 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95329000 bytes
+HTML transferred:       94860000 bytes
+Requests per second:    763.53 [#/sec] (mean)
+Time per request:       10.478 [ms] (mean)
+Time per request:       1.310 [ms] (mean, across all concurrent requests)
+Transfer rate:          71080.90 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.1      0       1
+Processing:     6   10   2.6     10      25
+Waiting:        5   10   2.6     10      25
+Total:          6   10   2.6     10      25
+
+Percentage of the requests served within a certain time (ms)
+  50%     10
+  66%     11
+  75%     12
+  80%     13
+  90%     14
+  95%     15
+  98%     17
+  99%     18
+ 100%     25 (longest request)
+This is ApacheBench, Version 2.3 <$Revision: 1934973 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking 127.0.0.1 (be patient).....done
+
+
+Server Software:        nginx
+Server Hostname:        127.0.0.1
+Server Port:            8099
+
+Document Path:          /taxonomy/term/3
+Document Length:        Variable
+
+Concurrency Level:      8
+Time taken for tests:   1.217 seconds
+Complete requests:      1000
+Failed requests:        0
+Total transferred:      95329000 bytes
+HTML transferred:       94860000 bytes
+Requests per second:    821.51 [#/sec] (mean)
+Time per request:       9.738 [ms] (mean)
+Time per request:       1.217 [ms] (mean, across all concurrent requests)
+Transfer rate:          76478.54 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     6   10   2.3      9      19
+Waiting:        6   10   2.3      9      19
+Total:          6   10   2.3      9      19
+
+Percentage of the requests served within a certain time (ms)
+  50%      9
+  66%     10
+  75%     11
+  80%     12
+  90%     13
+  95%     14
+  98%     15
+  99%     17
+ 100%     19 (longest request)

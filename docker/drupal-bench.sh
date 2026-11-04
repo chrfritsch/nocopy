@@ -46,6 +46,8 @@ rm -rf $D/web/modules/contrib/nocopy && mkdir -p $D/web/modules/contrib && cp -r
 cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/sites/default/
 $DRUSH en nocopy -y >/dev/null 2>&1
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
+# serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
+echo '<?php apcu_store("probe", new ArrayObject(array_fill(0, 1000, str_repeat("x", 100)))); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
 NIDS=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 25" | tr '\n' ' ')
 NODE=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 1 offset 40")
@@ -66,7 +68,7 @@ fpm_stop() { pkill -QUIT php-fpm; while pgrep php-fpm >/dev/null; do sleep 0.2; 
 login() { curl -s -c /tmp/ck -o /dev/null -L "$($DRUSH uli --uri=$B --no-browser 2>/dev/null)"; SID=$(awk '/SESS/{print $6"="$7}' /tmp/ck); }
 # median of 3 ab runs: req/s p50 p99 failed; ARGS before the URL
 ab3() { n=$1; shift
-  for i in 1 2 3; do ab -q -n "$n" -c "$C" "$@" 2>/dev/null | awk '/Requests per second/{r=$4} /^ +50%/{p=$2} /^ +99%/{q=$2} /Failed requests/{f=$3} /Non-2xx/{x=$3} END{print r, p, q, f+x}'; done | sort -n | sed -n 2p; }
+  for i in 1 2 3; do ab -q -l -n "$n" -c "$C" "$@" 2>/dev/null | tee -a /out/ab-raw.txt | awk '/Requests per second/{r=$4} /^ +50%/{p=$2} /^ +99%/{q=$2} /Failed requests/{f=$3} /Non-2xx/{x=$3} END{print r, p, q, f+x}'; done | sort -n | sed -n 2p; }
 
 for cfg in $CONFIGS; do
   case $cfg in
@@ -101,7 +103,7 @@ nocopy.serializer=igbinary"; SET=all ;;
   cat $out
 
   # editor loop under reader load
-  ab -t "$ET" -n 10000000 -c 4 -C "$SID" "$B/node/$NODE" > /tmp/reader.txt 2>&1 &
+  ab -l -t "$ET" -n 10000000 -c 4 -C "$SID" "$B/node/$NODE" > /tmp/reader.txt 2>&1 &
   ab_pid=$!
   /src/bench/drupal/editor.sh "$B" /tmp/ck /tmp/editor.txt "$NIDS $NIDS" || echo "EDITOR SAVES FAILED ($cfg)"
   wait $ab_pid
@@ -112,6 +114,7 @@ nocopy.serializer=igbinary"; SET=all ;;
   cat /out/editor.tsv.$cfg
 
   used=$(curl -s "$B/nocopy-used.php")
+  printf '%s\t%s\n' "$cfg" "$(curl -s "$B/serializer-probe.php")" >> /out/serializer.tsv.$cfg
   # cold start: 100 sequential logged-in requests to / right after a php-fpm restart
   p50=$(awk -F'\t' '$1=="logged-in" && $2=="/"{print $4}' $out)
   fpm_stop; fpm_start
@@ -126,5 +129,6 @@ cp /src/bench/drupal/settings.stock.php $D/web/sites/default/settings.bench.php
 rm -f /usr/local/etc/php/conf.d/zz-bench.ini
 { printf 'config\tstep\tp50_ms\treader_req_s\n'; cat /out/editor.tsv.* 2>/dev/null; } > /out/editor.tsv
 { printf 'config\tfirst_ms\tsettled_at_request\twarm_p50_ms\tnocopy_used_bytes\n'; cat /out/coldstart.tsv.* 2>/dev/null; } > /out/coldstart.tsv
-rm -f /out/editor.tsv.* /out/coldstart.tsv.*
+{ printf 'config\tprobe_bytes\n'; cat /out/serializer.tsv.* 2>/dev/null; } > /out/serializer.tsv
+rm -f /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.*
 mariadb-admin shutdown

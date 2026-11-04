@@ -42,20 +42,21 @@ Measured on Linux (Docker, arm64, PHP 8.5, release builds; details and method in
 
 Pages that barely touch the cache gain nothing. The gain appears where requests read large cached arrays.
 
-**Drupal 11** (2,000 nodes, php-fpm 8 workers, MariaDB, one server; [module](drupal), [method and raw numbers](bench/results-drupal)):
+**Drupal 11** (2,000 nodes, php-fpm 8 workers, MariaDB, one server; [module](drupal), [raw numbers](bench/results-drupal)).
+Lowest–highest of 3 full runs, config order rotated between runs:
 
 | | stock (DB + APCu) | stock + igbinary | nocopy, all bins |
 |---|---:|---:|---:|
-| anonymous `/` (page cache) | 4,339 req/s | 4,126 req/s | **11,797 req/s** |
-| logged-in node page | 506 req/s | 746 req/s | **1,027 req/s** |
-| logged-in front page | 834 req/s | 596 req/s | **1,179 req/s** |
-| editor: save / edit form / view after save (p50) | 34 / 55 / 47 ms | 33 / 50 / 44 ms | **26 / 37 / 24 ms** |
-| readers served during editing | 468 req/s | 502 req/s | **699 req/s** |
+| anonymous `/` (page cache) | 3,380–4,192 req/s | 3,199–3,782 req/s | **11,716–12,340 req/s** |
+| logged-in node page | 553–751 req/s | 567–742 req/s | **899–1,096 req/s** |
+| logged-in front page | 636–746 req/s | 628–898 req/s | **1,120–1,232 req/s** |
+| editor: save / edit form / view after save (p50) | 34–36 / 55–61 / 45–48 ms | 32–34 / 52–55 / 43–44 ms | **24 / 37–38 / 22–23 ms** |
+| readers served during editing | 413–474 req/s | 462–507 req/s | **677–698 req/s** |
 | database queries per logged-in request | 29–31 | 29–31 | **7** |
 
-Medians of 3 runs. The two stock configs swap places between pages (506 vs 746, 834 vs 596 req/s), so their difference is noise
-in this setup: read them as one baseline. nocopy only as APCu's replacement in front of the database lands in the same range
-(801–875 req/s logged-in): the gain comes from moving all bins and the cache tags off the database. Trade-offs: single server, and Drush does not share php-fpm's cache ([details](drupal#trade-offs)).
+nocopy only as APCu's replacement in front of the database lands in the stock range (659–893 req/s logged-in): the gain comes
+from moving all bins and the cache tags off the database. Trade-offs: single server, and Drush and cron do not share php-fpm's
+cache ([details](drupal#trade-offs)).
 
 ## Features
 
