@@ -59,7 +59,7 @@ static void fail(const char *what, const char *k)
 	fprintf(stderr, "FAIL %s %s\n", what, k);
 }
 
-static bool put(const char *k, uint32_t ver, uint32_t len, time_t ttl)
+static bool put(stash_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t ttl)
 {
 	size_t klen = strlen(k), total = HDR + STASH_ALIGN(klen + 1) + STASH_ALIGN(sizeof(payload) + len);
 	uint64_t h = hash(k, klen);
@@ -69,6 +69,7 @@ static bool put(const char *k, uint32_t ver, uint32_t len, time_t ttl)
 	stash_entry *e = stash_alloc(sh, total, ttl ? now + ttl : 0, now);
 	bool inline_fill = total <= 2048; /* like the extension: big blocks are filled outside the lock */
 	if (e && !inline_fill) {
+		stash_wip(c, e);
 		stash_unlock(sh);
 	}
 	if (e) {
@@ -91,6 +92,9 @@ static bool put(const char *k, uint32_t ver, uint32_t len, time_t ttl)
 		}
 	}
 	bool ok = e && stash_commit(sh, e, false) == PUT_OK;
+	if (e && !inline_fill) {
+		stash_wip(c, NULL);
+	}
 	stash_unlock(sh);
 	return ok;
 }
@@ -132,7 +136,7 @@ static void *worker(void *arg)
 			uint64_t ex = __atomic_load_n(&stash_a->expunges, __ATOMIC_RELAXED);
 			uint32_t len = sizes[rand_r(&seed) % (r < 2 ? 6 : 5)];
 			bool ttl = rand_r(&seed) % 8 == 0;
-			if (put(k, ++ver, len, ttl ? 1 + rand_r(&seed) % 2 : 0)) {
+			if (put(&c, k, ++ver, len, ttl ? 1 + rand_r(&seed) % 2 : 0)) {
 				model[i] = ttl ? -2 : (long) ver; /* -2: may have expired */
 				at[i] = ex;
 			} else {

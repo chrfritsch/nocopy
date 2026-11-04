@@ -28,7 +28,11 @@ Price: an entry must fit in one slice (larger ones are refused), and a shard ful
 
 Locks: test-and-test-and-set, inline fast path (`stash_lock`), slow path `stash_lock_wait` yields after 128 spins. The lock word is the holder's owner id = pid | process start time << 32.
 A waiter that has yielded ~1000 times checks `owner_dead(holder)` (gone, a zombie, or the pid now belongs to a newer process: start time differs; Linux `/proc/<pid>/stat`, macOS `sysctl(KERN_PROC_PID)`)
-and takes the lock over with a CAS (`lock_steals` in `stash_stats()`). Nothing is repaired: publishing is one atomic slot store, so a half-done write leaves at worst an unpublished entry that leaks its segment.
+and takes the lock over with a CAS (`lock_steals` in `stash_stats()`), then runs `shard_repair()`: the slot table is the truth (it only changes by single stores), everything else is rebuilt from it.
+An odd `mseq` (a delete died mid-shift: every miss in the shard would retry forever) is made even and the key it left in two slots loses its second one; each segment's `live` comes from the entries slots reach (an entry unlinked halfway stops counting),
+`pending` from the worker slots' `wip` records (an abandoned allocation stops holding its segment), states from the runs (a run taken or freed halfway, an open segment never installed). O(slots + entries) under the lock, only after a steal.
+A writer that dies filling a big entry outside the lock holds no lock: before unlocking it records the entry in its worker slot (`stash_wip`, `wip` changes only under that entry's shard lock), and the entry is aborted when the slot is claimed again,
+by `apcu_clear_cache`, or when an allocation fails (`wip_reap`, at most once a second per shard). Tests: `tests/c/repair.c` (each half-done state, deterministic), 037 (40 kill -9s of a writer mid inline/big put/delete).
 Robust pthread mutexes would let the kernel report a dead holder, but measured on Linux they are 15% slower uncontended and 2-8x slower with 2-16 contending processes (futex sleeps, also with a trylock spin in front). Not used.
 
 ## Slot tables: fixed, backward-shift deletes
@@ -109,6 +113,7 @@ The callback's run time (ms) is kept in the header's `user` field (the arena cop
 - Key dedupe must stay a function of key contents only (not of pointers or earlier values): relocation re-persists from the arena copy and must reproduce `e->size`.
 - Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
+- `seg_carve()` sets an entry's size before `used` covers it, so `shard_repair` can always walk a segment. Entry sizes are multiples of 8 (slots hold offset/8).
 - The slot table never holds more than `cap` (3/4) entries: probes and backward shifts rely on an empty slot ending every run.
 - Tests that must see pressure use a small `apc.shm_size` (2M-4M, one shard). 015 (16M, 2 shards, 8 processes) and 018 (deletes shifting keys under readers) are the concurrency tests:
   run `docker/stress.sh` after touching locking, reclamation or the slot table; a single pass catches races only sometimes. 018 fails reliably if `stash_find` stops retrying misses.

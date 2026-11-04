@@ -98,8 +98,12 @@ static bool owner_dead(uint64_t id)
 
 /* ---- locks ---- */
 
+static void shard_repair(stash_shard *sh, uint64_t dead);
+static void wip_abort(int slot);
+static void wip_reap(stash_shard *sh);
+
 /* Slow path of stash_lock(): test-and-test-and-set holding the owner id; yields once the wait gets long, and takes the lock over from a dead holder.
- * What the dead holder was in the middle of stays as it was: at worst an unpublished entry leaks its segment.
+ * Whatever that holder was in the middle of is then repaired (shard_repair).
  * Robust pthread mutexes were measured 2-8x slower under contention (futex sleeps); this keeps the spin. */
 void stash_lock_wait(stash_shard *sh)
 {
@@ -117,6 +121,7 @@ void stash_lock_wait(stash_shard *sh)
 			if (!(spins & 1023) && h != stash_self && owner_dead(h)
 			 && __atomic_compare_exchange_n(l, &h, stash_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
 				__atomic_add_fetch(&stash_a->lock_steals, 1, __ATOMIC_RELAXED);
+				shard_repair(sh, h);
 				return;
 			}
 		}
@@ -142,6 +147,7 @@ bool stash_claim(stash_ctx *c)
 			}
 			if (__atomic_compare_exchange_n(&stash_a->workers[i].owner, &o, stash_self, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
 				bits_clear(i);
+				wip_abort(i); /* its previous owner died filling an entry */
 				uint32_t cur = __atomic_load_n(&stash_a->nworkers, __ATOMIC_RELAXED);
 				while (cur < (uint32_t) i + 1
 				 && !__atomic_compare_exchange_n(&stash_a->nworkers, &cur, i + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
@@ -298,14 +304,14 @@ static stash_entry *seg_carve(uint32_t s, size_t total, time_t exp)
 {
 	stash_seg *g = &stash_a->segs[s];
 	stash_entry *e = (stash_entry *) (seg_start(s) + g->used);
+	e->size = total; /* before used covers it: a repair walk must never meet a header without a size */
+	e->live = false;
+	e->hot = 0;
 	g->used += total;
 	g->pending++;
 	if (exp > g->max_exp) {
 		g->max_exp = exp;
 	}
-	e->size = total;
-	e->live = false;
-	e->hot = 0;
 	return e;
 }
 
@@ -643,6 +649,140 @@ static bool merge(stash_shard *sh, bool evict_only)
 	return true;
 }
 
+/* ---- dead writers ---- */
+
+static stash_entry *wip_entry(uint32_t w) { return (stash_entry *) ((char *) stash_a + ((size_t) w << 3)); }
+
+static stash_shard *seg_shard(uint32_t s)
+{
+	for (uint32_t i = 0;; i++) {
+		if (s < stash_a->shards[i].hi) {
+			return &stash_a->shards[i];
+		}
+	}
+}
+
+/* sh locked. Aborts the unfinished entries in sh of writers that died outside the lock. */
+static void wip_reap(stash_shard *sh)
+{
+	uint32_t nw = __atomic_load_n(&stash_a->nworkers, __ATOMIC_ACQUIRE);
+	for (uint32_t i = 0; i < nw; i++) {
+		uint32_t w = __atomic_load_n(&stash_a->workers[i].wip, __ATOMIC_RELAXED);
+		if (!w || seg_shard(stash_seg_of(wip_entry(w))) != sh) {
+			continue;
+		}
+		uint64_t o = __atomic_load_n(&stash_a->workers[i].owner, __ATOMIC_RELAXED);
+		if (o != stash_self && (!o || owner_dead(o))) {
+			__atomic_store_n(&stash_a->workers[i].wip, 0, __ATOMIC_RELAXED);
+			stash_abort(sh, wip_entry(w));
+		}
+	}
+}
+
+/* A worker slot just claimed from a dead owner: abort the entry it was filling. No lock held. */
+static void wip_abort(int slot)
+{
+	uint32_t w = __atomic_load_n(&stash_a->workers[slot].wip, __ATOMIC_RELAXED);
+	if (!w) {
+		return;
+	}
+	stash_shard *sh = seg_shard(stash_seg_of(wip_entry(w)));
+	stash_lock(sh);
+	if (__atomic_load_n(&stash_a->workers[slot].wip, __ATOMIC_RELAXED) == w) { /* not reaped meanwhile */
+		__atomic_store_n(&stash_a->workers[slot].wip, 0, __ATOMIC_RELAXED);
+		stash_abort(sh, wip_entry(w));
+	}
+	stash_unlock(sh);
+}
+
+/* sh's lock was just taken from a dead holder. Rebuilds what it may have left half done from the slot table, which only
+ * ever changes by single stores: duplicate slots and an odd mseq (a delete's shift), segment states (a run taken or freed
+ * halfway, an open segment not yet installed), live/pending counts (an entry allocated, moved or unlinked halfway). */
+static void shard_repair(stash_shard *sh, uint64_t dead)
+{
+	stash_slot *t = tab_of(sh);
+	if (sh->mseq & 1) {
+		__atomic_store_n(&sh->mseq, sh->mseq + 1, __ATOMIC_RELEASE); /* else readers retry every miss forever */
+	}
+	for (uint32_t i = 0; i <= stash_tab_mask; i++) {
+		while (t[i] && slot_of(sh, stash_slot_entry(t[i])) != &t[i]) {
+			slot_remove(sh, &t[i]); /* a key the shift copied back but did not yet clear */
+		}
+	}
+	sh->nlive = 0;
+	for (uint32_t i = 0; i <= stash_tab_mask; i++) {
+		sh->nlive += t[i] != 0;
+	}
+	for (int b = 0; b < STASH_TTL_BUCKETS; b++) {
+		int32_t c = sh->cur[b];
+		if (c >= 0 && ((uint32_t) c < sh->lo || (uint32_t) c >= sh->hi || stash_a->segs[c].state != SEG_OPEN)) {
+			sh->cur[b] = -1;
+		}
+	}
+	sh->nfree = sh->ndead = 0;
+	sh->live_bytes = 0;
+	for (uint32_t s = sh->lo; s < sh->hi;) {
+		stash_seg *g = &stash_a->segs[s];
+		if (g->state == SEG_FREE || g->state == SEG_CONT) { /* CONT outside any run: a run taken or freed halfway */
+			uint32_t gen = g->gen + 1;
+			memset(g, 0, sizeof *g);
+			g->gen = gen;
+			sh->nfree++;
+			s++;
+			continue;
+		}
+		uint32_t k = g->run ? g->run : 1;
+		k = k < sh->hi - s ? k : sh->hi - s;
+		for (uint32_t j = s + 1; j < s + k; j++) {
+			seg_set(j, SEG_CONT);
+		}
+		bool installed = false;
+		for (int b = 0; b < STASH_TTL_BUCKETS; b++) {
+			installed |= sh->cur[b] == (int32_t) s;
+		}
+		if (g->state == SEG_OPEN && !installed) {
+			seg_set(s, SEG_SEALED);
+		}
+		g->pending = 0;
+		if (g->state != SEG_DEAD) {
+			g->live = 0;
+			for (char *p = seg_start(s), *end = p + g->used; p < end;) {
+				stash_entry *e = (stash_entry *) p;
+				if (e->size < sizeof *e) {
+					break;
+				}
+				e->live = slot_of(sh, e) != NULL;
+				g->live += e->live ? e->size : 0;
+				p += e->size;
+			}
+			sh->live_bytes += g->live;
+		}
+		s += k;
+	}
+	uint32_t nw = __atomic_load_n(&stash_a->nworkers, __ATOMIC_ACQUIRE);
+	for (uint32_t i = 0; i < nw; i++) { /* entries being filled outside the lock stay pending */
+		uint32_t w = __atomic_load_n(&stash_a->workers[i].wip, __ATOMIC_RELAXED);
+		if (!w || seg_shard(stash_seg_of(wip_entry(w))) != sh) {
+			continue;
+		}
+		if (__atomic_load_n(&stash_a->workers[i].owner, __ATOMIC_RELAXED) == dead) {
+			__atomic_store_n(&stash_a->workers[i].wip, 0, __ATOMIC_RELAXED); /* the holder itself, between relock and commit */
+		} else {
+			stash_a->segs[stash_seg_of(wip_entry(w))].pending++;
+		}
+	}
+	for (uint32_t s = sh->lo; s < sh->hi; s++) {
+		if (stash_a->segs[s].state == SEG_DEAD) {
+			sh->ndead++;
+		} else {
+			seg_check(sh, s);
+		}
+	}
+	sh->exp_off = 0;
+	sh->exp_idle = 0;
+	reclaim(sh);
+}
+
 /* sh locked. Expire, reclaim, merge until `total` bytes fit, or give up. */
 stash_entry *stash_alloc(stash_shard *sh, size_t total, time_t exp, time_t now)
 {
@@ -656,6 +796,12 @@ stash_entry *stash_alloc(stash_shard *sh, size_t total, time_t exp, time_t now)
 		e = seg_alloc(sh, total, false, exp, now);
 	}
 	while (!e && expire_step(sh, now, 4096)) { /* under pressure: catch up on expiry before copying live data */
+		reclaim(sh);
+		e = seg_alloc(sh, total, false, exp, now);
+	}
+	if (!e && sh->wip_checked != now) {
+		sh->wip_checked = now;
+		wip_reap(sh); /* segments held back by dead writers' unfinished entries */
 		reclaim(sh);
 		e = seg_alloc(sh, total, false, exp, now);
 	}
@@ -743,6 +889,7 @@ void stash_clear(void)
 	}
 	__atomic_add_fetch(&stash_a->expunges, 1, __ATOMIC_RELAXED);
 	for (uint32_t s = 0; s < stash_a->nshards; s++) {
+		wip_reap(&stash_a->shards[s]);
 		reclaim(&stash_a->shards[s]);
 		stash_unlock(&stash_a->shards[s]);
 	}

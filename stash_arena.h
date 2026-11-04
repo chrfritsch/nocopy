@@ -71,6 +71,7 @@ typedef struct {
 	uint64_t evicted, expired; /* entries unlinked by merge while unexpired / by their TTL */
 	uint64_t ghost_hits;        /* new keys that were evicted recently: they start hot */
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4) */
+	time_t wip_checked;  /* last look for dead writers' unfinished entries */
 	stash_lease leases[STASH_LEASES];
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
 } stash_shard;
@@ -79,6 +80,7 @@ typedef struct {
 	uint64_t owner;   /* owner id of the process (thread) holding the slot, 0 free */
 	uint64_t bits[STASH_SEG_WORDS]; /* segments it pins */
 	uint64_t hits, misses;
+	uint32_t wip;     /* offset/8 of the entry it fills outside the shard lock; 0 none. Changes only under that shard's lock */
 } __attribute__((aligned(64))) stash_worker;
 
 typedef struct {
@@ -133,6 +135,8 @@ void stash_lock_wait(stash_shard *sh);
 stash_entry *stash_alloc(stash_shard *sh, size_t total, time_t exp, time_t now);
 stash_put_result stash_commit(stash_shard *sh, stash_entry *e, bool add_only);
 void stash_abort(stash_shard *sh, stash_entry *e);
+/* Before unlocking to fill e outside the lock: record it, so the entry of a writer that dies meanwhile is rolled back. NULL after the commit (locked). */
+static inline void stash_wip(stash_ctx *c, const stash_entry *e);
 stash_entry *stash_lookup(stash_shard *sh, uint64_t h, const char *k, uint32_t klen); /* locked; may be expired */
 bool stash_remove(stash_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
 void stash_clear(void);
@@ -163,6 +167,10 @@ static inline stash_shard *stash_shard_of(uint64_t h)
 	return &stash_a->shards[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask];
 }
 static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
+static inline void stash_wip(stash_ctx *c, const stash_entry *e)
+{
+	__atomic_store_n(&stash_a->workers[c->slot].wip, e ? (uint32_t) (((const char *) e - (const char *) stash_a) >> 3) : 0, __ATOMIC_RELAXED);
+}
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
 static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
 

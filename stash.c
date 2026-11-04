@@ -392,6 +392,9 @@ stash_entry *stash_build(zend_string *key, zval *val, zend_long ttl, bool apcu_s
 	stash_entry *e = stash_alloc(sh, payload, exp, now);
 	*locked = e && payload <= STASH_INLINE_PUT;
 	if (!*locked) {
+		if (e) {
+			stash_wip(&STASH_G(ctx), e); /* filled outside the lock: a death meanwhile is rolled back */
+		}
 		stash_unlock(sh);
 	}
 
@@ -417,6 +420,9 @@ stash_put_result stash_publish(stash_entry *e, bool add_only, bool locked)
 		stash_lock(sh);
 	}
 	stash_put_result r = stash_commit(sh, e, add_only);
+	if (!locked) {
+		stash_wip(&STASH_G(ctx), NULL);
+	}
 	stash_unlock(sh);
 	return r;
 }
