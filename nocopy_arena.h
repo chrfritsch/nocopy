@@ -88,13 +88,18 @@ typedef struct {
 } __attribute__((aligned(64))) nocopy_worker;
 
 typedef struct {
+	uint64_t magic, abi; /* named arenas: magic is stored last, once the rest is set up */
+	uintptr_t base;      /* the address every process maps it at */
 	size_t size, header_size;
+	unsigned seg_shift;
+	uint32_t tab_per;    /* slots per shard */
 	uint32_t nsegs, nshards, nworkers; /* nworkers: high-water mark of claimed slots */
 	time_t start_time;
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
 	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
+	char user[128] __attribute__((aligned(64))); /* the user's process-independent data (nocopy.c: the shared empty array) */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];
@@ -137,9 +142,11 @@ extern uint64_t nocopy_self; /* this process's owner id */
 void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
 
 /* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error;
- * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
+ * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments.
+ * name: a POSIX shm object any process may attach to at the same address (it then keeps the creator's size), or NULL for one shared by forks only.
+ * abi: the user's layout id, attachers must match it. */
 extern const char NOCOPY_TOO_SMALL[];
-const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need);
+const char *nocopy_arena_create(size_t size, uint64_t hint, const char *name, uint64_t abi, size_t *need);
 void nocopy_arena_destroy(void);
 
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */

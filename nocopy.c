@@ -30,6 +30,7 @@ ZEND_DECLARE_MODULE_GLOBALS(nocopy)
 static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long nocopy_ini_ttl;
+static char *shm_name; /* nocopy.shm_name: attachable by any process, not only forks */
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
 bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
@@ -166,6 +167,21 @@ typedef struct {
 	nocopy_keys keys;
 } persist;
 
+/* The empty array every entry points to: in the arena, so it has the same address in every process that maps it (unlike zend_empty_array). */
+#define ARENA_EMPTY ((zend_array *) nocopy_a->user)
+
+/* Idempotent: every process writes the same bytes. */
+static void arena_empty_init(void)
+{
+	zend_array *a = ARENA_EMPTY;
+	uint32_t *hash = (uint32_t *) (a + 1);
+	ZEND_ASSERT(sizeof(zend_array) + 2 * sizeof(uint32_t) <= sizeof(nocopy_a->user));
+	memcpy(a, &zend_empty_array, sizeof(zend_array));
+	a->pDestructor = NULL;
+	hash[0] = hash[1] = HT_INVALID_IDX;
+	HT_SET_DATA_ADDR(a, hash);
+}
+
 static void *take(persist *p, size_t n)
 {
 	void *r = p->cursor;
@@ -189,10 +205,11 @@ static void persist_zval(persist *p, zval *z);
 static zend_array *persist_array(persist *p, const zend_array *src)
 {
 	if (zend_hash_num_elements(src) == 0) {
-		return (zend_array *) &zend_empty_array;
+		return ARENA_EMPTY;
 	}
 	zend_array *ht = take(p, sizeof(zend_array));
 	memcpy(ht, src, sizeof(zend_array));
+	ht->pDestructor = NULL; /* a function address: differs between processes; immutable arrays are never destroyed */
 
 	size_t size = HT_IS_PACKED(src) ? HT_PACKED_USED_SIZE(src) : HT_USED_SIZE(src);
 	void *data = take(p, size);
@@ -283,7 +300,7 @@ typedef struct {
 
 static zend_always_inline void *moved(const rebase *r, void *p)
 {
-	return (uintptr_t) p - r->from < r->size ? (char *) p + r->by : p; /* zend_empty_array stays */
+	return (uintptr_t) p - r->from < r->size ? (char *) p + r->by : p; /* ARENA_EMPTY stays */
 }
 
 static void rebase_zval(const rebase *r, zval *z)
@@ -295,7 +312,7 @@ static void rebase_zval(const rebase *r, zval *z)
 			break;
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(z) = moved(r, Z_ARR_P(z));
-			if (a == &zend_empty_array) {
+			if (a == ARENA_EMPTY) {
 				break;
 			}
 			a->arData = moved(r, a->arData);
@@ -1366,6 +1383,12 @@ static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 
 /* ---- module ---- */
 
+static ZEND_INI_MH(OnShmName)
+{
+	shm_name = ZSTR_LEN(new_value) ? ZSTR_VAL(new_value) : NULL;
+	return SUCCESS;
+}
+
 static ZEND_INI_MH(OnBool)
 {
 	bool v = zend_ini_parse_bool(new_value);
@@ -1432,6 +1455,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
 	PHP_INI_ENTRY("nocopy.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
+	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
 	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, nocopy_vk_on_prefix)
 	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, nocopy_vk_on_timeout)
@@ -1570,7 +1594,22 @@ PHP_MINIT_FUNCTION(nocopy)
 	nocopy_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
 	size_t need;
-	const char *err = nocopy_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0, &need);
+	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
+	const char *err = NULL;
+	if (shm_name && nocopy_apc_on) {
+		/* the name carries the layout id, so another build never attaches */
+		uint64_t abi = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION ZEND_TOSTR(PHP_VERSION_ID) ZEND_TOSTR(ZEND_DEBUG)))
+			^ (sizeof(zend_array) << 8 ^ sizeof(Bucket) << 16 ^ sizeof(zend_string) << 24 ^ (uint64_t) sizeof(nocopy_arena) << 32);
+		char name[64];
+		snprintf(name, sizeof name, "%s.%08x", shm_name, (uint32_t) (abi ^ abi >> 32));
+		err = nocopy_arena_create(arena_size, hint, name, abi, &need);
+		if (err && err != NOCOPY_TOO_SMALL) {
+			php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s %s: %s, using a cache of this process's own", "nocopy.shm_name", name, err);
+			err = nocopy_arena_create(arena_size, hint, NULL, 0, &need);
+		}
+	} else {
+		err = nocopy_arena_create(arena_size, hint, NULL, 0, &need);
+	}
 	const char *p = apcu_compat ? "apc" : "nocopy";
 	if (err == NOCOPY_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
 		zend_error(E_CORE_ERROR, "Unable to allocate %zu bytes of shared memory for cache structures. Either %s.shm_size is too small or %s.entries_hint too large", need, p, p);
@@ -1580,6 +1619,7 @@ PHP_MINIT_FUNCTION(nocopy)
 		zend_error(E_CORE_ERROR, "nocopy: unable to create the %zu byte cache: %s", arena_size, err);
 		return FAILURE;
 	}
+	arena_empty_init();
 	pthread_atfork(NULL, NULL, atfork_child);
 
 	zend_function *hr = zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("frankenphp_handle_request"));

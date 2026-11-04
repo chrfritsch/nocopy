@@ -4,6 +4,10 @@
 #include <sched.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #ifndef MAP_ANONYMOUS
 # define MAP_ANONYMOUS MAP_ANON
@@ -759,7 +763,127 @@ uint32_t nocopy_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max
 
 const char NOCOPY_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
 
-const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need)
+/* Process-local copies of the layout, from the header. */
+static void adopt(nocopy_arena *p)
+{
+	nocopy_a = p;
+	nocopy_seg_shift = p->seg_shift;
+	nocopy_seg_size = (size_t) 1 << p->seg_shift;
+	nocopy_seg_base = (char *) p + p->header_size;
+	nocopy_shard_mask = p->nshards - 1;
+	nocopy_tab_mask = p->tab_per - 1;
+	for (uint32_t s = 0; s < p->nshards; s++) {
+		nocopy_tabs[s] = (nocopy_slot *) (p->tables + (size_t) s * p->tab_per * sizeof(nocopy_slot));
+		nocopy_ghosts[s] = (uint32_t *) (p->tables + (size_t) p->nshards * p->tab_per * sizeof(nocopy_slot)) + (size_t) s * p->tab_per;
+	}
+	nocopy_self = nocopy_owner_self();
+}
+
+/* p is zero-filled. */
+static void init(nocopy_arena *p, size_t size, size_t header, unsigned shift, uint32_t nshards, uint32_t per)
+{
+	p->base = (uintptr_t) p;
+	p->size = size;
+	p->header_size = header;
+	p->seg_shift = shift;
+	p->tab_per = per;
+	p->nsegs = (uint32_t) ((size - header) >> shift);
+	p->nsegs -= p->nsegs % nshards; /* equal slices */
+	p->nshards = nshards;
+	uint32_t slice = p->nsegs / nshards;
+	for (uint32_t s = 0; s < nshards; s++) {
+		nocopy_shard *sh = &p->shards[s];
+		sh->idx = s;
+		sh->lo = s * slice;
+		sh->hi = sh->lo + slice;
+		sh->nfree = slice;
+		sh->exp_next = sh->lo;
+		sh->cap = per / 4 * 3;
+		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+			sh->cur[b] = -1;
+		}
+	}
+	p->start_time = time(NULL);
+}
+
+#define NOCOPY_MAGIC 0x6e6f636f70790001ULL
+
+/* fd mapped exactly at base, or NULL. */
+static void *map_at(int fd, size_t size, uintptr_t base)
+{
+	int flags = MAP_SHARED;
+#ifdef MAP_FIXED_NOREPLACE
+	flags |= MAP_FIXED_NOREPLACE; /* older kernels treat it as a hint: checked below */
+#endif
+	void *p = mmap((void *) base, size, PROT_READ | PROT_WRITE, flags, fd, 0);
+	if (p == MAP_FAILED) {
+		return NULL;
+	}
+	if ((uintptr_t) p != base) {
+		munmap(p, size);
+		return NULL;
+	}
+	return p;
+}
+
+/* Far from PIE binaries, heaps, mmap bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
+static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL};
+
+static const char *create_named(const char *name, size_t size, size_t header, unsigned shift, uint32_t nshards, uint32_t per, uint64_t abi)
+{
+	int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+	if (fd >= 0) {
+		void *p = NULL;
+		if (ftruncate(fd, (off_t) size) == 0) {
+			for (size_t i = 0; !p && i < sizeof bases / sizeof bases[0]; i++) {
+				p = map_at(fd, size, bases[i]);
+			}
+		}
+		close(fd);
+		if (!p) {
+			shm_unlink(name);
+			return "no free address for a named cache";
+		}
+		init(p, size, header, shift, nshards, per);
+		((nocopy_arena *) p)->abi = abi;
+		__atomic_store_n(&((nocopy_arena *) p)->magic, NOCOPY_MAGIC, __ATOMIC_RELEASE);
+		adopt(p);
+		return NULL;
+	}
+	if (errno != EEXIST || (fd = shm_open(name, O_RDWR, 0)) < 0) {
+		return errno == EACCES ? "no permission to open the named cache" : "shm_open failed";
+	}
+	/* wait for its creator to publish the header */
+	uint64_t magic = 0, habi = 0;
+	uintptr_t base = 0;
+	size_t hsize = 0;
+	for (int i = 0; i < 2000 && magic != NOCOPY_MAGIC; i++) {
+		struct stat st;
+		if (fstat(fd, &st) == 0 && (size_t) st.st_size >= sizeof(nocopy_arena)) {
+			nocopy_arena *q = mmap(NULL, sizeof(nocopy_arena), PROT_READ, MAP_SHARED, fd, 0);
+			if (q != MAP_FAILED) {
+				magic = __atomic_load_n(&q->magic, __ATOMIC_ACQUIRE);
+				habi = q->abi;
+				base = q->base;
+				hsize = q->size;
+				munmap(q, sizeof(nocopy_arena));
+			}
+		}
+		if (magic != NOCOPY_MAGIC) {
+			usleep(1000);
+		}
+	}
+	void *p = magic != NOCOPY_MAGIC || habi != abi ? NULL : map_at(fd, hsize, base);
+	close(fd);
+	if (!p) {
+		return magic != NOCOPY_MAGIC ? "named cache never initialized (remove it from /dev/shm)"
+			: habi != abi ? "named cache belongs to another build" : "the named cache's address is taken in this process";
+	}
+	adopt(p);
+	return NULL;
+}
+
+const char *nocopy_arena_create(size_t size, uint64_t hint, const char *name, uint64_t abi, size_t *need)
 {
 	/* shards only where each slice stays >= 8 MB (an entry must fit in one) and holds >= 16 segments */
 	unsigned shift = 16;
@@ -784,38 +908,15 @@ const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need)
 	if (size > ((size_t) 32 << 30)) {
 		return "larger than 32G";
 	}
+	if (name) {
+		return create_named(name, size, header, shift, nshards, (uint32_t) per, abi);
+	}
 	void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	if (p == MAP_FAILED) {
 		return "mmap failed";
 	}
-	nocopy_a = p; /* zero-filled by the kernel */
-	nocopy_a->size = size;
-	nocopy_a->header_size = header;
-	nocopy_seg_shift = shift;
-	nocopy_seg_size = (size_t) 1 << shift;
-	nocopy_seg_base = (char *) nocopy_a + header;
-	nocopy_a->nsegs = (uint32_t) ((size - header) >> shift);
-	nocopy_a->nsegs -= nocopy_a->nsegs % nshards; /* equal slices */
-	nocopy_a->nshards = nshards;
-	nocopy_shard_mask = nshards - 1;
-	nocopy_tab_mask = (uint32_t) per - 1;
-	uint32_t slice = nocopy_a->nsegs / nshards;
-	for (uint32_t s = 0; s < nshards; s++) {
-		nocopy_shard *sh = &nocopy_a->shards[s];
-		nocopy_tabs[s] = (nocopy_slot *) (nocopy_a->tables + (size_t) s * per * sizeof(nocopy_slot));
-		nocopy_ghosts[s] = (uint32_t *) (nocopy_a->tables + (size_t) nshards * per * sizeof(nocopy_slot)) + (size_t) s * per;
-		sh->idx = s;
-		sh->lo = s * slice;
-		sh->hi = sh->lo + slice;
-		sh->nfree = slice;
-		sh->exp_next = sh->lo;
-		sh->cap = (uint32_t) (per / 4 * 3);
-		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-			sh->cur[b] = -1;
-		}
-	}
-	nocopy_a->start_time = time(NULL);
-	nocopy_self = nocopy_owner_self();
+	init(p, size, header, shift, nshards, (uint32_t) per); /* zero-filled by the kernel */
+	adopt(p);
 	return NULL;
 }
 

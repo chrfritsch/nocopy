@@ -183,7 +183,7 @@ int main(int argc, char **argv)
 			b[i] ^= 1;
 		}
 	}
-	const char *err = nocopy_arena_create(mb << 20, 0, &(size_t){0});
+	const char *err = nocopy_arena_create(mb << 20, 0, NULL, 0, &(size_t){0});
 	if (err) {
 		fprintf(stderr, "%s\n", err);
 		return 2;

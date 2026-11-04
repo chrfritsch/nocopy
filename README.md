@@ -165,6 +165,7 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | Setting | Default | Meaning |
 |---|---|---|
 | `nocopy.shm_size` | `32M` | Arena size. Alias: `apc.shm_size` |
+| `nocopy.shm_name` | (off) | Name of a POSIX shared-memory object, e.g. `/nocopy`: the CLI (Drush, cron), other fpm pools and restarted servers attach to the same cache ([below](#shared-by-name)). Off: shared by php-fpm's or the server's own workers only, gone when it stops |
 | `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias: `apc.ttl` |
 | `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias: `apc.entries_hint` |
 | `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
@@ -178,6 +179,21 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 
 If both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
 FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_request()`, whatever `request_scope` says.
+
+### Shared by name
+
+By default the cache is created when the server starts and shared only by its own workers: the CLI gets a private one,
+and a restart or `reload` starts cold. With `nocopy.shm_name=/nocopy` the first process creates `/dev/shm/nocopy.<build id>`
+and every later one attaches to it at the same address, so a CLI script and php-fpm (or FrankenPHP) share one cache, both ways, and it survives restarts.
+Readers attached this way still get zero-copy values (fpm, FrankenPHP classic mode); the CLI uses copy mode as before.
+
+- The CLI attaches only with `apc.enable_cli=1`; otherwise it keeps a private cache.
+- Created with mode `0600`: every process must run as the user that created it, typically the one that starts php-fpm (root, whose workers inherit the mapping).
+  A process that cannot open it logs a startup warning and uses a private cache. Anyone who can write it controls what fpm reads: do not widen the mode.
+- All processes must share one PID namespace (a dead lock holder is detected by its pid): not across containers.
+- The size is the creator's; `nocopy.shm_size` of later processes is ignored. The name carries a build id: another PHP or nocopy build creates its own,
+  and the old one stays in `/dev/shm` until reboot or `rm /dev/shm/nocopy.*`. `apcu_clear_cache()` empties it.
+- Linux only so far (`docker/shm-name.sh`).
 
 ### Valkey
 

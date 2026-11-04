@@ -7,6 +7,10 @@ Layers, each using only the one below it:
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
 Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so forked workers share it at the same address (pointers are valid everywhere); threads (ZTS) share it anyway.
+With `nocopy.shm_name` it is a POSIX shm object (`name.<abi>`, mode 0600) that unrelated processes attach to: the creator (`O_EXCL`) maps it at the first free address of `bases[]`
+(0x2000'0000'0000, else 0x10'0000'0000; `MAP_FIXED_NOREPLACE`), fills the header and stores `magic` last (release); an attacher maps the header anywhere, waits up to 2 s for `magic`,
+checks `abi` (PHP version, debug, struct sizes, nocopy version; also in the name), and maps the whole at `base` or fails (MINIT then warns and uses an anonymous arena).
+`adopt()` derives the process-local copies (`nocopy_tabs`, masks, shift) from the header in both cases.
 
 ## Layout
 
@@ -63,7 +67,7 @@ Ghost (S3-FIFO): per shard, one 32-bit tag per slot (in the header after the slo
 a new key whose tag is there starts at `hot = 2` (survives two merges unread; `ghost_hits`). Keys used once never come back, so only recurring keys whose reuse distance exceeds the cache get the extension.
 `hot` is a byte in the entry header, a Morris-style read counter (0-15): the first read sets 1, later reads add 1 with probability 1/2^hot (per-worker xorshift), so a hot key writes its cache line ~log2(reads) times between merges and it stays shared otherwise (exact per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.
-Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy.c walks the value and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `zend_empty_array` stays.
+Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy.c walks the value and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` stays.
 Value strings get `h = 0` (a reader may have been hashing the old copy during the memcpy). Nothing is re-persisted, so the moved block has the old size by construction.
 
 ## Reads (lock-free) and pins
@@ -130,7 +134,7 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 - Never dereference an entry before `nocopy_hold` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `relocate()` relies on it.
 - Key dedupe must stay a function of key contents only: sizing and persisting must agree on `e->size` (`ZEND_ASSERT` at the end of `persist_entry`).
-- Every pointer inside a block points into the same block or outside the arena (`zend_empty_array`): `nocopy_rebase` relies on it.
+- Every pointer inside a block points into the same block or to the arena's empty array (`ARENA_EMPTY`, in the header's `user` area): `nocopy_rebase` relies on it. Never to anything of the process (`zend_empty_array`, interned strings, function pointers: `pDestructor` is NULL): another process maps the arena at the same address but its own binary elsewhere (test 057 segfaults with `zend_empty_array`).
 - Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
 - `seg_carve()` sets an entry's size before `used` covers it, so `shard_repair` can always walk a segment. Entry sizes are multiples of 8 (slots hold offset/8).

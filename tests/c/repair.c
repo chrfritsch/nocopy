@@ -67,7 +67,7 @@ static bool found(nocopy_ctx *c, const char *k)
 
 int main(void)
 {
-	assert(!nocopy_arena_create(4 << 20, N, &(size_t){0}));
+	assert(!nocopy_arena_create(4 << 20, N, NULL, 0, &(size_t){0}));
 	nocopy_ctx c = {.slot = -1};
 	assert(nocopy_claim(&c));
 	nocopy_shard *sh = &nocopy_a->shards[0];

@@ -16,6 +16,8 @@ jobs:
       - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30
       # the arena alone, from threads: plain and ThreadSanitizer
       - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/tests/c/run.sh 5
+      # nocopy.shm_name: CLI and php-fpm share one cache
+      - run: docker run --rm -v "$PWD":/src:ro nocopy-linux sh /src/docker/shm-name.sh
   zts:
     strategy:
       fail-fast: false
@@ -27,6 +29,7 @@ jobs:
       - run: docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t nocopy-zts docker
       - run: docker run --rm -v "$PWD":/src:ro nocopy-zts /src/docker/test.sh
       - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
+      - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh
   symfony:
     strategy:
       fail-fast: false

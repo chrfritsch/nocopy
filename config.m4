@@ -101,6 +101,9 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
   AC_DEFINE([HAVE_NOCOPY], [1],
     [Define to 1 if the PHP extension 'nocopy' is available.])
 
+  dnl shm_open: libc from glibc 2.34, librt before
+  PHP_CHECK_FUNC(shm_open, rt)
+
   dnl Configure extension sources and compilation flags.
   PHP_NEW_EXTENSION([nocopy],
     [nocopy.c nocopy_apcu.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c nocopy_valkey.c],
