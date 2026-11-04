@@ -94,3 +94,7 @@ What reports or depends on APCu's memory layout and bookkeeping differs, by desi
 ## Known gaps
 
 ZTS is tested with `parallel` and FrankenPHP only (not mod_php with a threaded MPM).
+
+## License
+
+MIT, see `LICENSE`.

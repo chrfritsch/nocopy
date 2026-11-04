@@ -1,7 +1,7 @@
 {
     "name": "lab/nocopy-bundle",
     "type": "symfony-bundle",
-    "license": "proprietary",
+    "license": "MIT",
     "description": "Symfony cache adapter for the nocopy extension: cache.adapter.nocopy, zero-copy fetches",
     "require": {
         "php": ">=8.3",

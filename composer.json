@@ -1,7 +1,7 @@
 {
     "name": "lab/nocopy",
     "type": "php-ext",
-    "license": "proprietary",
+    "license": "MIT",
     "description": "Zero-copy shared-memory cache for PHP, drop-in for APCu (apcu_* API, APCUIterator, apc.* INI)",
     "require": {
         "php": ">=8.3"
