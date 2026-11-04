@@ -23,7 +23,7 @@ typedef struct stash_entry {
 	uint64_t h;       /* key hash */
 	size_t size;      /* whole block */
 	time_t expires;   /* last second it is alive; 0: never */
-	uint64_t seq;     /* insertion order, for iterators */
+	uint64_t seq;     /* insertion time, ns; strictly increasing per shard: iterator order without a shared counter */
 	uint32_t created; /* unix time: 32 bits keep the header at 48 bytes (good until 2106) */
 	uint32_t klen;
 	uint8_t koff;     /* key bytes at (char *) e + koff */
@@ -50,7 +50,7 @@ typedef struct {
 	size_t used;      /* bytes appended */
 	size_t live;      /* bytes of live entries */
 	time_t max_exp;   /* latest expiry of its entries; 0 in the ttl=0 bucket (never) */
-	uint64_t born;    /* inserts counter when taken: merge order */
+	uint64_t born;    /* its shard's last seq when taken: merge order */
 } stash_seg;
 
 /* Who computes a key hash right now (single-flight); free when owner is 0 or until has passed. */
@@ -65,6 +65,8 @@ typedef struct {
 	uint64_t lock __attribute__((aligned(64))); /* holder's owner id; alone on its line */
 	int32_t cur[STASH_TTL_BUCKETS] __attribute__((aligned(64))); /* open segment per TTL bucket, or -1 */
 	uint32_t lo, hi, nfree, ndead;
+	uint32_t idx;       /* own index: sh - shards would divide by sizeof(stash_shard) */
+	uint64_t last_seq, inserts; /* a global atomic counter here cost 9x at 8 parallel writers */
 	bool hint;          /* a segment died: worth a reclaim pass */
 	time_t exp_idle;    /* second in which a full expiry pass found nothing */
 	uint32_t exp_next, exp_gen; /* expiry cursor: segment, its gen, and offset of the next entry */
@@ -92,7 +94,6 @@ typedef struct {
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
-	uint64_t inserts __attribute__((aligned(64))); /* atomic */
 	stash_shard shards[STASH_MAX_SHARDS];
 	stash_worker workers[STASH_MAX_WORKERS];
 	stash_seg segs[STASH_MAX_SEGS];

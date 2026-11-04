@@ -136,7 +136,7 @@ static uint32_t pick_oldest(const stash_shard *sh, uint32_t *v, bool *spared)
 	uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 	if (e->live && f) {
 		__atomic_store_n(&e->hot, f >> 1, __ATOMIC_RELAXED);
-		stash_a->segs[run].born = __atomic_load_n(&stash_a->inserts, __ATOMIC_RELAXED);
+		stash_a->segs[run].born = sh->last_seq;
 		*spared = true;
 		return 0;
 	}

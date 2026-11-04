@@ -195,7 +195,8 @@ static void reclaim(stash_shard *sh)
 	}
 }
 
-void stash_entry_die(stash_shard *sh, stash_entry *e)
+/* Inline here (the write path), exported for stash_evict.c. */
+static inline __attribute__((always_inline)) void entry_die(stash_shard *sh, stash_entry *e)
 {
 	uint32_t s = stash_seg_of(e);
 	e->live = false;
@@ -204,7 +205,7 @@ void stash_entry_die(stash_shard *sh, stash_entry *e)
 	seg_check(sh, s);
 }
 
-void stash_entry_birth(stash_shard *sh, stash_entry *e)
+static inline __attribute__((always_inline)) void entry_birth(stash_shard *sh, stash_entry *e)
 {
 	uint32_t s = stash_seg_of(e);
 	e->live = true;
@@ -212,6 +213,9 @@ void stash_entry_birth(stash_shard *sh, stash_entry *e)
 	stash_a->segs[s].live += e->size;
 	sh->live_bytes += e->size;
 }
+
+void stash_entry_die(stash_shard *sh, stash_entry *e) { entry_die(sh, e); }
+void stash_entry_birth(stash_shard *sh, stash_entry *e) { entry_birth(sh, e); }
 
 void stash_abort(stash_shard *sh, stash_entry *e)
 {
@@ -229,7 +233,7 @@ int stash_ttl_bucket(time_t ttl)
 	return b;
 }
 
-static stash_entry *seg_carve(uint32_t s, size_t total, time_t exp)
+static inline __attribute__((always_inline)) stash_entry *seg_carve(uint32_t s, size_t total, time_t exp)
 {
 	stash_seg *g = &stash_a->segs[s];
 	stash_entry *e = (stash_entry *) (seg_start(s) + g->used);
@@ -258,7 +262,7 @@ static uint32_t take_run(stash_shard *sh, uint32_t k, uint32_t spare, uint8_t st
 				seg_set(j, SEG_CONT);
 			}
 			stash_a->segs[got].run = k;
-			stash_a->segs[got].born = __atomic_load_n(&stash_a->inserts, __ATOMIC_RELAXED);
+			stash_a->segs[got].born = sh->last_seq;
 			seg_set(got, state);
 			sh->nfree -= k;
 			return got;
@@ -293,7 +297,7 @@ stash_entry *stash_seg_alloc(stash_shard *sh, size_t total, bool reserve, int b,
 
 /* ---- slot table (shard locked) ---- */
 
-static stash_slot *locate(stash_shard *sh, uint64_t h, const char *k, uint32_t klen, stash_entry **found)
+static inline __attribute__((always_inline)) stash_slot *locate(stash_shard *sh, uint64_t h, const char *k, uint32_t klen, stash_entry **found)
 {
 	stash_slot *t = tab_of(sh);
 	uint32_t tag = (uint32_t) h;
@@ -565,12 +569,13 @@ stash_put_result stash_commit(stash_shard *sh, stash_entry *e, bool add_only)
 		e->hot = 2; /* came back after an eviction: survives two merges without a read */
 		sh->ghost_hits++;
 	}
-	e->seq = __atomic_add_fetch(&stash_a->inserts, 1, __ATOMIC_RELAXED);
+	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + 1;
+	sh->inserts++;
 	sh->nlive += !old;
-	stash_entry_birth(sh, e);
+	entry_birth(sh, e);
 	__atomic_store_n(sp, slot_make(e), __ATOMIC_RELEASE);
 	if (old) {
-		stash_entry_die(sh, old);
+		entry_die(sh, old);
 	}
 	if (sh->hint) {
 		reclaim(sh);
@@ -585,7 +590,9 @@ stash_entry *stash_put_begin(stash_put *p, stash_ctx *c, uint64_t h, uint32_t kl
 	}
 	stash_shard *sh = stash_shard_of(h);
 	stash_lock(sh);
-	time_t now = time(NULL), exp = ttl ? now + ttl : 0; /* inside the lock: measured faster under write contention than before it */
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts); /* inside the lock: measured faster under write contention than before it */
+	time_t now = ts.tv_sec, exp = ttl ? now + ttl : 0;
 	stash_entry *e = stash_alloc(sh, size, exp, now);
 	if (!e) {
 		stash_unlock(sh);
@@ -598,6 +605,7 @@ stash_entry *stash_put_begin(stash_put *p, stash_ctx *c, uint64_t h, uint32_t kl
 	e->created = (uint32_t) now;
 	e->flags = 0;
 	e->user = 0;
+	e->seq = (uint64_t) ts.tv_sec * 1000000000u + (uint64_t) ts.tv_nsec; /* commit makes it unique */
 	*p = (stash_put) {.c = c, .sh = sh, .e = e, .locked = size <= STASH_INLINE_PUT};
 	if (!p->locked) {
 		wip_set(c, e);
@@ -719,7 +727,9 @@ void stash_stats(stash_stats_t *st)
 	}
 	st->segments = stash_a->nsegs;
 	st->segment_size = stash_seg_size;
-	st->inserts = __atomic_load_n(&stash_a->inserts, __ATOMIC_RELAXED);
+	for (uint32_t i = 0; i < stash_a->nshards; i++) {
+		st->inserts += stash_a->shards[i].inserts; /* racy read, like the other counters */
+	}
 	st->start_time = stash_a->start_time;
 	st->shards = stash_a->nshards;
 	st->slots = (uint64_t) stash_a->nshards * (stash_tab_mask + 1);
@@ -794,6 +804,7 @@ const char *stash_arena_create(size_t size, uint64_t hint, size_t *need)
 		stash_shard *sh = &stash_a->shards[s];
 		stash_tabs[s] = (stash_slot *) (stash_a->tables + (size_t) s * per * sizeof(stash_slot));
 		stash_ghosts[s] = (uint32_t *) (stash_a->tables + (size_t) nshards * per * sizeof(stash_slot)) + (size_t) s * per;
+		sh->idx = s;
 		sh->lo = s * slice;
 		sh->hi = sh->lo + slice;
 		sh->nfree = slice;

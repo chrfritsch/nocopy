@@ -10,13 +10,13 @@ extern uint32_t *stash_ghosts[STASH_MAX_SHARDS]; /* per shard, as many as slots:
 
 static inline char *seg_start(uint32_t s) { return stash_seg_base + ((size_t) s << stash_seg_shift); }
 static inline stash_slot slot_make(const stash_entry *e) { return (e->h << 32) | (uint32_t) (((const char *) e - (const char *) stash_a) >> 3); }
-static inline stash_slot *tab_of(const stash_shard *sh) { return stash_tabs[sh - stash_a->shards]; }
+static inline stash_slot *tab_of(const stash_shard *sh) { return stash_tabs[sh->idx]; }
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
  * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */
 static inline uint32_t *ghost_cell(const stash_shard *sh, uint64_t h)
 {
-	return &stash_ghosts[sh - stash_a->shards][(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & stash_tab_mask];
+	return &stash_ghosts[sh->idx][(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & stash_tab_mask];
 }
 static inline uint32_t ghost_tag(uint64_t h) { return (uint32_t) h | 1; }
 
