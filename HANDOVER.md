@@ -32,6 +32,10 @@ Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the
   Measured, one shard 4M, `app.Kq2x:product.N` (old -> new ns): at 73% fill hit 28.8 -> 17.8, miss 58.3 -> 15.2, delete+put 107 -> 29; at 25-49% delete+put 30-34 -> 23-25, miss at 49% 11.0 -> 14.3.
   `ab.sh 3 "read write"`: most ops -1..3% (~0.25 ns); `fetch int, 100k distinct keys` 22.1 -> 26.8 (-17.5%), shuffled 54 -> 57.5: raw DJB packed `d0..d99999` into ~800 KB of slot lines, mixed they spread over ~6.4 MB. Kept: sparse tables pay a little, full ones lose their long runs under the lock.
   Test 018 lost its strength with it (no-retry mutation passed 6/6: short runs, tiny race window); it now picks keys homed in the table's first half (a PHP mirror of `stash_slot_tag`) and fails 6/6 with the mutation (old test: 3/4).
+- Kept copies in copy mode (`stash.local_size`, 8M, 2026-11-04; ARCHITECTURE "Fetch modes"): FrankenPHP workers and CLI scripts are one long request, so a private copy can be handed out again while its entry is unchanged (address + seq).
+  `ab.sh 3 read` vs e6c6f6d, copy mode: fetch string 10KB 182 -> 12.8 ns, array 10 rows 682 -> 12.8, 1k rows 68 us -> 12.8 ns, 10k rows 711 us -> 12.8 ns, 10k rows + modify 1 (COW) 707 -> 57 us; zero-copy unchanged.
+  Costs: fetch int -2%, string 100B -4.5% (0.8 ns; short strings are not kept), `fetch 10 keys` -3.5%. First version kept every copy: 100k distinct strings 37 -> 64 ns, 20k distinct 10-row arrays 360 -> 590 (freeing cold evictees);
+  now a copy is kept on its second fetch (`seen`, TinyLFU's doorkeeper) and strings only from 512 B: 37.5 -> 36.3 / 375 -> 387 ns (best of 5, load 3-5: noise). Test 041; 015 caught a double free (slot released, then flushed again).
 - Gotcha: a container started right after a host-side file write sometimes saw `stash.c` truncated ("expected declaration at end of input"): rerun.
 
 ### Rebuild of the core (2026-11-03, second half of the day)

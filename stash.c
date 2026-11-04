@@ -23,7 +23,7 @@
 
 ZEND_DECLARE_MODULE_GLOBALS(stash)
 
-static size_t arena_size = 32 * 1024 * 1024;
+static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long stash_ini_ttl;
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
@@ -384,6 +384,51 @@ static void unshare_zval(stash_keys *keys, zval *z)
 	}
 }
 
+/* ---- copy mode: private copies kept for the request ---- */
+
+/* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
+static zend_always_inline stash_local *local_slot(const stash_entry *e, const zval *v)
+{
+	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
+	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !STASH_G(local_ok) || e->size > local_size
+	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
+		return NULL;
+	}
+	if (UNEXPECTED(!STASH_G(local))) {
+		STASH_G(local) = ecalloc(STASH_LOCAL, sizeof(stash_local));
+	}
+	return &STASH_G(local)[(((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 52];
+}
+
+static void local_flush(void)
+{
+	for (int i = 0; i < STASH_LOCAL; i++) {
+		if (STASH_G(local)[i].e) {
+			zval_ptr_dtor(&STASH_G(local)[i].v);
+			STASH_G(local)[i].e = NULL;
+		}
+	}
+	STASH_G(local_bytes) = 0;
+}
+
+/* ponytail: over budget flushes everything; per-slot eviction if working sets near the budget thrash */
+static void local_put(stash_local *l, const stash_entry *e, const zval *copy)
+{
+	if (l->e) {
+		STASH_G(local_bytes) -= l->size;
+		zval_ptr_dtor(&l->v);
+		l->e = NULL; /* or the flush below releases it again */
+	}
+	if (STASH_G(local_bytes) + e->size > local_size) {
+		local_flush();
+	}
+	l->e = e;
+	l->seq = e->seq;
+	l->size = e->size;
+	ZVAL_COPY(&l->v, copy);
+	STASH_G(local_bytes) += e->size;
+}
+
 /* ---- writes ---- */
 
 static bool serialize_value(zval *val, zval *out)
@@ -559,11 +604,21 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 		if (e->flags & ENTRY_SERIALIZED) {
 			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v));
 		} else if (copy) {
-			stash_keys *keys = &STASH_G(keys);
-			if (Z_TYPE_P(v) == IS_ARRAY) {
-				keys_reset(keys);
+			stash_local *l = local_slot(e, v);
+			if (l && l->e == e && l->seq == e->seq) {
+				ZVAL_COPY(rv, &l->v); /* same version as last time: share it, COW keeps it intact */
+			} else {
+				stash_keys *keys = &STASH_G(keys);
+				if (Z_TYPE_P(v) == IS_ARRAY) {
+					keys_reset(keys);
+				}
+				copy_out(keys, rv, v);
+				if (l && l->seen == e) {
+					local_put(l, e, rv);
+				} else if (l) {
+					l->seen = e;
+				}
 			}
-			copy_out(keys, rv, v);
 		} else {
 			ZVAL_COPY_VALUE(rv, v);
 			stash_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
@@ -915,6 +970,12 @@ static ZEND_INI_MH(OnShmSize)
 	return SUCCESS;
 }
 
+static ZEND_INI_MH(OnLocalSize)
+{
+	local_size = (size_t) zend_ini_parse_quantity_warn(new_value, entry->name);
+	return SUCCESS;
+}
+
 static ZEND_INI_MH(OnHint)
 {
 	ini_hint = zend_ini_parse_quantity_warn(new_value, entry->name);
@@ -930,6 +991,7 @@ static ZEND_INI_MH(OnTtl)
 PHP_INI_BEGIN()
 	PHP_INI_ENTRY("stash.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
 	PHP_INI_ENTRY("stash.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
+	PHP_INI_ENTRY("stash.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 PHP_INI_END()
 
 static const zend_ini_entry_def ini_stash[] = {
@@ -1087,12 +1149,19 @@ PHP_RINIT_FUNCTION(stash)
 		stash_claim(&STASH_G(ctx));
 	}
 	STASH_G(zero_copy) = request_scope;
+	STASH_G(local_ok) = local_size > 0;
 	return SUCCESS;
 }
 
 PHP_RSHUTDOWN_FUNCTION(stash)
 {
 	STASH_G(zero_copy) = false;
+	STASH_G(local_ok) = false; /* later fetches (session's RSHUTDOWN) copy without keeping */
+	if (STASH_G(local)) {
+		local_flush();
+		efree(STASH_G(local));
+		STASH_G(local) = NULL;
+	}
 	return SUCCESS;
 }
 

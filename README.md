@@ -45,6 +45,7 @@ PHP=... STASH_SO=... APCU_SO=... bench/all.sh
 | `stash.request_scope=auto` (default) | zero-copy for the whole request under fpm/cgi/apache/litespeed/FrankenPHP (classic); worker mode (below) under CLI, FrankenPHP worker scripts and others |
 | `stash.request_scope=1` | zero-copy for the whole request, also under CLI. The segments handed out stay pinned until the request ends: a long-running script holds every segment it read, so use `0` there |
 | `stash.request_scope=0` | worker mode: fetch always returns a private copy |
+| `stash.local_size` (8M) | copy mode keeps the private copies of arrays and strings (from ~0.5 KB) fetched twice for the rest of the request (a FrankenPHP worker or CLI script: its whole run) and hands the same one out again while the entry is unchanged; counts against `memory_limit`; over it everything is dropped. `0`: off |
 | FrankenPHP worker | copy mode from its first `frankenphp_handle_request()` on, whatever `stash.request_scope` says |
 
 A fetched value can never outlive the memory it points to: zero-copy is offered only where the request ends.

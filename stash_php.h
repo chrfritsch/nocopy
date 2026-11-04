@@ -23,12 +23,26 @@ typedef struct {
 	uint32_t gen;
 } stash_keys;
 
+#define STASH_LOCAL 4096 /* ponytail: direct-mapped, colliding keys evict each other; set-associative if hit rates need it */
+
+/* Copy mode: a private copy of an arena entry, valid while the entry is the same version (address + seq). */
+typedef struct {
+	const stash_entry *e;    /* kept copy's entry, NULL none */
+	const stash_entry *seen; /* last entry fetched here: kept only when it comes back (one-off fetches never evict) */
+	uint64_t seq;
+	size_t size;
+	zval v;
+} stash_local;
+
 ZEND_BEGIN_MODULE_GLOBALS(stash)
 	stash_ctx ctx;
 	bool zero_copy; /* this request may be handed pointers into the arena */
 	zend_ulong leases[8]; /* key hashes leased: dropped at request end if a callback bailed out */
 	int nleases;
 	stash_keys keys;
+	stash_local *local; /* request memory, NULL until the first copy-mode fetch */
+	size_t local_bytes;
+	bool local_ok; /* between RINIT and RSHUTDOWN */
 ZEND_END_MODULE_GLOBALS(stash)
 
 ZEND_EXTERN_MODULE_GLOBALS(stash)

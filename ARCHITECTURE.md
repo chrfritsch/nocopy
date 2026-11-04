@@ -86,6 +86,8 @@ the worker switches to copy mode at its first handled request, also with `stash.
 
 - zero-copy (`zero_copy`, set in RINIT from `request_scope`): returns the arena pointer; the segment stays pinned until the request ends.
 - copy: `copy_out` = `zend_array_dup` (one memcpy of an immutable array) + `unshare_contents` (repoint arena strings/keys). The same key table maps a deduped arena key to its first private copy, which later rows share (refcounted).
+  Kept copies (`stash_local`, `stash.local_size`): a 4096-slot direct-mapped table in request memory, by entry address, holds `{entry, seq, size, copy}`. A fetch whose entry has the same address and `seq` returns the kept copy (refcount + 1; COW protects it); otherwise it copies, and keeps the copy only if the slot's `seen` is this entry (second sighting, TinyLFU's doorkeeper), else just records it in `seen`: keeping every copy made fetches of 100k distinct strings 37 -> 64 ns (freeing cold evictees).
+  `(address, seq)` is one version: segments belong to one shard for life and `seq` only grows per shard, so a reused address has a larger `seq`; a merge move changes the address (one re-copy). Integers changed in place (`apcu_inc`) are never kept. Over budget the table is flushed; freed in RSHUTDOWN (later fetches copy without keeping).
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
 
 ## Single-flight and early refresh (`stash_remember`, `apcu_entry`)
