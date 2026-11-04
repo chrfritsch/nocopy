@@ -2,7 +2,7 @@
 # Inside the image: build /src out of tree in /build, run the own tests (args: extra run-tests options or test paths). Exit 1 on any failure.
 set -e
 rm -rf /build && mkdir /build && cd /src
-cp stash.c stash_apcu.c stash_arena.c stash_arena.h stash_php.h php_stash.h stash_arginfo.h stash_apcu_arginfo.h config.m4 config.w32 /build/
+cp *.c *.h config.m4 config.w32 /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 grep -i warning make.err || true
 cp -r /src/tests /build/tests

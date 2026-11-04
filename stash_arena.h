@@ -16,6 +16,7 @@
 #define STASH_MAX_SHARDS 8
 #define STASH_LEASES 32 /* per shard: concurrent single-flight computes */
 #define STASH_ALIGN(n) (((n) + 7) & ~(size_t) 7)
+#define STASH_INLINE_PUT 2048 /* blocks up to this size are filled under the lock: one lock round trip per write */
 
 /* Block header; the user's payload (and the key bytes, at koff) follow in the same block. */
 typedef struct stash_entry {
@@ -42,6 +43,7 @@ enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT };
 /* Owned by one shard, touched only under its lock (stats read it racily). */
 typedef struct {
 	uint8_t state;
+	uint8_t bucket;   /* TTL bucket of an open or sealed single segment */
 	uint32_t run;     /* head of a run: number of segments */
 	uint32_t pending; /* allocated, not yet published */
 	uint32_t gen;     /* bumped on every free: lets an expiry cursor notice reuse */
@@ -108,6 +110,14 @@ typedef struct {
 
 typedef enum { PUT_OK, PUT_EXISTS, PUT_FULL } stash_put_result;
 
+/* A write between stash_put_begin() and stash_put_commit(). */
+typedef struct {
+	stash_ctx *c;
+	stash_shard *sh;
+	stash_entry *e;
+	bool locked; /* small block: filled under the shard lock */
+} stash_put;
+
 /* Read-only after stash_arena_create(); valid in forked children (same address). */
 extern stash_arena *stash_a;
 extern char *stash_seg_base;
@@ -116,8 +126,8 @@ extern uint32_t stash_shard_mask, stash_tab_mask;
 extern stash_slot *stash_tabs[STASH_MAX_SHARDS];
 extern uint64_t stash_self; /* this process's owner id */
 
-/* Supplied by the user: copy src's payload and key bytes into dst (same size and koff; header already set). Shard locked. */
-void stash_relocate(stash_entry *dst, const stash_entry *src);
+/* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
+void stash_rebase(stash_entry *e, const stash_entry *from);
 
 /* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error;
  * STASH_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
@@ -130,13 +140,17 @@ void stash_release(stash_ctx *c); /* end of this process/thread */
 void stash_after_fork(stash_ctx *c);
 void stash_keep_release(stash_ctx *c);
 
-/* ---- writes: lock the key's shard, alloc, fill (header + payload), commit, unlock ---- */
+/* ---- writes ---- */
+
+/* Locks h's shard and allocates a size-byte block; NULL (unlocked) if it does not fit. The header is set (flags and user 0):
+ * the caller writes the key's klen bytes at koff and its payload, then commits. Blocks over STASH_INLINE_PUT are filled
+ * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires. */
+stash_entry *stash_put_begin(stash_put *p, stash_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl);
+/* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
+stash_put_result stash_put_commit(stash_put *p, bool add_only);
+
+/* ---- read-modify-write: the caller holds stash_lock(stash_shard_of(h)) ---- */
 void stash_lock_wait(stash_shard *sh);
-stash_entry *stash_alloc(stash_shard *sh, size_t total, time_t exp, time_t now);
-stash_put_result stash_commit(stash_shard *sh, stash_entry *e, bool add_only);
-void stash_abort(stash_shard *sh, stash_entry *e);
-/* Before unlocking to fill e outside the lock: record it, so the entry of a writer that dies meanwhile is rolled back. NULL after the commit (locked). */
-static inline void stash_wip(stash_ctx *c, const stash_entry *e);
 stash_entry *stash_lookup(stash_shard *sh, uint64_t h, const char *k, uint32_t klen); /* locked; may be expired */
 bool stash_remove(stash_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
 void stash_clear(void);
@@ -150,8 +164,10 @@ void stash_lease_drop(uint64_t h, int32_t slot); /* only if this slot still hold
 stash_entry *stash_scan_next(stash_ctx *c, uint32_t *sh, uint32_t *i);
 
 typedef struct {
-	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
+	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases, inserts;
+	uint64_t segment_size;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
+	time_t start_time;
 } stash_stats_t;
 void stash_stats(stash_stats_t *s);
 /* A shard's free (or dead) segments as runs, for apcu_sma_info: up to max (offset from the slice start, bytes) pairs; returns how many. */
@@ -167,10 +183,6 @@ static inline stash_shard *stash_shard_of(uint64_t h)
 	return &stash_a->shards[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask];
 }
 static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
-static inline void stash_wip(stash_ctx *c, const stash_entry *e)
-{
-	__atomic_store_n(&stash_a->workers[c->slot].wip, e ? (uint32_t) (((const char *) e - (const char *) stash_a) >> 3) : 0, __ATOMIC_RELAXED);
-}
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
 static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
 

@@ -1,17 +1,18 @@
 /* shard_repair(): a lock taken from a dead holder rebuilds the shard. Builds the half-done states a kill can leave
  * (a delete's shift stopped midway, an unlinked entry still counted live, an abandoned allocation, a dead writer's
- * unfinished big entry) and checks the shard afterwards. Includes the arena source to reach its statics. */
-#include "../../stash_arena.c"
+ * unfinished big entry) and checks the shard afterwards. Uses the arena's internal header. */
+#include "../../stash_arena_int.h"
 #include <assert.h>
 #include <stdio.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #define HDR STASH_ALIGN(sizeof(stash_entry))
 #define N 400
 
-void stash_relocate(stash_entry *dst, const stash_entry *src)
+void stash_rebase(stash_entry *e, const stash_entry *from)
 {
-	memcpy((char *) dst + HDR, (const char *) src + HDR, src->size - HDR);
+	(void) e, (void) from;
 }
 
 static uint64_t hash(const char *k)
@@ -95,7 +96,7 @@ int main(void)
 	build(sh, "abandoned", 300);
 	/* another dead writer's big entry, filled outside the lock */
 	uint64_t other = dead_owner();
-	stash_entry *big = build(sh, "big", seg_size);
+	stash_entry *big = build(sh, "big", stash_seg_size);
 	stash_a->workers[1].owner = other;
 	stash_a->workers[1].wip = (uint32_t) (((char *) big - (char *) stash_a) >> 3);
 	if (stash_a->nworkers < 2) {
@@ -106,12 +107,12 @@ int main(void)
 	stash_lock(sh); /* steals and repairs */
 	assert(stash_a->lock_steals == 1);
 	assert(!(sh->mseq & 1));
-	assert(slot_of(sh, moved) && !victim->live);
+	assert(stash_slot_of(sh, moved) && !victim->live);
 	uint32_t n = 0;
 	size_t live = 0;
 	for (uint32_t s = 0; s <= m; s++) {
 		if (t[s]) {
-			assert(slot_of(sh, stash_slot_entry(t[s])) == &t[s]); /* no duplicates */
+			assert(stash_slot_of(sh, stash_slot_entry(t[s])) == &t[s]); /* no duplicates */
 			n++;
 			live += stash_slot_entry(t[s])->size;
 		}

@@ -84,6 +84,23 @@ static bool row_matches(stash_iter *it, zend_string *key)
 	return !it->keys || zend_symtable_exists(it->keys, key);
 }
 
+typedef struct {
+	snap_row *rows;
+	uint32_t count, cap;
+} snap;
+
+static void snap_add(void *arg, const zend_string *key, const stash_meta *m)
+{
+	snap *s = arg;
+	if (s->count == s->cap) {
+		s->cap *= 2;
+		s->rows = safe_erealloc(s->rows, s->cap, sizeof(snap_row), 0);
+	}
+	s->rows[s->count++] = (snap_row) {
+		.key = zend_string_init(ZSTR_VAL(key), ZSTR_LEN(key), 0), .created = m->created, .expires = m->expires, .mem = m->size, .seq = m->seq,
+	};
+}
+
 /* Fresh insertion-ordered snapshot of the live keys that match the iterator's filter. */
 static void iter_snapshot(stash_iter *it)
 {
@@ -94,25 +111,10 @@ static void iter_snapshot(stash_iter *it)
 	if (it->list & APC_LIST_DELETED && !(it->list & APC_LIST_ACTIVE)) {
 		return;
 	}
-	/* no lock: emalloc may bail out (OOM) and must never do so with the arena locked */
-	uint32_t c = 0, cap = 64;
-	snap_row *rows = safe_emalloc(cap, sizeof(snap_row), 0);
-	stash_ctx *ctx = &STASH_G(ctx);
-	stash_borrow_begin(ctx);
-	stash_entry *e;
-	for (uint32_t sh = 0, i = 0; (e = stash_scan_next(ctx, &sh, &i));) {
-		if (c == cap) {
-			cap *= 2;
-			rows = safe_erealloc(rows, cap, sizeof(snap_row), 0);
-		}
-		rows[c].key = zend_string_init(ZSTR_VAL(entry_key(e)), ZSTR_LEN(entry_key(e)), 0);
-		rows[c].created = e->created;
-		rows[c].expires = e->expires;
-		rows[c].mem = e->size;
-		rows[c].seq = e->seq;
-		c++;
-	}
-	stash_borrow_end(ctx);
+	snap sn = {.rows = safe_emalloc(64, sizeof(snap_row), 0), .cap = 64};
+	stash_scan(snap_add, &sn);
+	snap_row *rows = sn.rows;
+	uint32_t c = sn.count;
 
 	qsort(rows, c, sizeof(snap_row), row_cmp);
 	uint32_t keep = 0;
@@ -384,6 +386,7 @@ static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
 		zend_argument_value_error(3, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
+	const stash_opts o = {.ttl = ttl, .add_only = add_only, .objects = STASH_SERIALIZE_OBJECTS};
 	if (Z_TYPE_P(key) != IS_ARRAY) {
 		if (!val) {
 			zend_wrong_parameters_count_error(2, 3);
@@ -396,12 +399,12 @@ static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
 			RETURN_THROWS();
 		}
 		zend_string *ks = key_str(key);
-		bool ok = stash_store(ks, val, ttl, add_only, true);
+		stash_status st = stash_store(ks, val, &o);
 		zend_string_release(ks);
 		if (EG(exception)) {
 			RETURN_THROWS();
 		}
-		RETURN_BOOL(ok);
+		RETURN_BOOL(st == STASH_OK);
 	}
 
 	/* array form: returns the keys that failed, each mapped to -1 */
@@ -414,7 +417,7 @@ static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
 	zval *v;
 	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(key), h, k, v) {
 		zend_string *ks = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
-		bool ok = stash_apc_on && stash_store(ks, v, ttl, add_only, true);
+		bool ok = stash_apc_on && stash_store(ks, v, &o) == STASH_OK;
 		if (EG(exception)) {
 			zend_string_release(ks);
 			break;
@@ -486,14 +489,7 @@ PHP_FUNCTION(apcu_fetch)
 	}
 }
 
-static bool exists(zend_string *key)
-{
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c);
-	bool r = stash_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key)) != NULL;
-	stash_borrow_end(c);
-	return r;
-}
+static bool exists(zend_string *key) { return stash_info(key, NULL); }
 
 PHP_FUNCTION(apcu_exists)
 {
@@ -598,45 +594,14 @@ static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 	if (!stash_tracked()) {
 		RETURN_THROWS();
 	}
-	zend_ulong h = zend_string_hash_val(key);
-	stash_shard *sh = stash_shard_of(h);
-	for (;;) {
-		stash_lock(sh);
-		stash_entry *e = stash_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-		if (e && !stash_expired(e)) {
-			if (Z_TYPE_P(entry_val(e)) != IS_LONG || (e->flags & ENTRY_SERIALIZED)) {
-				stash_unlock(sh);
-				RETURN_FALSE;
-			}
-			/* in place and atomic: lock-free readers copy this word */
-			zend_long nv = __atomic_add_fetch(&Z_LVAL_P(entry_val(e)), sign * step, __ATOMIC_RELAXED);
-			stash_unlock(sh);
-			if (success) {
-				ZEND_TRY_ASSIGN_REF_TRUE(success);
-			}
-			RETURN_LONG(nv);
-		}
-		stash_unlock(sh);
-
-		zval init;
-		ZVAL_LONG(&init, sign * step);
-		bool locked;
-		stash_entry *n = stash_build(key, &init, ttl, false, &locked);
-		if (!n) {
-			RETURN_FALSE;
-		}
-		stash_put_result r = stash_publish(n, true, locked);
-		if (r == PUT_OK) {
-			if (success) {
-				ZEND_TRY_ASSIGN_REF_TRUE(success);
-			}
-			RETURN_LONG(sign * step);
-		}
-		if (r == PUT_FULL) {
-			RETURN_FALSE;
-		}
-		/* PUT_EXISTS: someone created it first, go around and update theirs */
+	zend_long nv;
+	if (!stash_add_long(key, sign * step, ttl, &nv)) {
+		RETURN_FALSE;
 	}
+	if (success) {
+		ZEND_TRY_ASSIGN_REF_TRUE(success);
+	}
+	RETURN_LONG(nv);
 }
 
 PHP_FUNCTION(apcu_inc) { incdec(INTERNAL_FUNCTION_PARAM_PASSTHRU, 1); }
@@ -656,16 +621,7 @@ PHP_FUNCTION(apcu_cas)
 	if (!stash_apc_on) {
 		RETURN_FALSE;
 	}
-	zend_ulong h = zend_string_hash_val(key);
-	stash_shard *sh = stash_shard_of(h);
-	stash_lock(sh);
-	stash_entry *e = stash_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	bool ok = e && !stash_expired(e) && !(e->flags & ENTRY_SERIALIZED) && Z_TYPE_P(entry_val(e)) == IS_LONG && Z_LVAL_P(entry_val(e)) == old;
-	if (ok) {
-		__atomic_store_n(&Z_LVAL_P(entry_val(e)), nw, __ATOMIC_RELAXED);
-	}
-	stash_unlock(sh);
-	RETURN_BOOL(ok);
+	RETURN_BOOL(stash_cas_long(key, old, nw));
 }
 
 PHP_FUNCTION(apcu_clear_cache)
@@ -678,7 +634,7 @@ PHP_FUNCTION(apcu_clear_cache)
 	RETURN_TRUE;
 }
 
-/* ponytail: not single-flight, two workers may both run $callback; milestone 3 */
+/* Single-flight per key, stored with add like APCu. */
 PHP_FUNCTION(apcu_entry)
 {
 	zend_string *key;
@@ -699,7 +655,8 @@ PHP_FUNCTION(apcu_entry)
 	if (!stash_tracked()) {
 		RETURN_THROWS();
 	}
-	stash_remember(key, &fci, &fcc, ttl, 0, true, return_value);
+	const stash_opts o = {.ttl = ttl, .add_only = true, .objects = STASH_SERIALIZE_OBJECTS};
+	stash_remember(key, &fci, &fcc, &o, 0, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
@@ -719,22 +676,44 @@ PHP_FUNCTION(apcu_key_info)
 	if (!stash_tracked()) {
 		RETURN_THROWS();
 	}
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c);
-	stash_entry *e = stash_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	if (!e) {
-		stash_borrow_end(c);
+	stash_meta m;
+	if (!stash_info(key, &m)) {
 		RETURN_NULL();
 	}
 	array_init(return_value);
 	add_assoc_long(return_value, "hits", 0);
-	add_assoc_long(return_value, "access_time", e->created);
-	add_assoc_long(return_value, "mtime", e->created);
-	add_assoc_long(return_value, "creation_time", e->created);
+	add_assoc_long(return_value, "access_time", m.created);
+	add_assoc_long(return_value, "mtime", m.created);
+	add_assoc_long(return_value, "creation_time", m.created);
 	add_assoc_long(return_value, "deletion_time", 0);
-	add_assoc_long(return_value, "ttl", e->expires ? e->expires - e->created : 0);
+	add_assoc_long(return_value, "ttl", m.expires ? m.expires - m.created : 0);
 	add_assoc_long(return_value, "refs", 0);
-	stash_borrow_end(c);
+}
+
+typedef struct {
+	zval *list; /* NULL: count only */
+	zend_long entries;
+} info_list;
+
+static void info_add(void *arg, const zend_string *key, const stash_meta *m)
+{
+	info_list *l = arg;
+	l->entries++;
+	if (!l->list) {
+		return;
+	}
+	zval row;
+	array_init(&row);
+	add_assoc_str(&row, "info", zend_string_init(ZSTR_VAL(key), ZSTR_LEN(key), 0));
+	add_assoc_long(&row, "ttl", m->expires ? m->expires - m->created : 0);
+	add_assoc_long(&row, "num_hits", 0);
+	add_assoc_long(&row, "mtime", m->created);
+	add_assoc_long(&row, "creation_time", m->created);
+	add_assoc_long(&row, "deletion_time", 0);
+	add_assoc_long(&row, "access_time", m->created);
+	add_assoc_long(&row, "ref_count", 0);
+	add_assoc_long(&row, "mem_size", m->size);
+	add_next_index_zval(l->list, &row);
 }
 
 PHP_FUNCTION(apcu_cache_info)
@@ -753,29 +732,8 @@ PHP_FUNCTION(apcu_cache_info)
 
 	zval list;
 	array_init(&list);
-	zend_long entries = 0;
-
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c); /* pins, not the lock: building the list allocates */
-	stash_entry *e;
-	for (uint32_t sh = 0, i = 0; (e = stash_scan_next(c, &sh, &i));) {
-		entries++;
-		if (!limited) {
-			zval row;
-			array_init(&row);
-			add_assoc_str(&row, "info", zend_string_init(ZSTR_VAL(entry_key(e)), ZSTR_LEN(entry_key(e)), 0));
-			add_assoc_long(&row, "ttl", e->expires ? e->expires - e->created : 0);
-			add_assoc_long(&row, "num_hits", 0);
-			add_assoc_long(&row, "mtime", e->created);
-			add_assoc_long(&row, "creation_time", e->created);
-			add_assoc_long(&row, "deletion_time", 0);
-			add_assoc_long(&row, "access_time", e->created);
-			add_assoc_long(&row, "ref_count", 0);
-			add_assoc_long(&row, "mem_size", e->size);
-			add_next_index_zval(&list, &row);
-		}
-	}
-	stash_borrow_end(c);
+	info_list l = {.list = limited ? NULL : &list};
+	stash_scan(info_add, &l);
 	stash_stats_t st;
 	stash_stats(&st);
 	array_init(return_value);
@@ -783,10 +741,10 @@ PHP_FUNCTION(apcu_cache_info)
 	add_assoc_long(return_value, "ttl", stash_ini_ttl);
 	add_assoc_long(return_value, "num_hits", st.hits);
 	add_assoc_long(return_value, "num_misses", st.misses);
-	add_assoc_long(return_value, "num_inserts", __atomic_load_n(&stash_a->inserts, __ATOMIC_RELAXED));
-	add_assoc_long(return_value, "num_entries", entries);
+	add_assoc_long(return_value, "num_inserts", st.inserts);
+	add_assoc_long(return_value, "num_entries", l.entries);
 	add_assoc_long(return_value, "expunges", st.expunges);
-	add_assoc_long(return_value, "start_time", stash_a->start_time);
+	add_assoc_long(return_value, "start_time", st.start_time);
 	add_assoc_long(return_value, "mem_size", st.used);
 	add_assoc_string(return_value, "memory_type", "mmap");
 	if (limited) {
@@ -815,13 +773,13 @@ PHP_FUNCTION(apcu_sma_info)
 
 	stash_stats_t st;
 	stash_stats(&st);
-	uint32_t nsh = stash_a->nshards;
+	uint32_t nsh = st.shards;
 
 	/* one APCu "segment" per shard: an entry only fits into free space of its own shard's slice */
 	array_init(return_value);
 	add_assoc_long(return_value, "num_seg", nsh);
-	add_assoc_double(return_value, "seg_size", (double) ((size_t) (stash_a->nsegs / nsh) << stash_seg_shift));
-	add_assoc_double(return_value, "avail_mem", (double) (((size_t) stash_a->nsegs << stash_seg_shift) - st.used));
+	add_assoc_double(return_value, "seg_size", (double) (st.segments / nsh * st.segment_size));
+	add_assoc_double(return_value, "avail_mem", (double) (st.segments * st.segment_size - st.used));
 	if (limited) {
 		return;
 	}

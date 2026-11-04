@@ -4,7 +4,7 @@
 set -e
 command -v gcc >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl >/dev/null 2>&1; }
 rm -rf /build && mkdir /build && cd /src
-cp stash.c stash_apcu.c stash_arena.c stash_arena.h stash_php.h php_stash.h stash_arginfo.h stash_apcu_arginfo.h config.m4 config.w32 /build/
+cp *.c *.h config.m4 config.w32 /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 mkdir -p /app && cp /src/docker/frankenphp/app.php /app/
 ini=/usr/local/etc/php/conf.d/stash.ini

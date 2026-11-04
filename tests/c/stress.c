@@ -1,4 +1,4 @@
-/* Threaded stress test of stash_arena.c without PHP: build with tests/c/run.sh (plain -O2 and ThreadSanitizer).
+/* Threaded stress test of the arena without PHP: build with tests/c/run.sh (plain -O2 and ThreadSanitizer).
  * Each thread writes, deletes and reads its own keys against a model, reads every other thread's keys,
  * and holds some values pinned across later operations: a value read must always be intact. */
 #include "../../stash_arena.h"
@@ -16,9 +16,9 @@ static uint64_t failures;
 
 typedef struct { uint32_t ver, len; } payload; /* after the key; then len bytes of a pattern of (key, ver) */
 
-void stash_relocate(stash_entry *dst, const stash_entry *src)
+void stash_rebase(stash_entry *e, const stash_entry *from)
 {
-	memcpy((char *) dst + HDR, (const char *) src + HDR, src->size - HDR);
+	(void) e, (void) from; /* the payload holds no pointers */
 }
 
 static uint64_t hash(const char *k, size_t n)
@@ -63,40 +63,19 @@ static bool put(stash_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t 
 {
 	size_t klen = strlen(k), total = HDR + STASH_ALIGN(klen + 1) + STASH_ALIGN(sizeof(payload) + len);
 	uint64_t h = hash(k, klen);
-	stash_shard *sh = stash_shard_of(h);
-	stash_lock(sh);
-	time_t now = time(NULL);
-	stash_entry *e = stash_alloc(sh, total, ttl ? now + ttl : 0, now);
-	bool inline_fill = total <= 2048; /* like the extension: big blocks are filled outside the lock */
-	if (e && !inline_fill) {
-		stash_wip(c, e);
-		stash_unlock(sh);
+	stash_put p;
+	stash_entry *e = stash_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl);
+	if (!e) {
+		return false;
 	}
-	if (e) {
-		e->h = h;
-		e->klen = (uint32_t) klen;
-		e->koff = HDR;
-		e->expires = ttl ? now + ttl : 0;
-		e->created = now;
-		e->flags = 0;
-		e->user = 0;
-		memcpy((char *) e + HDR, k, klen + 1);
-		payload *p = pl(e);
-		p->ver = ver;
-		p->len = len;
-		for (uint32_t i = 0; i < len; i++) {
-			((uint8_t *) (p + 1))[i] = pat(h, ver, i);
-		}
-		if (!inline_fill) {
-			stash_lock(sh);
-		}
+	memcpy((char *) e + HDR, k, klen + 1);
+	payload *pp = pl(e);
+	pp->ver = ver;
+	pp->len = len;
+	for (uint32_t i = 0; i < len; i++) {
+		((uint8_t *) (pp + 1))[i] = pat(h, ver, i);
 	}
-	bool ok = e && stash_commit(sh, e, false) == PUT_OK;
-	if (e && !inline_fill) {
-		stash_wip(c, NULL);
-	}
-	stash_unlock(sh);
-	return ok;
+	return stash_put_commit(&p, false) == PUT_OK;
 }
 
 static void del(const char *k)

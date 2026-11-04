@@ -9,12 +9,12 @@ A sellable PHP extension in the style of Relay: a zero-copy shared-memory cache 
 for APCu (`apcu_*`, `APCUIterator`, `apc.*` INI) and adds extras (`stash_*`). Chosen after reviewing
 php-src for weak spots (opcache-style immutable arrays make zero-copy reads possible).
 
-## State (2026-11-03)
+## State (2026-11-04)
 
 Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 
 ### Rebuild of the core (2026-11-03, second half of the day)
-- Split: `stash_arena.c/.h` (no PHP; read path inline in the header), `stash.c` (values, `stash_*`, module), `stash_apcu.c`. stash.c used to `#include` stash_arena.c so the write path inlined (~3 ns per write then); separate units measured 2026-11-04 (`docker/ab.sh 5 read write`): writes equal or 1-4% faster, zero-copy fetches +0.25 ns (layout), so they are separate now. `-fvisibility=hidden`: only `get_module` is exported.
+- Split: the arena (no PHP; `stash_arena.h` public with the read path inline, `stash_arena_int.h` internal; `stash_arena.c`, `stash_evict.c`, `stash_lease.c`, `stash_owner.c` since 2026-11-04), `stash.c` (values, store API in `stash_php.h`, `stash_*`, module), `stash_apcu.c` (only the store API). stash.c used to `#include` stash_arena.c so the write path inlined (~3 ns per write then); separate units measured 2026-11-04 (`docker/ab.sh 5 read write`): writes equal or 1-4% faster, zero-copy fetches +0.25 ns (layout), so they are separate now. `-fvisibility=hidden`: only `get_module` is exported.
 - `tests/c/stress.c` + `tests/c/run.sh`: 8 threads on the arena alone, model-checked, plain and ThreadSanitizer: clean (TSAN on gcc ignores fences: only false alarms possible, none seen). Also builds and passes natively on macOS.
 - Shards own fixed segment slices (>= 8 MB, >= 16 segments each): no pool lock, no cross-shard help; an entry must fit in a slice.
 - Slot tables fixed (no `grow()`), sized from `apc.entries_hint` / shm size; full table evicts. Backward-shift deletes (no tombstones); readers retry a miss if the shard's `mseq` moved. Test 018 checks that and fails reliably with the retry removed.
@@ -56,7 +56,7 @@ Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (P
      (ctype dom fileinfo filter mbstring openssl posix session simplexml xml xmlwriter zlib opcache; check against `php -m` of the last build:
      Core ctype date dom fileinfo filter hash json lexbor libxml mbstring openssl pcntl pcre Phar posix random Reflection session SimpleXML SPL standard tokenizer uri xml xmlwriter Zend OPcache zlib).
 3. Build stash out of tree (copy sources to a build dir, then): `phpize && ./configure --with-php-config=<prefix>/bin/php-config && make`.
-   After restoring/replacing `stash.c`, force a rebuild (`rm -f stash.lo .libs/stash.o modules/stash.so`): stale builds fooled us twice.
+   After restoring/replacing a source file, force a rebuild (`rm -f stash.lo .libs/stash.o modules/stash.so`): stale builds fooled us twice.
 4. APCu for comparison: `git clone https://github.com/krakjoe/apcu`, build the same way. stash and APCu cannot be loaded together.
 5. Symfony Cache tests: clone `symfony/cache` (split repo), `composer install` (use `--ignore-platform-req=php`), run `vendor/bin/phpunit Tests/Adapter/ApcuAdapterTest.php` with `-d extension=stash.so -d apc.enable_cli=1`.
 6. Real app benchmark: `bench/sfapp/` holds only `src/`, `public/`, `composer.json`. Copy to a work dir, `composer install --ignore-platform-req=php`, `composer dump-autoload -o`.
@@ -198,6 +198,12 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 - `stash_remember`'s compute time is the header field `stash_entry.user`, not the value zval's `u2` (2026-11-04); `created` became 32-bit so the header stays 48 bytes. Instructions per op unchanged (callgrind +0.08%); timings moved 0.3-2 ns either way (layout).
 - Sizing INI is `stash.*` in both modes; `apc.shm_size`/`apc.entries_hint`/`apc.ttl` are aliases under the APCu layer (2026-11-04, test 038). README lists where stash differs from APCu by design ("same API, not the same layout"). APCu's suite unchanged: 57 pass, apc54_014 and apcu_sma_info fail. Symfony smoke (8.5, compat on/off/next to APCu) passes; 8.3/6.4 and 8.4/7.4 not re-run.
 - Single-flight leases live in a fixed per-shard table, not in the cache (2026-11-04): they used slots and segments, showed up in `APCUIterator`, were wiped by `apcu_clear_cache`, and dropping by key could drop a lease another worker had retaken. `docker/stampede.sh` unchanged (1 callback run per expiry, same req/s).
+- Module boundaries (2026-11-04, one refactor): a write is a `stash_put` the arena owns (`stash_put_begin` locks, allocates, sets the header, drops the lock for big blocks with `wip` recorded; `stash_put_commit` relocks, publishes, unlocks), so stash.c never handles the lock protocol;
+  a merge moves an entry by `memcpy` + `stash_rebase` (pointer shift) instead of re-persisting it under the lock with module globals (no size invariant on relocation, faster); sizing/persisting/copy-out take explicit contexts instead of `STASH_G(cursor)`/`kgen`;
+  `stash_opts` {ttl, add_only, objects: refuse|serialize} and a `stash_status` replace boolean parameters and NULL-for-everything; `stash_apcu.c` uses `stash_info`/`stash_scan`/`stash_add_long`/`stash_cas_long` instead of locks and arena fields;
+  merge is split into pick_sparse / pick_oldest / move_survivors / evict_rest; a segment remembers its TTL bucket (relocate no longer fakes `now = created`). Test 039 (packed, nested, serialized values moved; fails with a no-op rebase).
+  `docker/ab.sh 5` vs 7222dd9 (Linux Docker arm64, load ~1.5): copy fetches of arrays/long strings +2..6%, scalar stores +0.5..1.5%, array stores -1..2%, `inc counter` -6.5% (11.5 -> 12.3 ns: one more call, apcu_inc now goes through stash.c), `exists` -1..2%, parallel zero-copy fetches -1.6..2.7%, ttl churn and contention within noise.
+  Suite passes on 8.3/8.4/8.5/ZTS 8.4/amd64, tests/c (TSAN) clean, `docker/stress.sh 30` clean, Symfony smoke (8.5, compat on/off/next to APCu) ok. APCu's own suite not re-run (needs a fresh clone of krakjoe/apcu).
 - No way to release zero-copy pins before the request ends (`stash_checkpoint`, `stash_scope` and FrankenPHP `request_scope=1` zero-copy were removed 2026-11-03): each relied on userland not keeping a value, and a broken promise was a use-after-free. Long-lived workers get copy mode.
 
 ## Known gaps / next steps (rough priority)
