@@ -83,10 +83,12 @@ the worker switches to copy mode at its first handled request, also with `stash.
 
 ## Single-flight and early refresh (`stash_remember`, `apcu_entry`)
 
-A lease is an ordinary entry, key `"\0stash_lease\0" . $key`, value `{owner id, worker slot}`, ttl 30 s, taken with an add (atomic under the shard lock).
-Waiters poll (50 us doubling to 5 ms) for the value; they drop a lease whose owner is dead (`owner_dead`, as for locks) and skip waiting for their own (recursion). Held leases are listed in module globals and dropped in post-deactivate if a callback bailed out.
+A lease is not a cache entry: each shard has 32 fixed `stash_lease` slots `{key hash, owner id, worker slot, until}` in the header, read and written under that shard's lock (the key's own shard).
+`stash_lease_take` returns TAKEN, HELD, MINE (recursion: our own callback asks for its key) or FULL (32 concurrent computes in the shard: compute without one). An expired lease (30 s) is free;
+a holder found dead (`owner_dead`, checked outside the lock since it reads /proc) is replaced on a second pass only if it still holds, and `stash_lease_drop` clears a lease only if this worker slot still holds it, so nobody drops a lease another worker retook.
+Leases are keyed by the 64-bit hash: two keys with the same hash share one (one waits for the other, then computes). Waiters poll (50 us doubling to 5 ms) for the value. Held leases are listed in module globals and dropped in post-deactivate if a callback bailed out.
+`stash_stats()['leases']` counts the held ones; `APCUIterator`, `apcu_cache_info` and `apcu_clear_cache` never see them.
 The callback's run time (ms) is kept in the stored value zval's `u2` (unused there; `ZVAL_COPY_VALUE` does not copy it, `stash_relocate` does). XFetch on a hit: refresh when `now - delta * beta * ln(rand) >= expires`; the refresher needs the lease, the rest return the current value.
-Leases are visible to `APCUIterator` / `apcu_cache_info` while held.
 
 ## APCu layer
 

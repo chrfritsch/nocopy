@@ -14,6 +14,7 @@
 #define STASH_SEG_WORDS (STASH_MAX_SEGS / 64)
 #define STASH_TTL_BUCKETS 7
 #define STASH_MAX_SHARDS 8
+#define STASH_LEASES 32 /* per shard: concurrent single-flight computes */
 #define STASH_ALIGN(n) (((n) + 7) & ~(size_t) 7)
 
 /* Block header; the user's payload (and the key bytes, at koff) follow in the same block. */
@@ -47,6 +48,13 @@ typedef struct {
 	uint64_t born;    /* inserts counter when taken: merge order */
 } stash_seg;
 
+/* Who computes a key hash right now (single-flight); free when owner is 0 or until has passed. */
+typedef struct {
+	uint64_t h, owner;
+	time_t until;
+	int32_t slot;
+} stash_lease;
+
 /* A shard owns its lock, a fixed slot table and a fixed slice of segments [lo, hi): writers of one shard never touch another's. */
 typedef struct {
 	uint64_t lock __attribute__((aligned(64))); /* holder's owner id; alone on its line */
@@ -60,6 +68,7 @@ typedef struct {
 	uint64_t evicted, expired; /* entries unlinked by merge while unexpired / by their TTL */
 	uint64_t ghost_hits;        /* new keys that were evicted recently: they start hot */
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4) */
+	stash_lease leases[STASH_LEASES];
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
 } stash_shard;
 
@@ -125,11 +134,16 @@ stash_entry *stash_lookup(stash_shard *sh, uint64_t h, const char *k, uint32_t k
 bool stash_remove(stash_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
 void stash_clear(void);
 
+/* Single-flight per key hash, under the hash's shard lock. A dead or expired holder is taken over. */
+enum { STASH_LEASE_TAKEN, STASH_LEASE_HELD, STASH_LEASE_MINE, STASH_LEASE_FULL };
+int stash_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
+void stash_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it */
+
 /* ---- lock-free scan: next pinned unexpired entry at or after (*sh, *i); start at 0, 0. Between borrow_begin/end. ---- */
 stash_entry *stash_scan_next(stash_ctx *c, uint32_t *sh, uint32_t *i);
 
 typedef struct {
-	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots;
+	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
 } stash_stats_t;
 void stash_stats(stash_stats_t *s);

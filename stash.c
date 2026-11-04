@@ -495,11 +495,9 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 
 bool stash_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
 
-/* ---- single-flight: a lease entry per key holds who computes it ---- */
+/* ---- single-flight: a lease per key hash (in the arena's shard) holds who computes it ---- */
 
 #define LEASE_TTL 30 /* s: a live holder stuck longer than this stops blocking the others */
-
-typedef struct { uint64_t owner; int32_t slot; } lease_val;
 
 static double now_s(clockid_t clk)
 {
@@ -508,42 +506,21 @@ static double now_s(clockid_t clk)
 	return (double) ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-/* Who holds the lease: false if nobody. */
-static bool lease_holder(zend_string *lkey, lease_val *out)
-{
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c);
-	stash_entry *e = stash_find(c, zend_string_hash_val(lkey), ZSTR_VAL(lkey), (uint32_t) ZSTR_LEN(lkey));
-	bool held = e && Z_TYPE_P(entry_val(e)) == IS_STRING && Z_STRLEN_P(entry_val(e)) == sizeof *out;
-	if (held) {
-		memcpy(out, Z_STRVAL_P(entry_val(e)), sizeof *out);
-	}
-	stash_borrow_end(c);
-	return held;
-}
-
-static bool lease_take(zend_string *lkey)
+static int lease_take(zend_ulong h)
 {
 	if (STASH_G(nleases) == (int) (sizeof STASH_G(leases) / sizeof STASH_G(leases)[0])) {
-		return false; /* nested too deep: compute without one */
+		return STASH_LEASE_FULL; /* nested too deep: compute without one */
 	}
-	lease_val me = { stash_self, STASH_G(ctx).slot };
-	zval v;
-	ZVAL_STR(&v, zend_string_init((char *) &me, sizeof me, 0));
-	bool ok = stash_store(lkey, &v, LEASE_TTL, true, false);
-	zval_ptr_dtor(&v);
-	if (ok) {
-		STASH_G(leases)[STASH_G(nleases)++] = zend_string_init(ZSTR_VAL(lkey), ZSTR_LEN(lkey), 1);
+	int r = stash_lease_take(h, STASH_G(ctx).slot, time(NULL), LEASE_TTL);
+	if (r == STASH_LEASE_TAKEN) {
+		STASH_G(leases)[STASH_G(nleases)++] = h;
 	}
-	return ok;
+	return r;
 }
 
-/* ponytail: drops by key, so a lease that expired and was retaken by another worker can be dropped: two compute */
 static void lease_drop(void)
 {
-	zend_string *k = STASH_G(leases)[--STASH_G(nleases)];
-	stash_drop(k);
-	zend_string_release(k);
+	stash_lease_drop(STASH_G(leases)[--STASH_G(nleases)], STASH_G(ctx).slot);
 }
 
 /* Runs the callback, measures it, stores the result with its compute time. */
@@ -580,10 +557,7 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		if (now_s(CLOCK_REALTIME) - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
-		zend_string *lkey = zend_string_concat2(ZEND_STRL("\0stash_lease\0"), ZSTR_VAL(key), ZSTR_LEN(key));
-		bool mine = lease_take(lkey);
-		zend_string_release(lkey);
-		if (!mine) {
+		if (lease_take(zend_string_hash_val(key)) != STASH_LEASE_TAKEN) {
 			return; /* someone else refreshes: keep serving this value */
 		}
 		zval_ptr_dtor(rv);
@@ -592,27 +566,17 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		lease_drop();
 		return;
 	}
-	zend_string *lkey = zend_string_concat2(ZEND_STRL("\0stash_lease\0"), ZSTR_VAL(key), ZSTR_LEN(key));
+	zend_ulong h = zend_string_hash_val(key);
 	double deadline = now_s(CLOCK_MONOTONIC) + LEASE_TTL;
 	unsigned wait = 50;
 	bool mine = false;
 	for (;;) {
-		if (lease_take(lkey)) {
-			mine = true;
+		int r = lease_take(h);
+		if (r != STASH_LEASE_HELD) {
+			mine = r == STASH_LEASE_TAKEN; /* MINE: our own callback asks for its key; FULL: compute without */
 			break;
 		}
-		lease_val h;
-		if (lease_holder(lkey, &h)) {
-			if (h.owner == stash_self && h.slot == STASH_G(ctx).slot) {
-				break; /* our own callback asks for its key: no one to wait for */
-			}
-			if (owner_dead(h.owner)) {
-				stash_drop(lkey); /* ponytail: may drop a lease just retaken: two compute */
-				continue;
-			}
-		}
 		if (fetch(key, rv, NULL, NULL)) {
-			zend_string_release(lkey);
 			return; /* the holder stored it */
 		}
 		if (now_s(CLOCK_MONOTONIC) > deadline) {
@@ -621,7 +585,6 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		usleep(wait);
 		wait = wait < 5000 ? wait * 2 : wait;
 	}
-	zend_string_release(lkey);
 	if (mine && fetch(key, rv, NULL, NULL)) {
 		lease_drop(); /* stored between our miss and the lease */
 		return;
@@ -747,6 +710,7 @@ PHP_FUNCTION(stash_stats)
 	add_assoc_long(return_value, "slots", s.slots);
 	add_assoc_long(return_value, "expunges", s.expunges);
 	add_assoc_long(return_value, "lock_steals", s.lock_steals);
+	add_assoc_long(return_value, "leases", s.leases);
 }
 
 /* ---- FrankenPHP worker mode ---- */
