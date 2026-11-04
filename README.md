@@ -42,6 +42,21 @@ Measured on Linux (Docker, arm64, PHP 8.5, release builds; details and method in
 
 Pages that barely touch the cache gain nothing. The gain appears where requests read large cached arrays.
 
+**Drupal 11** (2,000 nodes, php-fpm 8 workers, MariaDB, one server; [module](drupal), [method and raw numbers](bench/results-drupal)):
+
+| | stock (DB + APCu) | stock + igbinary | nocopy, all bins |
+|---|---:|---:|---:|
+| anonymous `/` (page cache) | 4,339 req/s | 4,126 req/s | **11,797 req/s** |
+| logged-in node page | 506 req/s | 746 req/s | **1,027 req/s** |
+| logged-in front page | 834 req/s | 596 req/s | **1,179 req/s** |
+| editor: save / edit form / view after save (p50) | 34 / 55 / 47 ms | 33 / 50 / 44 ms | **26 / 37 / 24 ms** |
+| readers served during editing | 468 req/s | 502 req/s | **699 req/s** |
+| database queries per logged-in request | 29–31 | 29–31 | **7** |
+
+Medians of 3 runs. The two stock configs swap places between pages (506 vs 746, 834 vs 596 req/s), so their difference is noise
+in this setup: read them as one baseline. nocopy only as APCu's replacement in front of the database lands in the same range
+(801–875 req/s logged-in): the gain comes from moving all bins and the cache tags off the database. Trade-offs: single server, and Drush does not share php-fpm's cache ([details](drupal#trade-offs)).
+
 ## Features
 
 - **APCu-compatible.** `apcu_*`, `APCUIterator`, the `APC_*` constants and the `apc.*` INI names. Passes APCu's own test suite except three tests for documented non-goals ([differences](#differences-from-apcu)).
@@ -50,6 +65,7 @@ Pages that barely touch the cache gain nothing. The gain appears where requests 
 - **Smarter eviction when full.** APCu wipes the whole cache. nocopy evicts its oldest segments and keeps entries read since they were written, using Segcache-style merging with a ghost list for keys that return.
 - **Stampede protection.** `nocopy_remember()` and `apcu_entry()` run the callback once per key across all workers. `nocopy_remember()` also refreshes early via XFetch.
 - **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
+- **Drupal module** with a cache backend for all bins and cache tag checksums in shared memory (single server).
 
 ## Quick start
 
@@ -113,6 +129,18 @@ framework:
 
 The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` and next to real APCu.
 `clear()` bumps a namespace version instead of deleting keys, and old entries leave through normal eviction.
+
+### Drupal
+
+The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 10.3+ / 11) puts every cache bin and the cache tag checksums
+in nocopy, so cache reads and tag checks no longer touch the database. Install it, enable it, and add the `settings.php` lines from
+[`drupal/README.md`](drupal/README.md). It is for single-server sites. Read the trade-offs there first; the main one is that Drush runs in its own
+memory, so reload php-fpm after deploys and CLI changes. Reproduce the benchmark:
+
+```sh
+docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-drupal -f docker/Dockerfile.drupal docker
+docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
+```
 
 ## Configuration
 
