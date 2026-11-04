@@ -781,17 +781,71 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("stash.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
 PHP_INI_END()
 
-/* Sizing: apc.* with the APCu layer, stash.* without it (so real APCu can load too). */
-#define SIZING_INI(p) \
-	PHP_INI_ENTRY(p "shm_size", "32M", PHP_INI_SYSTEM, OnShmSize) \
-	PHP_INI_ENTRY(p "entries_hint", "4096", PHP_INI_SYSTEM, OnHint) \
-	PHP_INI_ENTRY(p "ttl", "0", PHP_INI_SYSTEM, OnTtl)
+static const zend_ini_entry_def ini_stash[] = {
+	PHP_INI_ENTRY("stash.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
+	PHP_INI_ENTRY("stash.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
+	PHP_INI_ENTRY("stash.ttl", "0", PHP_INI_SYSTEM, OnTtl)
+	{0}
+};
+
+static bool configured(const char *name)
+{
+	zend_string *n = zend_string_init(name, strlen(name), 0);
+	bool set = zend_get_configuration_directive(n) != NULL;
+	zend_string_release(n);
+	return set;
+}
+
+/* MINIT only: set an entry's value (and apply it) without zend_alter_ini_entry's runtime bookkeeping, which a request then undoes. */
+static void ini_put(const char *name, zend_string *value, bool apply)
+{
+	zend_ini_entry *e = zend_hash_str_find_ptr(EG(ini_directives), name, strlen(name));
+	if (apply && e->on_modify) {
+		e->on_modify(e, value, e->mh_arg1, e->mh_arg2, e->mh_arg3, ZEND_INI_STAGE_STARTUP);
+	}
+	zend_string *old = e->value;
+	e->value = zend_string_copy(value);
+	if (old) {
+		zend_string_release_ex(old, 1);
+	}
+}
+
+/* apc.X with the APCu layer: an alias of stash.X, used only when set and stash.X is not. */
+static ZEND_INI_MH(OnAlias)
+{
+	char canon[32];
+	snprintf(canon, sizeof canon, "stash.%s", ZSTR_VAL(entry->name) + sizeof("apc.") - 1);
+	if (stage != ZEND_INI_STAGE_STARTUP || !configured(ZSTR_VAL(entry->name))) {
+		return SUCCESS; /* the default */
+	}
+	if (configured(canon)) {
+		php_error_docref(NULL, E_CORE_WARNING, "stash: %s is ignored, %s is set", ZSTR_VAL(entry->name), canon);
+	} else {
+		ini_put(canon, new_value, true);
+	}
+	return SUCCESS;
+}
+
 static const zend_ini_entry_def ini_apc[] = {
 	PHP_INI_ENTRY("apc.enabled", "1", PHP_INI_SYSTEM, OnBool)
 	PHP_INI_ENTRY("apc.enable_cli", "0", PHP_INI_SYSTEM, OnBool)
-	SIZING_INI("apc.") {0}
+	PHP_INI_ENTRY("apc.shm_size", "32M", PHP_INI_SYSTEM, OnAlias)
+	PHP_INI_ENTRY("apc.entries_hint", "4096", PHP_INI_SYSTEM, OnAlias)
+	PHP_INI_ENTRY("apc.ttl", "0", PHP_INI_SYSTEM, OnAlias)
+	{0}
 };
-static const zend_ini_entry_def ini_stash[] = { SIZING_INI("stash.") {0} };
+
+/* ini_get() of an alias shows what is in effect. */
+static void sync_aliases(void)
+{
+	static const char *const names[] = {"shm_size", "entries_hint", "ttl"};
+	for (int i = 0; i < 3; i++) {
+		char apc[32], canon[32];
+		snprintf(apc, sizeof apc, "apc.%s", names[i]);
+		snprintf(canon, sizeof canon, "stash.%s", names[i]);
+		ini_put(apc, zend_ini_str(canon, strlen(canon), false), false);
+	}
+}
 
 static void atfork_child(void)
 {
@@ -826,7 +880,11 @@ PHP_MINIT_FUNCTION(stash)
 		php_error_docref(NULL, E_CORE_WARNING, "stash: APCu is loaded, running without the apcu_* layer (stash.apcu_compat=0)");
 		apcu_compat = false;
 	}
-	zend_register_ini_entries(apcu_compat ? ini_apc : ini_stash, module_number);
+	zend_register_ini_entries(ini_stash, module_number);
+	if (apcu_compat) {
+		zend_register_ini_entries(ini_apc, module_number);
+		sync_aliases();
+	}
 	stash_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
 	size_t need;
