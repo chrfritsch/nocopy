@@ -46,6 +46,9 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 
 **Several web servers:** add `nocopy.valkey=host:6379` to php.ini (php-fpm and CLI). The same `settings.php` then shares all bins and tag
 checksums through Valkey, each server keeps zero-copy local copies, and the journal is off: Drush and cron writes reach php-fpm through Valkey.
+Give Valkey a `maxmemory` and `maxmemory-policy volatile-lfu`: permanent items get a one-year TTL in that mode and can be evicted, while
+cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) have none and stay. Invalidated items are not
+deleted (as in core), so without a limit Valkey only grows.
 
 **Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
@@ -60,6 +63,7 @@ the database alone where the extension is not loaded, like core's APCu fast laye
   so `drush cr`, `drush cim`, `drush updb` and content saved by `drush cron` reach php-fpm on the next request. Cron drops entries
   older than a day, and a web worker that missed dropped entries starts with an empty cache. Long-running CLI processes (queue
   workers, migrations) do not see web changes made while they run.
+- **Deletes inside a database transaction wait for the commit** (none on rollback), so a concurrent request cannot refill the cache from uncommitted data.
 - **Do not set `nocopy.ttl`** (or `apc.ttl`): it would expire cache tag tokens, and a lost token for a common tag such as `rendered`
   invalidates most of the site at once.
 - **The cache is empty after a php-fpm restart or reload,** so the first requests rebuild it. In the benchmark, the first logged-in

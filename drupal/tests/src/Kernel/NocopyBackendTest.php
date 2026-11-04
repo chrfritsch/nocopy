@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\nocopy\Kernel;
 
+use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Render\Markup;
 use Drupal\KernelTests\Core\Cache\GenericCacheBackendUnitTestBase;
@@ -91,6 +92,32 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
     $b->deleteAll();
     nocopy_delete($this->prefix . '::fresh_bin::version');
     $this->assertFalse($b->get('k'));
+  }
+
+  public function testPermanentTtlOnlyWithValkey(): void {
+    $ttl = fn (string $bin) => (fn ($expire) => $this->ttl($expire))->call($this->createCacheBackend($bin), CacheBackendInterface::CACHE_PERMANENT);
+    $shared = (string) ini_get('nocopy.valkey') !== '';
+    $this->assertSame($shared ? 31536000 : 0, $ttl('render'));
+    $this->assertSame(0, $ttl('config'));
+  }
+
+  public function testDeleteInsideTransactionWaitsForCommit(): void {
+    $b = $this->getCacheBackend();
+    $b->set('k', 'v');
+    $b->set('kept', 'v');
+    $tx = \Drupal::database()->startTransaction();
+    $b->delete('k');
+    $this->assertFalse($b->get('k'));
+    // Another request does not see the delete before the commit.
+    $this->assertSame('v', $this->createCacheBackend($this->getTestBin())->get('k')->data);
+    unset($tx);
+    $this->assertFalse($this->createCacheBackend($this->getTestBin())->get('k'));
+
+    $tx = \Drupal::database()->startTransaction();
+    $b->delete('kept');
+    $tx->rollBack();
+    unset($tx);
+    $this->assertSame('v', $b->get('kept')->data);
   }
 
   #[IgnoreDeprecations]

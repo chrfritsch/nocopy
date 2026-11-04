@@ -21,6 +21,13 @@ class NocopyBackend implements CacheBackendInterface {
   // Invalidated items outlive their expiry by this long for $allow_invalid readers, then nocopy may drop them.
   private const TTL_SLACK = 3600;
 
+  // With nocopy.valkey: permanent items expire after a year, so Valkey's volatile-* eviction can drop them
+  // but never tag tokens, bin state or these small bins (no TTL). Not from Settings: the container bin is read before it exists.
+  private const PERM_TTL = 31536000, PERMANENT_BINS = ['container', 'bootstrap', 'config', 'discovery'];
+
+  // cid => TRUE: deleted inside a transaction, removed after the commit (a concurrent request could refill them from uncommitted data).
+  protected array $delayedDeletions = [];
+
   public function __construct(
     protected string $bin,
     protected string $sitePrefix,
@@ -98,7 +105,7 @@ class NocopyBackend implements CacheBackendInterface {
     // With nocopy.valkey: every local miss in one round trip.
     $found = nocopy_get_multiple(array_keys($keys));
     foreach ($keys as $key => $cid) {
-      if (is_array($found[$key] ?? NULL)) {
+      if (is_array($found[$key] ?? NULL) && !isset($this->delayedDeletions[$cid])) {
         $raw[$cid] = $found[$key];
       }
     }
@@ -151,7 +158,10 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   protected function ttl($expire): int {
-    return $expire == CacheBackendInterface::CACHE_PERMANENT ? 0 : max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
+    if ($expire == CacheBackendInterface::CACHE_PERMANENT) {
+      return NocopyJournal::shared() && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
+    }
+    return max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }
 
   protected function put(string $cid, array $item): void {
@@ -187,6 +197,27 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   public function deleteMultiple(array $cids) {
+    $db = \Drupal::hasContainer() && \Drupal::hasService('database') ? \Drupal::database() : NULL;
+    if (!$db?->inTransaction()) {
+      $this->doDelete($cids);
+      return;
+    }
+    if (!$this->delayedDeletions) {
+      $db->transactionManager()->addPostTransactionCallback([$this, 'postRootTransactionCommit']);
+    }
+    $this->delayedDeletions += array_fill_keys(array_map('strval', $cids), TRUE);
+  }
+
+  // Rolled back: the items are as valid as before the transaction.
+  public function postRootTransactionCommit(bool $success): void {
+    $cids = array_keys($this->delayedDeletions);
+    $this->delayedDeletions = [];
+    if ($success && $cids) {
+      $this->doDelete($cids);
+    }
+  }
+
+  protected function doDelete(array $cids): void {
     foreach ($cids as $cid) {
       nocopy_delete($this->key((string) $cid));
     }

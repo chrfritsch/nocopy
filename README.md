@@ -206,6 +206,7 @@ mode because Valkey replaces the journal query that every request paid.
   and worker. After a lost connection the local arena is cleared on reconnect.
 - Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. An optional nocopy module for Valkey is planned to save round trips.
 - Local only: `APCUIterator`, `apcu_cache_info`, `nocopy_stats()`, and the single flight of `nocopy_remember`/`apcu_entry` (per server).
+- Valkey evicts by its own `maxmemory-policy`; an evicted key is a miss everywhere. The Drupal module is built for `volatile-lfu` ([details](drupal/README.md)).
 - Values are stored with `nocopy.serializer` (integers as plain numbers), so all servers need the same serializer.
 - Every change is pushed to every worker connection of every server: meant for cache traffic, not for counters hammered on every request.
 
