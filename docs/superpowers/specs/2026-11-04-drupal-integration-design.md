@@ -82,12 +82,11 @@ It uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0`.
 `cache_tags.invalidator.checksum` (the same service swap the Redis module documents). Tag invalidation counts live in nocopy,
 so tag checks and invalidations never touch the database.
 
-- **Invariant: a counter value is never reused.** Invalidating a tag sets its counter to the next value of one global nocopy
-  sequence, so each tag's counter only grows and never returns to an earlier value.
-- **A missing counter makes the item invalid.** That covers eviction and restarts. A counter that is recreated starts from the
-  global sequence.
-- Together these make the checksum (the sum of counters) equal only when no tag was invalidated, so eviction can never make a
-  stale item look valid. Needs a dedicated test.
+- **Each tag holds a random token, not a counter.** Invalidating a tag writes a fresh random integer in `[1, 2^48]`. A missing token
+  (evicted, or lost on restart) is created fresh the same way. Drupal's checksum is the sum of the tokens.
+- Why tokens: the native API has no atomic increment, so counters would race (two concurrent invalidations writing the same value).
+  A fresh random token differs from every earlier one with probability 1 − 2^-48, whoever wins the race. Eviction or a restart
+  therefore can't make a stale item look valid. 2^48 keeps sums of up to 32,768 tags within `int`. Needs a dedicated test.
 - The usual per-request static cache and preloading (`CacheTagsChecksumPreloadInterface`) apply, as in core's checksum service.
 - Works even if some bins stay on the database: their items fail the checksum after a restart and get rebuilt, so nothing stale
   survives.
