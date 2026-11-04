@@ -17,6 +17,10 @@
 #include <pthread.h>
 #include <math.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#ifndef RTLD_DEFAULT
+# define RTLD_DEFAULT ((void *) 0)
+#endif
 
 #define NOCOPY_MAX_DEPTH 64
 #define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
@@ -28,6 +32,11 @@ static zend_long ini_hint = 4096;
 zend_long nocopy_ini_ttl;
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
 bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
+typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
+typedef int (*igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
+static bool use_igbinary; /* nocopy.serializer=igbinary, and igbinary resolved */
+static igb_ser_fn igb_ser;
+static igb_unser_fn igb_unser;
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
 /* The arena block: core header, the value, then the key string and the value's out-of-line parts. */
@@ -37,6 +46,7 @@ typedef struct {
 } php_entry;
 
 #define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
+#define ENTRY_IGBINARY 2   /* with ENTRY_SERIALIZED: written by igbinary */
 /* nocopy_entry.user: nocopy_remember's compute time, ms (XFetch) */
 
 #define KEY_OFF (SALIGN(sizeof(php_entry)) + _ZSTR_HEADER_SIZE) /* the key string comes first after the zval */
@@ -431,8 +441,19 @@ static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 
 /* ---- writes ---- */
 
-static bool serialize_value(zval *val, zval *out)
+static bool serialize_value(zval *val, zval *out, bool *igb)
 {
+	*igb = use_igbinary;
+	if (use_igbinary) {
+		uint8_t *b;
+		size_t len;
+		if (igb_ser(&b, &len, val) != 0 || EG(exception)) {
+			return false;
+		}
+		ZVAL_STRINGL(out, (char *) b, len);
+		efree(b);
+		return true;
+	}
 	smart_str buf = {0};
 	BG(serialize_lock)++;
 	php_serialize_data_t h = php_var_serialize_init();
@@ -457,7 +478,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 	}
 	sizing z = {.keys = *keys, .keep_shared_refs = o->objects == NOCOPY_SERIALIZE_OBJECTS};
 	zval ser;
-	bool serialized = false;
+	bool serialized = false, igb = false;
 	size_status st = size_zval(&z, val, 0);
 	if (st != SIZE_OK) {
 		if (o->objects == NOCOPY_REFUSE_OBJECTS) {
@@ -472,7 +493,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 			php_error_docref(NULL, E_WARNING, "Cannot store resources in apcu cache");
 			return NOCOPY_REFUSED;
 		}
-		if (!serialize_value(val, &ser)) {
+		if (!serialize_value(val, &ser, &igb)) {
 			return NOCOPY_REFUSED;
 		}
 		val = &ser;
@@ -484,7 +505,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 	nocopy_entry *e = nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
 		o->ttl ? o->ttl : nocopy_ini_ttl);
 	if (e) {
-		e->flags = serialized ? ENTRY_SERIALIZED : 0;
+		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : 0;
 		persist_entry(e, key, val, keys);
 	}
 	if (serialized) {
@@ -567,14 +588,20 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 
 /* Unserialize with a fresh state: php_unserialize_with_options() would share the outer
  * unserialize()'s reference table when called re-entrantly (e.g. from Serializable::unserialize). */
-static bool cache_unserialize(zval *rv, const char *buf, size_t len)
+static bool cache_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 {
-	const unsigned char *p = (const unsigned char *) buf;
-	BG(serialize_lock)++; /* forces a private state instead of the outer call's */
-	php_unserialize_data_t h = php_var_unserialize_init();
-	bool ok = php_var_unserialize(rv, &p, p + len, &h);
-	php_var_unserialize_destroy(h);
-	BG(serialize_lock)--;
+	bool ok;
+	if (flags & ENTRY_IGBINARY) {
+		ZVAL_NULL(rv);
+		ok = igb_unser && igb_unser((const uint8_t *) buf, len, rv) == 0; /* no igb_unser: a miss */
+	} else {
+		const unsigned char *p = (const unsigned char *) buf;
+		BG(serialize_lock)++; /* forces a private state instead of the outer call's */
+		php_unserialize_data_t h = php_var_unserialize_init();
+		ok = php_var_unserialize(rv, &p, p + len, &h);
+		php_var_unserialize_destroy(h);
+		BG(serialize_lock)--;
+	}
 	if (!ok || EG(exception)) {
 		zval_ptr_dtor(rv);
 		ZVAL_NULL(rv);
@@ -602,7 +629,7 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 			*delta = e->user;
 		}
 		if (e->flags & ENTRY_SERIALIZED) {
-			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v));
+			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
 		} else if (copy) {
 			nocopy_local *l = local_slot(e, v);
 			if (l && l->e == e && l->seq == e->seq) {
@@ -982,6 +1009,15 @@ static ZEND_INI_MH(OnHint)
 	return SUCCESS;
 }
 
+static ZEND_INI_MH(OnSerializer)
+{
+	use_igbinary = zend_string_equals_literal_ci(new_value, "igbinary");
+	if (!use_igbinary && !zend_string_equals_literal_ci(new_value, "php") && !zend_string_equals_literal_ci(new_value, "default")) {
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: unknown nocopy.serializer \"%s\", using php", ZSTR_VAL(new_value));
+	}
+	return SUCCESS;
+}
+
 static ZEND_INI_MH(OnTtl)
 {
 	nocopy_ini_ttl = zend_ini_parse_quantity_warn(new_value, entry->name);
@@ -998,6 +1034,7 @@ static const zend_ini_entry_def ini_nocopy[] = {
 	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
 	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
 	PHP_INI_ENTRY("nocopy.ttl", "0", PHP_INI_SYSTEM, OnTtl)
+	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	{0}
 };
 
@@ -1045,19 +1082,38 @@ static const zend_ini_entry_def ini_apc[] = {
 	PHP_INI_ENTRY("apc.shm_size", "32M", PHP_INI_SYSTEM, OnAlias)
 	PHP_INI_ENTRY("apc.entries_hint", "4096", PHP_INI_SYSTEM, OnAlias)
 	PHP_INI_ENTRY("apc.ttl", "0", PHP_INI_SYSTEM, OnAlias)
+	PHP_INI_ENTRY("apc.serializer", "php", PHP_INI_SYSTEM, OnAlias)
 	{0}
 };
 
 /* ini_get() of an alias shows what is in effect. */
 static void sync_aliases(void)
 {
-	static const char *const names[] = {"shm_size", "entries_hint", "ttl"};
-	for (int i = 0; i < 3; i++) {
+	static const char *const names[] = {"shm_size", "entries_hint", "ttl", "serializer"};
+	for (int i = 0; i < 4; i++) {
 		char apc[32], canon[32];
 		snprintf(apc, sizeof apc, "apc.%s", names[i]);
 		snprintf(canon, sizeof canon, "nocopy.%s", names[i]);
 		ini_put(apc, zend_ini_str(canon, strlen(canon), false), false);
 	}
+}
+
+/* igbinary's C API, found at runtime: no build dependency. ini_get() then shows the serializer in effect. */
+static void resolve_serializer(void)
+{
+	if (use_igbinary) {
+		zend_module_entry *m = zend_hash_str_find_ptr(&module_registry, ZEND_STRL("igbinary"));
+		void *h = m && m->handle ? m->handle : RTLD_DEFAULT;
+		igb_ser = m ? (igb_ser_fn) DL_FETCH_SYMBOL(h, "igbinary_serialize") : NULL;
+		igb_unser = m ? (igb_unser_fn) DL_FETCH_SYMBOL(h, "igbinary_unserialize") : NULL;
+		if (!igb_ser || !igb_unser) {
+			php_error_docref(NULL, E_CORE_WARNING, "nocopy: igbinary is not loaded, using nocopy.serializer=php");
+			use_igbinary = false;
+		}
+	}
+	zend_string *v = zend_string_init(use_igbinary ? "igbinary" : "php", use_igbinary ? 8 : 3, 1);
+	ini_put("nocopy.serializer", v, false);
+	zend_string_release_ex(v, 1);
 }
 
 static void atfork_child(void)
@@ -1096,6 +1152,9 @@ PHP_MINIT_FUNCTION(nocopy)
 	zend_register_ini_entries(ini_nocopy, module_number);
 	if (apcu_compat) {
 		zend_register_ini_entries(ini_apc, module_number);
+	}
+	resolve_serializer();
+	if (apcu_compat) {
 		sync_aliases();
 	}
 	nocopy_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
@@ -1187,8 +1246,15 @@ PHP_MINFO_FUNCTION(nocopy)
 	DISPLAY_INI_ENTRIES();
 }
 
+static const zend_module_dep nocopy_deps[] = {
+	ZEND_MOD_OPTIONAL("igbinary") /* starts first, so its symbols resolve in our MINIT */
+	ZEND_MOD_END
+};
+
 zend_module_entry nocopy_module_entry = {
-	STANDARD_MODULE_HEADER,
+	STANDARD_MODULE_HEADER_EX,
+	NULL,
+	nocopy_deps,
 	"nocopy",
 	ext_functions,
 	PHP_MINIT(nocopy),

@@ -5,5 +5,5 @@ ARG PHP=8.5
 FROM php:${PHP}-fpm
 RUN apt-get update && apt-get install -y --no-install-recommends nginx apache2-utils curl && rm -rf /var/lib/apt/lists/* \
  && docker-php-ext-install pcntl \
- && pecl install apcu && rm -f /usr/local/etc/php/conf.d/*apcu* \
+ && pecl install apcu igbinary && rm -f /usr/local/etc/php/conf.d/*apcu* /usr/local/etc/php/conf.d/*igbinary* \
  && echo "apcu: $(find /usr/local/lib/php/extensions -name apcu.so)"
