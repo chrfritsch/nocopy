@@ -1,100 +1,200 @@
+<div align="center">
+
 # nocopy
 
-New here? Read `HANDOVER.md` (state, rebuild steps, results, next steps), then `ARCHITECTURE.md`.
+**A shared-memory cache for PHP that hands out cached arrays without copying them.**
 
-A zero-copy, shared-memory cache for PHP with an `apcu_*` compatibility layer.
+A drop-in replacement for APCu (`apcu_*`, `APCUIterator`, `apc.*` INI) with a lock-free read path,
+segment-based eviction, and stampede-safe `nocopy_remember()`.
 
-Values live in one `mmap` arena shared by all forked workers (or threads, ZTS). Arrays and strings are stored as
-opcache-style immutable structures, so `apcu_fetch()` returns a pointer into shared memory instead
-of copying or unserializing. Readers take no locks. The arena is a log of segments (64 KB-2 MB) split into fixed per-shard slices: writes append,
-garbage is compacted forward, a full cache evicts its oldest entries but keeps the ones read since (Segcache-style merge), and a segment is reused once no worker pins it.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![PHP 8.3 | 8.4 | 8.5](https://img.shields.io/badge/PHP-8.3%20%7C%208.4%20%7C%208.5-777bb4.svg)
+![NTS and ZTS](https://img.shields.io/badge/NTS%20%2B%20ZTS-FrankenPHP-555.svg)
+![Linux amd64 | arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-555.svg)
 
-## Build
+</div>
+
+```php
+apcu_store('products', $rows);      // 1,000 rows
+$rows = apcu_fetch('products');     // APCu: ~200 µs to rebuild the array. nocopy: ~13 ns, any size.
+```
+
+> **Status:** works and is tested in CI, not released yet. No PECL/PIE package and no Packagist entry yet: build from source.
+
+## Why
+
+APCu copies every value out of shared memory on each fetch: arrays are rebuilt element by element (or unserialized),
+so the cost grows with the size of what you cache. Readers also take a lock, so throughput drops as workers are added.
+
+nocopy stores arrays and strings as **opcache-style immutable structures** in one `mmap` arena that all php-fpm workers
+(or ZTS threads) share. `apcu_fetch()` then returns a pointer straight into shared memory, with no copy, no unserialize and no lock.
+Per-worker pins keep that memory alive until the request ends, so a fetched value can never point at freed memory.
+
+Measured on Linux (Docker, arm64, PHP 8.5, release builds; details and method in [`HANDOVER.md`](HANDOVER.md)):
+
+| | APCu | nocopy (copy) | nocopy (zero-copy) |
+|---|---:|---:|---:|
+| fetch int / 100 B string | 28.6 / 34.9 ns | 15.5 / 19.9 ns | 13.0 / 13.0 ns |
+| fetch array, 1k rows | 202 µs | 91 µs | **13 ns** |
+| store int / 100 B string | 55.7 / 81.8 ns | 29.3 / 34.6 ns | same as copy |
+| parallel fetch int, 8 workers | 3.8 M ops/s | 154 M ops/s | **221 M ops/s** |
+| Symfony app, cache-heavy page (php-fpm) | 4,116 req/s | 4,553 req/s | **14,231 req/s** |
+
+Pages that barely touch the cache gain nothing. The gain appears where requests read large cached arrays.
+
+## Features
+
+- **APCu-compatible.** `apcu_*`, `APCUIterator`, the `APC_*` constants and the `apc.*` INI names. Passes APCu's own test suite except three tests for documented non-goals ([differences](#differences-from-apcu)).
+- **Zero-copy reads** under php-fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode. Long-running workers and the CLI get a safe **copy mode** that still reuses private copies of unchanged entries.
+- **Lock-free reads, sharded writes.** Up to 8 shards with their own locks. A writer killed with `kill -9` mid-write is detected and its shard repaired.
+- **Smarter eviction when full.** APCu wipes the whole cache. nocopy evicts its oldest segments and keeps entries read since they were written, using Segcache-style merging with a ghost list for keys that return.
+- **Stampede protection.** `nocopy_remember()` and `apcu_entry()` run the callback once per key across all workers. `nocopy_remember()` also refreshes early via XFetch.
+- **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
+
+## Quick start
+
+Requires PHP 8.3+ with `phpize` (e.g. the `php-dev` package), a C compiler, and Linux (CI-tested on amd64 and arm64).
 
 ```sh
+git clone <this repository> nocopy && cd nocopy
 phpize && ./configure && make
-php -d extension=modules/nocopy.so -d apc.enable_cli=1 -r 'apcu_store("a", [1,2,3]); var_dump(apcu_fetch("a"));'
+php -d extension=$PWD/modules/nocopy.so -d apc.enable_cli=1 \
+    -r 'apcu_store("a", [1, 2, 3]); var_dump(apcu_fetch("a"));'
 ```
 
-Tested on PHP 8.3, 8.4, 8.5 (Linux arm64, CI also amd64), NTS and ZTS (8.4, incl. FrankenPHP classic and worker mode). Linux in Docker: `docker/` (`test.sh`, `stress.sh`, `bench.sh`, `ab.sh`, `fpm-bench.sh`, `frankenphp.sh`, `Dockerfile.zts`).
-Loads next to real APCu only with `nocopy.apcu_compat=0` (nocopy switches to it by itself, with a startup warning, when APCu is loaded): configure it with `nocopy.*` and the same php.ini works either way.
+To enable it for your server, load it in `php.ini` (or a `conf.d` file) **instead of** APCu:
 
-## Test
+```ini
+extension=/path/to/nocopy/modules/nocopy.so
+nocopy.shm_size=128M
+```
+
+Existing `apcu_*` code and `apc.shm_size` / `apc.ttl` / `apc.entries_hint` settings keep working.
+
+## Usage
+
+### Native API
+
+```php
+nocopy_put('config', $config, ttl: 300);         // throws on objects unless $serialize: true
+$config = nocopy_get('config', $hit);            // $hit tells a miss from a stored null/false
+nocopy_delete('config');
+
+// Compute once across all workers, refresh shortly before expiry
+$report = nocopy_remember('report', fn (string $key) => buildReport(), ttl: 60);
+
+print_r(nocopy_stats());                         // hits, misses, evicted, expired, expunges, used, …
+```
+
+`nocopy_remember($key, $callback, $ttl = 0, $beta = 1.0)`: on a miss, the first worker takes a lease and runs the callback.
+The others wait for its value. A dead lease holder is detected, a stuck one is ignored after 30 s, and a recursive call on the same key does not wait.
+Before the TTL ends, one worker refreshes early ([XFetch](https://doi.org/10.14778/2757807.2757813), Vattani et al., VLDB 2015) with a probability that rises
+as expiry nears, scaled by the callback's measured run time × `$beta`. The others keep getting the current value. `$beta = 0` turns this off.
+
+### Symfony
+
+Symfony's built-in `cache.adapter.apcu` serializes values before they reach the extension, which removes the zero-copy benefit.
+The bundle in [`symfony/`](symfony) (`chrfritsch/nocopy-bundle`, Symfony 6.4 / 7.x / 8.x) adds a pool that stores values unserialized.
+Until it is on Packagist, install it from a checkout:
 
 ```sh
-make test TESTS=tests                          # own suite (debug PHP build recommended: poisons freed memory)
-PHP=... NOCOPY_SO=$PWD/modules/nocopy.so scripts/apcu-suite.sh   # APCu's suite; expect 59/61
-tests/c/run.sh                                 # the arena alone, from 8 threads, plain and ThreadSanitizer (Linux)
+composer config repositories.nocopy path /path/to/nocopy/symfony
+composer require chrfritsch/nocopy-bundle:@dev
 ```
 
-## Benchmark (use a release PHP and release-built extensions)
-
-```sh
-PHP=... NOCOPY_SO=... APCU_SO=... bench/all.sh
-```
-
-## Modes
-
-| INI | meaning |
-|---|---|
-| `nocopy.shm_size` (32M), `nocopy.ttl` (0) | as APCu's `apc.shm_size`, `apc.ttl` |
-| `nocopy.entries_hint` (4096) | sizes the slot table, which never grows: ~2 slots per hinted entry, at least one per 256 bytes of `shm_size`. Raise it for many entries under ~300 bytes, or the cache evicts before its memory is full |
-| `apc.shm_size`, `apc.ttl`, `apc.entries_hint` | aliases of the `nocopy.*` names (APCu layer only): used when set and the `nocopy.*` name is not; both set: `nocopy.*` wins, with a startup warning. `ini_get()` of either shows the value in effect |
-| `apc.enabled`, `apc.enable_cli` | as in APCu; they switch the `apcu_*` functions, not `nocopy_*` |
-| `nocopy.apcu_compat=1` (default) | `apcu_*`, `APCUIterator`, `APC_*` constants and the `apc.*` INI. `0`: only `nocopy_*`; real APCu can load too |
-| `nocopy.request_scope=auto` (default) | zero-copy for the whole request under fpm/cgi/apache/litespeed/FrankenPHP (classic); worker mode (below) under CLI, FrankenPHP worker scripts and others |
-| `nocopy.request_scope=1` | zero-copy for the whole request, also under CLI. The segments handed out stay pinned until the request ends: a long-running script holds every segment it read, so use `0` there |
-| `nocopy.request_scope=0` | worker mode: fetch always returns a private copy |
-| `nocopy.local_size` (8M) | copy mode keeps the private copies of arrays and strings (from ~0.5 KB) fetched twice for the rest of the request (a FrankenPHP worker or CLI script: its whole run) and hands the same one out again while the entry is unchanged; counts against `memory_limit`; over it everything is dropped. `0`: off |
-| FrankenPHP worker | copy mode from its first `frankenphp_handle_request()` on, whatever `nocopy.request_scope` says |
-
-A fetched value can never outlive the memory it points to: zero-copy is offered only where the request ends.
-
-Extra functions: `nocopy_put/get/delete`, `nocopy_remember`, `nocopy_stats`. `nocopy_put()` throws on objects unless its 4th argument `$serialize` is true.
-
-`nocopy_remember($key, $callback, $ttl = 0, $beta = 1.0)` fetches, or runs `$callback($key)` and stores its result (objects serialized).
-Concurrent misses run the callback once: the first worker takes a lease, the others wait for its value (a dead holder is detected, a stuck one is ignored after 30 s, a recursive call on the same key does not wait).
-Before the TTL ends it refreshes early by XFetch (Vattani et al., VLDB 2015): with probability rising as expiry nears, scaled by the callback's measured run time × `$beta`; one worker refreshes, the others keep getting the current value. `$beta = 0` turns that off.
-`apcu_entry` is single-flight the same way (per key, not the whole cache like APCu), without early refresh.
-
-## Symfony
-
-Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Chrfritsch\NocopyBundle\NocopyBundle`) adds `cache.adapter.nocopy`: `NocopyAdapter` on `nocopy_*`, no marshaller, so it also works with `nocopy.apcu_compat=0` and next to real APCu:
+Register `Chrfritsch\NocopyBundle\NocopyBundle` in `config/bundles.php`, then:
 
 ```yaml
+# config/packages/cache.yaml
 framework:
     cache:
         app: cache.adapter.nocopy
 ```
 
-About 3.5x requests/s on cache-heavy endpoints vs APCu with the same pool, 4.8x vs Symfony's default APCu pool (Linux, php-fpm; details in `HANDOVER.md`).
-`clear()` bumps a namespace version (no prefix delete in `nocopy_*`): old entries stay until eviction drops them, unread ones first. The pool empties on each new container build, like APCu's.
-`cache.system` already stores values unserialized when the APCu layer is on. Check: `php -d extension=nocopy.so -d zend.assertions=1 symfony/tests/smoke.php <dir with vendor/>`.
+The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` and next to real APCu.
+`clear()` bumps a namespace version instead of deleting keys, and old entries leave through normal eviction.
 
-## When the cache is full
+## Configuration
 
-Unlike APCu, which wipes the whole cache, nocopy merges its oldest segments: entries read since they were written survive, the rest is evicted (a few hundred at a time); `nocopy_stats()['expunges']` counts the rounds. `evicted` / `expired` count the entries dropped by merge / by their TTL; with `hits` / `misses` they show whether `apc.shm_size` is too small. A key written again soon after it was evicted starts as if read (`ghost_hits`), so keys that recur just beyond the cache size are kept over keys used once.
-The arena is split into up to 8 shards of at least 8 MB each (1 shard up to 8 MB, 4 at the default 32 MB); one entry must fit in a shard, larger ones are refused.
+All settings are `PHP_INI_SYSTEM` (php.ini only).
 
-## APCu: same API, not the same layout
+| Setting | Default | Meaning |
+|---|---|---|
+| `nocopy.shm_size` | `32M` | Arena size. Alias: `apc.shm_size` |
+| `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias: `apc.ttl` |
+| `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias: `apc.entries_hint` |
+| `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
+| `nocopy.local_size` | `8M` | Copy mode only: keeps private copies of arrays and strings (≥ 512 B) fetched twice and hands them out again while the entry is unchanged. Counts against `memory_limit`. `0` = off |
+| `nocopy.apcu_compat` | `1` | Registers `apcu_*`, `APCUIterator`, `APC_*` and `apc.*`. `0`: only `nocopy_*`, so real APCu can be loaded too. If APCu is already loaded, nocopy switches to `0` itself and logs a startup warning |
+| `apc.enabled`, `apc.enable_cli` | `1`, `0` | As in APCu. These switch the `apcu_*` functions, not `nocopy_*` |
 
-`apcu_*` calls behave like APCu's (APCu's own .phpt suite: all but `apc54_014`, `preload_path`, and `apcu_sma_info`, see below).
-What reports or depends on APCu's memory layout and bookkeeping differs, by design:
+If both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
+FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_request()`, whatever `request_scope` says.
+
+## How it works
+
+```mermaid
+flowchart LR
+    W1[php-fpm worker] -- "fetch: pointer, no lock" --> A
+    W2[php-fpm worker] -- "store: shard lock" --> A
+    subgraph A["mmap arena (shared by all workers)"]
+        S1["shard 1: slot table + segments"]
+        S2["shard 2 … 8"]
+    end
+```
+
+- **Arena:** one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created at startup, so every forked worker sees it at the same address.
+- **Segments:** writes append to 64 KB–2 MB segments, bucketed by TTL. Expired entries are swept a few at a time on each write.
+- **Pins:** each worker marks the segments it holds values from. A segment is reused only when no worker pins it, so zero-copy values stay valid until the request ends.
+- **Merge:** when a shard is full, sparse segments are compacted. Failing that, the oldest are merged: recently read entries move forward and the rest are evicted, a few hundred at a time.
+
+The full design, including invariants and failure handling, is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Differences from APCu
+
+The API behaves the same. What depends on APCu's internal layout differs by design:
 
 | | APCu | nocopy |
 |---|---|---|
-| cache full | wipes everything | merges its oldest segments, keeps what was read since (`expunges` counts the rounds) |
-| `apcu_sma_info()` | one segment, its free blocks | one "segment" per shard (`num_seg` = shards, `seg_size` = slice), free runs per slice: an entry only fits into its own shard |
-| `num_hits` (per entry), `access_time`, `ref_count` | counted | 0, creation time, 0: a shared write per read would cost more than the counters are worth |
-| `APCUIterator`, `apcu_cache_info()['cache_list']` | under the cache lock | lock-free: under concurrent writes an entry may be skipped or seen twice |
-| `apc.serializer` | used for every value | ignored: arrays and scalars are stored as PHP structures, objects with PHP's `serialize()` |
+| Cache full | wipes everything | evicts oldest segments, keeps recently read entries |
+| `apcu_entry()` | callback runs under the global cache lock | single-flight per key, other keys stay writable |
+| `apcu_sma_info()` | one segment | one "segment" per shard (an entry fits only in its own shard) |
+| Per-entry `num_hits`, `access_time`, `ref_count` | counted | `0`, creation time, `0` (no shared write per read) |
+| `APCUIterator`, `cache_list` | under the cache lock | lock-free: under concurrent writes an entry may be skipped or seen twice |
+| `apc.serializer` | used for every value | ignored: arrays/scalars stored natively, objects via `serialize()` |
 | `apc.preload_path`, `apc.slam_defense`, `apc.gc_ttl`, `apc.mmap_file_mask` | supported | ignored |
-| `apcu_entry()` | runs the callback under the cache lock | single-flight per key: other keys stay writable meanwhile |
 
-## Known gaps
+Other limits: the arena is split into up to 8 shards of at least 8 MB each, and a single entry must fit into one shard.
+Under ZTS, nocopy is tested with `parallel` and FrankenPHP, not with mod_php under a threaded MPM.
 
-ZTS is tested with `parallel` and FrankenPHP only (not mod_php with a threaded MPM).
+## Development
+
+```sh
+phpize && ./configure && make
+make test TESTS=tests                                            # .phpt suite (a debug PHP build catches more)
+PHP=php NOCOPY_SO=$PWD/modules/nocopy.so scripts/apcu-suite.sh   # APCu's own suite against nocopy
+tests/c/run.sh                                                   # arena alone, 8 threads, plain + ThreadSanitizer
+```
+
+The Linux toolchain used by CI lives in [`docker/`](docker):
+
+```sh
+docker build --build-arg PHP=8.5 -t nocopy-linux docker
+docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh      # build + test suite
+docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30 # race stress loop
+```
+
+Benchmarks against APCu need release builds of PHP and both extensions: `PHP=… NOCOPY_SO=… APCU_SO=… bench/all.sh`.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) covers PHP 8.3/8.4/8.5 on amd64 and arm64, ZTS 8.4, FrankenPHP and Symfony 6.4/7.4/8.x.
+
+For project state, measurement history and next steps, see [`HANDOVER.md`](HANDOVER.md).
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please include the PHP version, SAPI (fpm, FrankenPHP, CLI…), NTS/ZTS and the output of `nocopy_stats()`.
+Changes to locking or eviction should pass the stress loops (`docker/stress.sh`, `tests/c/run.sh`). See the invariants in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## License
 
-MIT, see `LICENSE`.
+[MIT](LICENSE) © 2026 Christian Fritsch.
+Eviction design inspired by [Segcache](https://www.usenix.org/conference/nsdi21/presentation/yang-juncheng) (Yang et al., NSDI 2021); API compatible with [APCu](https://github.com/krakjoe/apcu).
