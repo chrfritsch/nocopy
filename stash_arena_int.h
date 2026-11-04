@@ -9,7 +9,7 @@ extern size_t stash_seg_size;
 extern uint32_t *stash_ghosts[STASH_MAX_SHARDS]; /* per shard, as many as slots: tags of recently evicted keys (S3-FIFO ghost) */
 
 static inline char *seg_start(uint32_t s) { return stash_seg_base + ((size_t) s << stash_seg_shift); }
-static inline stash_slot slot_make(const stash_entry *e) { return (e->h << 32) | (uint32_t) (((const char *) e - (const char *) stash_a) >> 3); }
+static inline stash_slot slot_make(const stash_entry *e) { return (uint64_t) stash_slot_tag(e->h) << 32 | (uint32_t) (((const char *) e - (const char *) stash_a) >> 3); }
 static inline stash_slot *tab_of(const stash_shard *sh) { return stash_tabs[sh->idx]; }
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits

@@ -7,20 +7,34 @@ pcntl
 apc.shm_size=4M
 --FILE--
 <?php
-// fillers first, then the stable keys: they land behind the fillers' probe runs (16k slots, ~60% full)
-for ($i = 0; $i < 6000; $i++) stash_put("fill$i", $i);
-for ($i = 0; $i < 3500; $i++) stash_put("s$i", $i % 2 ? $i : "v$i");
+// Home slot of a key in this 16k-slot table: mirrors stash_slot_tag() (bits below 2^46 suffice).
+function home(string $k): int {
+    $m = (1 << 46) - 1; $h = 5381;
+    for ($i = 0, $n = strlen($k); $i < $n; $i++) $h = ($h * 33 + ord($k[$i])) & $m;
+    $k0 = 0x2E3D27D4EB4F & 0x7FFFFF; $k1 = 0x2E3D27D4EB4F >> 23;
+    $a0 = $h & 0x7FFFFF; $a1 = $h >> 23;
+    return ((($a0 * $k0 + ((($a0 * $k1 + $a1 * $k0) & 0x7FFFFF) << 23)) & $m) >> 32) & 16383;
+}
+// keys homed in the first half only: one long probe run, so shifts move keys far under the readers
+$pick = function (string $p, int $want): array {
+    for ($r = [], $n = 0; count($r) < $want; $n++) if (home("$p$n") < 8192) $r[] = "$p$n";
+    return $r;
+};
+$fill = $pick("fill", 6000);
+$stable = $pick("s", 3500);
+foreach ($fill as $i => $k) stash_put($k, $i);
+foreach ($stable as $i => $k) stash_put($k, $i % 2 ? $i : "v$i");
 $pids = [];
 for ($w = 0; $w < 8; $w++) {
     $pid = pcntl_fork();
     if ($pid === 0) {
         $bad = 0;
         if ($w < 4) { // deleting fillers moves the stable keys behind them back, one shift at a time
-            for ($i = $w; $i < 6000; $i += 4) { stash_delete("fill$i"); for ($j = 0; $j < 20; $j++) stash_put("tmp$w", $j); }
+            for ($i = $w; $i < 6000; $i += 4) { stash_delete($fill[$i]); for ($j = 0; $j < 20; $j++) stash_put("tmp$w", $j); }
             stash_put("done$w", 1);
         } else {
             $done = fn() => stash_get("done0") && stash_get("done1") && stash_get("done2") && stash_get("done3");
-            while (!$done()) for ($i = 0; $i < 3500; $i++) $bad += stash_get("s$i") !== ($i % 2 ? $i : "v$i");
+            while (!$done()) foreach ($stable as $i => $k) $bad += stash_get($k) !== ($i % 2 ? $i : "v$i");
         }
         exit($bad ? 1 : 0);
     }

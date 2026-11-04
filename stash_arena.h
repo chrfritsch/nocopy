@@ -35,7 +35,7 @@ typedef struct stash_entry {
 
 _Static_assert(sizeof(stash_entry) == 48, "stash_entry grew");
 
-/* low 32 bits: arena offset / 8, high 32: low 32 bits of the hash (home slot + probe filter); 0 empty */
+/* low 32 bits: arena offset / 8, high 32: stash_slot_tag(hash) (its low bits are the home slot; probe filter); 0 empty */
 typedef uint64_t stash_slot;
 
 enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT };
@@ -183,9 +183,11 @@ uint32_t stash_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max)
 
 static inline const char *stash_key(const stash_entry *e) { return (const char *) e + e->koff; }
 static inline uint32_t stash_seg_of(const void *p) { return (uint32_t) (((const char *) p - stash_seg_base) >> stash_seg_shift); }
-/* Fibonacci mix of the high bits: the low ones pick the slot */
+/* Fibonacci mix, top bits: the shard */
 static inline uint32_t stash_shard_idx(uint64_t h) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask; }
 static inline stash_shard *stash_shard_of(uint64_t h) { return &stash_a->shards[stash_shard_idx(h)]; }
+/* Mixed: raw DJB low bits of `prefix.N` keys built probe runs of hundreds. Own multiplier keeps it independent of the shard; tests/018 mirrors it. */
+static inline uint32_t stash_slot_tag(uint64_t h) { return (uint32_t) ((h * 0xC2B2AE3D27D4EB4FULL) >> 32); }
 static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
 static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
@@ -302,11 +304,11 @@ static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *
 	uint32_t si = stash_shard_idx(h); /* not sh - shards: that divides by sizeof(stash_shard) */
 	stash_shard *sh = &stash_a->shards[si];
 	const stash_slot *t = stash_tabs[si];
-	uint32_t m = stash_tab_mask, tag = (uint32_t) h;
+	uint32_t m = stash_tab_mask, tag = stash_slot_tag(h);
 	for (;;) {
 	retry:;
 		uint32_t seq = __atomic_load_n(&sh->mseq, __ATOMIC_ACQUIRE);
-		for (uint32_t n = 0, i = h & m; n <= m; n++, i = (i + 1) & m) {
+		for (uint32_t n = 0, i = tag & m; n <= m; n++, i = (i + 1) & m) {
 			stash_slot s = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
 			if (!s) {
 				break;

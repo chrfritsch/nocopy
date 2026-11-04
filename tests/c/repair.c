@@ -47,12 +47,12 @@ static uint64_t dead_owner(void) /* the id of a process that has exited and been
 	return (uint64_t) (uint32_t) p | (uint64_t) 1 << 32;
 }
 
-static int bad_slots(stash_shard *sh) /* slots whose tag is not their entry's hash */
+static int bad_slots(stash_shard *sh) /* slots whose tag is not their entry's */
 {
 	stash_slot *t = tab_of(sh);
 	int n = 0;
 	for (uint32_t s = 0; s <= stash_tab_mask; s++) {
-		n += t[s] && (uint32_t) stash_slot_entry(t[s])->h != (uint32_t) (t[s] >> 32);
+		n += t[s] && stash_slot_tag(stash_slot_entry(t[s])->h) != (uint32_t) (t[s] >> 32);
 	}
 	return n;
 }
@@ -82,6 +82,7 @@ int main(void)
 	stash_slot *t = tab_of(sh);
 	uint32_t m = stash_tab_mask, i = 0, j = 0;
 	for (;; i++) {
+		assert(i < m); /* needs one displaced key */
 		j = (i + 1) & m;
 		if (t[i] && t[j] && (((j - ((uint32_t) (t[j] >> 32) & m)) & m) >= 1)) {
 			break; /* t[j] is not at home: deleting t[i] moves it back */

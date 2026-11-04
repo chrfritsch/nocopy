@@ -300,9 +300,9 @@ stash_entry *stash_seg_alloc(stash_shard *sh, size_t total, bool reserve, int b,
 static inline __attribute__((always_inline)) stash_slot *locate(stash_shard *sh, uint64_t h, const char *k, uint32_t klen, stash_entry **found)
 {
 	stash_slot *t = tab_of(sh);
-	uint32_t tag = (uint32_t) h;
+	uint32_t tag = stash_slot_tag(h);
 	*found = NULL;
-	for (uint32_t i = h & stash_tab_mask;; i = (i + 1) & stash_tab_mask) { /* never full: nlive <= cap < slots */
+	for (uint32_t i = tag & stash_tab_mask;; i = (i + 1) & stash_tab_mask) { /* never full: nlive <= cap < slots */
 		stash_slot s = t[i];
 		if (!s) {
 			return &t[i];
@@ -349,7 +349,7 @@ static void slot_remove(stash_shard *sh, stash_slot *p)
 stash_slot *stash_slot_of(stash_shard *sh, const stash_entry *e)
 {
 	stash_slot *t = tab_of(sh);
-	for (uint32_t i = e->h & stash_tab_mask;; i = (i + 1) & stash_tab_mask) {
+	for (uint32_t i = stash_slot_tag(e->h) & stash_tab_mask;; i = (i + 1) & stash_tab_mask) {
 		if (!t[i]) {
 			return NULL;
 		}

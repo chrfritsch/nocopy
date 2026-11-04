@@ -16,7 +16,8 @@ Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so fo
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
   Equal array keys are stored once per entry (rows of a result set share their column names): a 256-slot table by hash (`STASH_G(keys)`, `key_slot`/`key_hit`) remembers this value's keys; a miss overwrites the slot.
   Its decisions depend only on the sequence of key contents, so sizing (`size_zval`) and persisting (`persist_*`) dedupe exactly alike and agree on the size.
-- Slot: 64 bits = `{ offset/8 (32 bit), low 32 bits of the hash }`; 0 empty. The low bits are the home slot and the probe filter: a probe compares them first and only dereferences on a match.
+- Slot: 64 bits = `{ offset/8 (32 bit), stash_slot_tag(hash) }`; 0 empty. The tag is the hash times an odd constant, top 32 bits; its low bits are the home slot, all 32 the probe filter: a probe compares them first and only dereferences on a match.
+  Not the raw hash: PHP's DJBX33A gives keys like `prefix.N` regular low bits, and as home slots they formed probe runs of hundreds at 3/4 fill (simulated: hit 215 / miss 1247 probes vs 2 / 8).
 
 ## Shards: fixed slices
 
