@@ -1,9 +1,9 @@
 #!/bin/sh
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, five cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
-# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all"
+# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
-CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis nocopy-valkey"}
+CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"}
 B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
@@ -42,7 +42,9 @@ if [ "$($DRUSH sqlq 'select count(*) from node')" -lt 1000 ]; then
   $DRUSH devel-generate:content 2000 --kill --bundles=article,page 2>&1 | tail -1
   $DRUSH devel-generate:menus 2 30 2>&1 | tail -1
 fi
-[ -d $D/web/modules/contrib/redis ] || (cd $D && composer require -q drupal/redis) || exit 1
+[ -d /site/redis1 ] || { (cd $D && composer require -q drupal/redis:1.11.0) && cp -r $D/web/modules/contrib/redis /site/redis1; } || exit 1
+# drupal/redis 2.x (alpha, so not what composer picks): swapped in for the redis2 config only
+[ -d /site/redis2 ] || { mkdir -p /tmp/r2 && curl -sL https://ftp.drupal.org/files/projects/redis-2.0.0-alpha2.tar.gz | tar xz -C /tmp/r2 && mv /tmp/r2/redis /site/redis2; } || exit 1
 $DRUSH en redis -y >/dev/null 2>&1   # its services; the bins only use it in the redis config
 nodes=$($DRUSH sqlq 'select count(*) from node'); echo "nodes: $nodes"
 [ "$nodes" -ge 1000 ] || { echo "content generation failed"; exit 1; }
@@ -96,7 +98,7 @@ nocopy.serializer=igbinary"; SET=fastroutes ;;
     nocopy-all) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary"; SET=all ;;
-    redis) EXT="extension=$APCU
+    redis|redis2) EXT="extension=$APCU
 extension=redis"; SET=redis ;;
     nocopy-valkey) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
@@ -104,6 +106,7 @@ nocopy.serializer=igbinary
 nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   esac
   echo "== $cfg"
+  rm -rf $D/web/modules/contrib/redis && cp -r /site/redis$([ $cfg = redis2 ] && echo 2 || echo 1) $D/web/modules/contrib/redis
   fpm_stop 2>/dev/null
   printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = %s\naccess.log = /dev/null\n' "$W" > /usr/local/etc/php-fpm.d/zz-bench.conf
   printf '%s\n' "$EXT" "apc.shm_size=256M" "apc.entries_hint=50000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" "opcache.memory_consumption=256" > /usr/local/etc/php/conf.d/zz-bench.ini
@@ -141,7 +144,7 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   cat /out/cli.tsv.$cfg
 
   # shared configs: a second server joins (first requests on an empty local memory), then a web save on A must show on B
-  case $cfg in redis|nocopy-valkey)
+  case $cfg in redis|redis2|nocopy-valkey)
     fpmb_start
     for i in $(seq 30); do curl -s -o /dev/null -b /tmp/ck -w '%{time_total}\n' "$B2/"; done > /tmp/b.txt
     /src/bench/drupal/editor.sh "$B" /tmp/ck /tmp/ed1.txt "$NODE" >/dev/null 2>&1 || echo "SAVE ON A FAILED ($cfg)"
