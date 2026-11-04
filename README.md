@@ -47,15 +47,18 @@ Lowest–highest of 3 full runs, config order rotated between runs:
 
 | | stock (DB + APCu) | stock + igbinary | nocopy fast layer + routes | nocopy, all bins |
 |---|---:|---:|---:|---:|
-| anonymous `/` (page cache) | 2,950–3,954 req/s | 3,761–4,143 req/s | 3,594–4,075 req/s | **10,363–11,229 req/s** |
-| logged-in node page | 715–754 req/s | 590–780 req/s | 698–757 req/s | **897–1,085 req/s** |
-| logged-in front page | 654–837 req/s | 790–828 req/s | 762–800 req/s | **1,016–1,209 req/s** |
-| editor: save / edit form / view after save (p50) | 33–40 / 53–58 / 43–51 ms | 32–43 / 49–64 / 42–56 ms | 32–35 / 55–56 / 44–45 ms | **24–25 / 38 / 22–24 ms** |
-| readers served during editing | 424–483 req/s | 416–499 req/s | 494–516 req/s | **665–684 req/s** |
-| database queries per logged-in request | 29–31 | 29–31 | 29–31 | **7** |
+| anonymous `/` (page cache) | 4,376–5,478 req/s | 3,840–5,062 req/s | 3,784–5,383 req/s | **8,679–9,934 req/s** |
+| logged-in node page | 798–915 req/s | 815–893 req/s | 979–995 req/s | **1,191–1,313 req/s** |
+| logged-in front page | 966–1,031 req/s | 904–1,071 req/s | 876–1,035 req/s | **1,051–1,483 req/s** |
+| editor: save / edit form / view after save (p50) | 27–31 / 44–48 / 36–42 ms | 27–30 / 43–49 / 37–41 ms | 26–29 / 43–47 / 35–38 ms | **20–22 / 32–33 / 19–21 ms** |
+| readers served during editing | 530–598 req/s | 562–625 req/s | 598–651 req/s | **752–859 req/s** |
+| database statements per logged-in request | 29–31 | 29–31 | 30–32 | **8** |
+| database statements per anonymous request | 7 | 7 | 7 | **5** |
+
+Statements include connection setup; with nocopy for all bins, an anonymous page cache hit sends one query, the journal check.
 
 The fast layer (`ChainedFastBackend` with nocopy instead of APCu, here with `routes` added to `bootstrap`, `config`, `discovery`) is the setup
-that also works on several web servers. It lands in the stock range, with or without `routes` (726–763 req/s logged-in node page without):
+that also works on several web servers. It stays close to stock, with or without `routes` (806–1,001 req/s logged-in node page without):
 chainedfast still asks the database for each bin's last write on every request, and those bins were never the bottleneck. The gain
 comes from moving all bins and the cache tags off the database, which needs a single server. Drush and cron changes reach php-fpm through
 a journal table ([details](drupal#trade-offs)).

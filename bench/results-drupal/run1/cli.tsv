@@ -1,0 +1,6 @@
+config	anonymous_sees_cli_save	logged_in_sees_cli_save
+nocopy-all	2	3
+nocopy-fast	2	3
+nocopy-fast-routes	2	3
+stock	2	3
+stock-igbinary	2	3
