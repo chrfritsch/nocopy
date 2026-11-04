@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\nocopy\Kernel;
 
+use Drupal\Core\DependencyInjection\ContainerBuilder;
 use Drupal\Core\Render\Markup;
 use Drupal\KernelTests\Core\Cache\GenericCacheBackendUnitTestBase;
 use Drupal\nocopy\Cache\NocopyBackend;
+use Drupal\nocopy\Cache\NocopyCacheTagsChecksum;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
@@ -21,9 +23,21 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
 
   protected string $prefix;
 
+  // The generic suite (tags, $allow_invalid) then runs against nocopy tag tokens.
+  public function register(ContainerBuilder $container) {
+    parent::register($container);
+    $container->register('cache_tags.invalidator.checksum', NocopyCacheTagsChecksum::class)
+      ->setArguments(['%app.root%', '%site.path%'])
+      ->addTag('cache_tags_invalidator');
+  }
+
   protected function createCacheBackend($bin) {
     $this->prefix ??= 'test' . $this->randomMachineName();
     return new NocopyBackend($bin, $this->prefix, \Drupal::service('cache_tags.invalidator.checksum'), \Drupal::service('datetime.time'));
+  }
+
+  public function testGenericSuiteUsesNocopyTags(): void {
+    $this->assertInstanceOf(NocopyCacheTagsChecksum::class, \Drupal::service('cache_tags.invalidator.checksum'));
   }
 
   public function testObjectsRoundTrip(): void {

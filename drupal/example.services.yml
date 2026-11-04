@@ -1,0 +1,8 @@
+# Cache tag checksums in nocopy. Add to settings.php:
+#   $settings['container_yamls'][] = $app_root . '/modules/contrib/nocopy/example.services.yml';
+services:
+  cache_tags.invalidator.checksum:
+    class: Drupal\nocopy\Cache\NocopyCacheTagsChecksum
+    arguments: ['%app.root%', '%site.path%']
+    tags:
+      - { name: cache_tags_invalidator }
