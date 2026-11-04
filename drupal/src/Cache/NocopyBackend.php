@@ -91,10 +91,15 @@ class NocopyBackend implements CacheBackendInterface {
   public function getMultiple(&$cids, $allow_invalid = FALSE) {
     $raw = [];
     [$version, $invalidatedAt] = $this->state();
+    $keys = [];
     foreach ($cids as $cid) {
-      $item = nocopy_get($this->key((string) $cid, $version));
-      if (is_array($item)) {
-        $raw[$cid] = $item;
+      $keys[$this->key((string) $cid, $version)] = $cid;
+    }
+    // With nocopy.valkey: every local miss in one round trip.
+    $found = nocopy_get_multiple(array_keys($keys));
+    foreach ($keys as $key => $cid) {
+      if (is_array($found[$key] ?? NULL)) {
+        $raw[$cid] = $found[$key];
       }
     }
     if ($raw && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
@@ -136,14 +141,21 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   protected function store($cid, $data, $expire, array $tags): void {
+    $this->put((string) $cid, $this->item($data, $expire, $tags));
+  }
+
+  protected function item($data, $expire, array $tags): array {
     assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
     $tags = array_unique($tags);
-    $this->put((string) $cid, [$data, round(microtime(TRUE), 3), $expire, implode(' ', $tags), $this->checksumProvider->getCurrentChecksum($tags)]);
+    return [$data, round(microtime(TRUE), 3), $expire, implode(' ', $tags), $this->checksumProvider->getCurrentChecksum($tags)];
+  }
+
+  protected function ttl($expire): int {
+    return $expire == CacheBackendInterface::CACHE_PERMANENT ? 0 : max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }
 
   protected function put(string $cid, array $item): void {
-    $expire = $item[self::EXPIRE];
-    $ttl = $expire == CacheBackendInterface::CACHE_PERMANENT ? 0 : max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
+    $ttl = $this->ttl($item[self::EXPIRE]);
     $key = $this->key($cid);
     try {
       nocopy_put($key, $item, $ttl);
@@ -154,9 +166,18 @@ class NocopyBackend implements CacheBackendInterface {
     }
   }
 
+  // One nocopy_put_multiple() per TTL: with nocopy.valkey one pipeline each. Tags first, in one lookup.
   public function setMultiple(array $items) {
+    $tags = array_merge(...array_map(fn ($item) => $item['tags'] ?? [], array_values($items)));
+    assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
+    $this->checksumProvider->getCurrentChecksum($tags);
+    $byTtl = [];
     foreach ($items as $cid => $item) {
-      $this->store($cid, $item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
+      $entry = $this->item($item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
+      $byTtl[$this->ttl($entry[self::EXPIRE])][$this->key((string) $cid)] = $entry;
+    }
+    foreach ($byTtl as $ttl => $entries) {
+      nocopy_put_multiple($entries, $ttl, TRUE);
     }
     $this->journal?->record($this->bin, array_keys($items));
   }

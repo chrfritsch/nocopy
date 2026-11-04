@@ -92,6 +92,9 @@ extern zend_long nocopy_ini_ttl;
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
+/* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value; failed: key => -1 (may be NULL). */
+void nocopy_fetch_multi(HashTable *keys, HashTable *out);
+bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
 bool nocopy_drop(zend_string *key);
 bool nocopy_info(zend_string *key, nocopy_meta *m); /* m may be NULL: exists */
 /* Every live entry, lock-free: may skip or repeat one a concurrent write moves. fn may allocate. */
@@ -117,7 +120,12 @@ void nocopy_vk_mshutdown(void);
 bool nocopy_vk_ready(void); /* connected and this request's pushes applied; false: serve no local data */
 void nocopy_vk_new_request(void);
 void nocopy_vk_close(nocopy_vk *v, bool forked);
-int nocopy_vk_get(const char *k, size_t kl, const char **val, size_t *vl); /* 1 hit (val valid until the next call), 0 miss */
+int nocopy_vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals); /* one round trip; vals[i]: a copy, NULL if missing */
+typedef struct {
+	const char *k, *v;
+	size_t kl, vl;
+} nocopy_vk_kv;
+int nocopy_vk_mset(uint32_t n, const nocopy_vk_kv *kv, int64_t pxat, int8_t *res); /* pipelined SETs; res[i] 1 stored, -1 failed */
 int nocopy_vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx); /* 0: nx and it exists */
 int nocopy_vk_unlink(const char *k, size_t kl); /* 1: it existed */
 int nocopy_vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out); /* 0: not an integer */

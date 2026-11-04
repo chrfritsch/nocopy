@@ -103,6 +103,10 @@ nocopy_put('config', $config, ttl: 300);         // throws on objects unless $se
 $config = nocopy_get('config', $hit);            // $hit tells a miss from a stored null/false
 nocopy_delete('config');
 
+// Batches: with nocopy.valkey, all local misses in one MGET and all writes in one pipeline
+$found = nocopy_get_multiple(['a', 'b']);       // hits only, as key => value
+nocopy_put_multiple(['a' => 1, 'b' => 2], ttl: 60);
+
 // Compute once across all workers, refresh shortly before expiry
 $report = nocopy_remember('report', fn (string $key) => buildReport(), ttl: 60);
 
@@ -178,7 +182,8 @@ FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_
 ### Valkey
 
 With `nocopy.valkey` set, every write goes to Valkey and to the local arena, every local miss is fetched from Valkey and kept locally,
-and deletes, `apcu_inc/dec/cas` and `apcu_clear_cache` run in Valkey. Each worker has one connection with client-side tracking
+and deletes, `apcu_inc/dec/cas` and `apcu_clear_cache` run in Valkey. `nocopy_get_multiple()` and `apcu_fetch(array)` fetch all local misses
+in one `MGET`; `nocopy_put_multiple()` and `apcu_store(array)` send their `SET`s in one pipeline. Each worker has one connection with client-side tracking
 (`CLIENT TRACKING ON BCAST PREFIX <prefix> NOLOOP`): a change made anywhere else, including expiry and eviction in Valkey, drops the local copy
 at the next nocopy call of a request. Local hits stay zero-copy and cost no round trip. So several servers share one cache, a php-fpm restart
 or a new server starts warm, and CLI processes (Drush, cron, workers) see web writes and the other way round.

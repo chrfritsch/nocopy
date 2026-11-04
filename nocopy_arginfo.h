@@ -17,6 +17,16 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_delete, 0, 1, _IS_BOOL, 0
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_get_multiple, 0, 1, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO(0, keys, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_put_multiple, 0, 1, _IS_BOOL, 0)
+	ZEND_ARG_TYPE_INFO(0, values, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, ttl, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, serialize, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_remember, 0, 2, IS_MIXED, 0)
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO(0, callback, IS_CALLABLE, 0)
@@ -49,6 +59,8 @@ static const zend_frameless_function_info frameless_function_infos_nocopy_get[] 
 ZEND_FUNCTION(nocopy_put);
 ZEND_FUNCTION(nocopy_get);
 ZEND_FUNCTION(nocopy_delete);
+ZEND_FUNCTION(nocopy_get_multiple);
+ZEND_FUNCTION(nocopy_put_multiple);
 ZEND_FUNCTION(nocopy_remember);
 ZEND_FUNCTION(nocopy_stats);
 
@@ -64,6 +76,8 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE(nocopy_get, arginfo_nocopy_get)
 #endif
 	ZEND_FE(nocopy_delete, arginfo_nocopy_delete)
+	ZEND_FE(nocopy_get_multiple, arginfo_nocopy_get_multiple)
+	ZEND_FE(nocopy_put_multiple, arginfo_nocopy_put_multiple)
 	ZEND_FE(nocopy_remember, arginfo_nocopy_remember)
 	ZEND_FE(nocopy_stats, arginfo_nocopy_stats)
 	ZEND_FE_END

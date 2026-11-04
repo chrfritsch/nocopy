@@ -545,11 +545,18 @@ bool nocopy_drop_local(const char *k, size_t len)
 	return found;
 }
 
+/* After a change in Valkey: a sibling's fill that read the old value sees the guard move and drops its copy. */
+static void vk_forget(zend_string *key)
+{
+	__atomic_add_fetch(&nocopy_a->inval_gen, 1, __ATOMIC_SEQ_CST);
+	nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+}
+
 bool nocopy_drop(zend_string *key)
 {
 	if (UNEXPECTED(nocopy_vk_on)) {
 		int r = nocopy_vk_ready() ? nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_forget(key);
 		return r == 1;
 	}
 	return nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
@@ -569,7 +576,7 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 		int64_t v = 0;
 		zend_long t = ttl ? ttl : nocopy_ini_ttl;
 		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) t * 1000, &v) : -1;
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key)); /* the next read fetches it */
+		vk_forget(key); /* the next read fetches it */
 		*out = (zend_long) v;
 		return r == 1;
 	}
@@ -604,7 +611,7 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
 	if (UNEXPECTED(nocopy_vk_on)) {
 		int r = nocopy_vk_ready() ? nocopy_vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_forget(key);
 		return r == 1;
 	}
 	zend_ulong h = zend_string_hash_val(key);
@@ -719,8 +726,11 @@ static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 	return s;
 }
 
-static bool vk_decode(const char *b, size_t n, zval *rv, time_t *expires, uint32_t *user)
+/* raw: a private copy, so unserialize may run user code that calls Valkey again */
+static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_t *user)
 {
+	const char *b = ZSTR_VAL(raw);
+	size_t n = ZSTR_LEN(raw);
 	*expires = 0;
 	*user = 0;
 	if (n && b[0] != 0) {
@@ -741,11 +751,28 @@ static bool vk_decode(const char *b, size_t n, zval *rv, time_t *expires, uint32
 	if (x && x < time(NULL)) {
 		return false;
 	}
-	uint8_t flags = ENTRY_SERIALIZED | (uint8_t) b[1];
-	zend_string *copy = zend_string_init(b + VK_HDR, n - VK_HDR, 0); /* unserialize may run user code that calls Valkey again */
-	bool ok = cache_unserialize(rv, ZSTR_VAL(copy), ZSTR_LEN(copy), flags);
-	zend_string_release(copy);
-	return ok;
+	return cache_unserialize(rv, b + VK_HDR, n - VK_HDR, ENTRY_SERIALIZED | (uint8_t) b[1]);
+}
+
+/* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
+static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *exp, uint32_t *delta)
+{
+	time_t expires;
+	uint32_t user;
+	if (!vk_decode(raw, rv, &expires, &user)) {
+		return false;
+	}
+	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - time(NULL)) : 0, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	nocopy_put p;
+	if (build(&p, key, rv, &o) == NOCOPY_OK) {
+		p.e->user = user;
+		publish(&p, true);
+	}
+	if (exp) {
+		*exp = expires;
+		*delta = user;
+	}
+	return true;
 }
 
 /* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
@@ -759,27 +786,16 @@ static zend_never_inline bool vk_fetch(zend_string *key, zval *rv, time_t *exp, 
 		return true;
 	}
 	uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
-	const char *b;
-	size_t n;
-	time_t expires;
-	uint32_t user;
-	if (nocopy_vk_get(ZSTR_VAL(key), ZSTR_LEN(key), &b, &n) != 1 || !vk_decode(b, n, rv, &expires, &user)) {
+	zend_string *raw = NULL;
+	if (nocopy_vk_mget(1, &key, &raw) != 1 || !raw) {
 		return false;
 	}
-	time_t now = time(NULL);
-	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - now) : 0, .objects = NOCOPY_SERIALIZE_OBJECTS};
-	nocopy_put p;
-	if (build(&p, key, rv, &o) == NOCOPY_OK) {
-		p.e->user = user;
-		if (publish(&p, false) == NOCOPY_OK && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
-			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-		}
+	bool ok = vk_fill(key, raw, rv, exp, delta);
+	zend_string_release(raw);
+	if (ok && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 	}
-	if (exp) {
-		*exp = expires;
-		*delta = user;
-	}
-	return true;
+	return ok;
 }
 
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
@@ -829,6 +845,150 @@ static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 }
 
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
+
+void nocopy_fetch_multi(HashTable *keys, HashTable *out)
+{
+	zval *k, t;
+	if (!nocopy_vk_on) {
+		ZEND_HASH_FOREACH_VAL(keys, k) {
+			ZVAL_DEREF(k);
+			if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
+				zend_symtable_update(out, Z_STR_P(k), &t);
+			}
+		} ZEND_HASH_FOREACH_END();
+		return;
+	}
+	if (!nocopy_vk_ready()) {
+		return;
+	}
+	zend_string **miss = safe_emalloc(zend_hash_num_elements(keys), sizeof *miss, 0);
+	uint32_t n = 0;
+	ZEND_HASH_FOREACH_VAL(keys, k) {
+		ZVAL_DEREF(k);
+		if (Z_TYPE_P(k) != IS_STRING) {
+			continue;
+		}
+		if (local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
+			zend_symtable_update(out, Z_STR_P(k), &t);
+		} else {
+			miss[n++] = Z_STR_P(k); /* borrowed: keys outlives this call */
+		}
+	} ZEND_HASH_FOREACH_END();
+	if (n) {
+		zend_string **raw = ecalloc(n, sizeof *raw);
+		uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
+		if (nocopy_vk_mget(n, miss, raw) == 1) {
+			for (uint32_t i = 0; i < n; i++) {
+				if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], &t, NULL, NULL)) {
+					zend_symtable_update(out, miss[i], &t);
+				}
+				if (raw[i]) {
+					zend_string_release(raw[i]);
+				}
+			}
+			if (__atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
+				for (uint32_t i = 0; i < n; i++) {
+					nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
+				}
+			}
+		}
+		efree(raw);
+	}
+	efree(miss);
+}
+
+static void mark_failed(HashTable *failed, zend_string *key)
+{
+	if (failed && !EG(exception)) {
+		zval m;
+		ZVAL_LONG(&m, -1);
+		zend_symtable_update(failed, key, &m);
+	}
+}
+
+/* vk_store for many keys: local copies first, then every SET in one pipeline. */
+static bool vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
+{
+	zend_ulong h;
+	zend_string *k;
+	zval *v;
+	bool all = true;
+	if (!nocopy_vk_ready()) {
+		ZEND_HASH_FOREACH_KEY(vals, h, k) {
+			zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
+			mark_failed(failed, key);
+			zend_string_release(key);
+		} ZEND_HASH_FOREACH_END();
+		return false;
+	}
+	uint32_t cap = zend_hash_num_elements(vals), m = 0;
+	zend_string **keys = safe_emalloc(cap, sizeof *keys, 0), **enc = safe_emalloc(cap, sizeof *enc, 0);
+	nocopy_vk_kv *kv = safe_emalloc(cap, sizeof *kv, 0);
+	zend_long ttl = o->ttl ? o->ttl : nocopy_ini_ttl;
+	time_t expires = ttl ? time(NULL) + ttl : 0;
+	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
+		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
+		nocopy_put p;
+		nocopy_status s = build(&p, key, v, o);
+		if (s == NOCOPY_OK) {
+			p.e->user = 0;
+			publish(&p, false);
+		}
+		zend_string *e = s == NOCOPY_REFUSED ? NULL : vk_encode(v, expires, 0);
+		if (!e) {
+			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+			all = false;
+			mark_failed(failed, key);
+			zend_string_release(key);
+			if (EG(exception)) {
+				break;
+			}
+			continue;
+		}
+		keys[m] = key;
+		enc[m] = e;
+		kv[m] = (nocopy_vk_kv) {.k = ZSTR_VAL(key), .kl = ZSTR_LEN(key), .v = ZSTR_VAL(e), .vl = ZSTR_LEN(e)};
+		m++;
+	} ZEND_HASH_FOREACH_END();
+	int8_t *res = emalloc(m + 1);
+	if (m) {
+		nocopy_vk_mset(m, kv, expires ? ((int64_t) expires + 1) * 1000 : 0, res);
+	}
+	for (uint32_t i = 0; i < m; i++) {
+		if (res[i] != 1) {
+			nocopy_drop_local(ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
+			all = false;
+			mark_failed(failed, keys[i]);
+		}
+		zend_string_release(keys[i]);
+		zend_string_release(enc[i]);
+	}
+	efree(res), efree(kv), efree(enc), efree(keys);
+	return all;
+}
+
+bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
+{
+	if (nocopy_vk_on && !o->add_only) {
+		return vk_store_multi(vals, o, failed); /* ponytail: add stays one round trip per key (NX decides first) */
+	}
+	zend_ulong h;
+	zend_string *k;
+	zval *v;
+	bool all = true;
+	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
+		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
+		if (nocopy_store(key, v, o) != NOCOPY_OK) {
+			all = false;
+			mark_failed(failed, key);
+		}
+		zend_string_release(key);
+		if (EG(exception)) {
+			break;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return all;
+}
 
 static nocopy_meta meta_of(const nocopy_entry *e)
 {
@@ -1089,6 +1249,49 @@ PHP_FUNCTION(nocopy_delete)
 	ZEND_PARSE_PARAMETERS_END();
 
 	RETURN_BOOL(nocopy_drop(key));
+}
+
+PHP_FUNCTION(nocopy_get_multiple)
+{
+	HashTable *keys;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_ARRAY_HT(keys)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!nocopy_tracked()) {
+		RETURN_THROWS();
+	}
+	array_init(return_value);
+	nocopy_fetch_multi(keys, Z_ARRVAL_P(return_value));
+}
+
+PHP_FUNCTION(nocopy_put_multiple)
+{
+	HashTable *vals;
+	zend_long ttl = 0;
+	bool serialize = false;
+
+	ZEND_PARSE_PARAMETERS_START(1, 3)
+		Z_PARAM_ARRAY_HT(vals)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(ttl)
+		Z_PARAM_BOOL(serialize)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (ttl < 0) {
+		zend_argument_value_error(2, "must be greater than or equal to 0");
+		RETURN_THROWS();
+	}
+	if (!nocopy_tracked()) {
+		RETURN_THROWS();
+	}
+	const nocopy_opts o = {.ttl = ttl, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
+	bool ok = nocopy_store_multi(vals, &o, NULL);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
+	RETURN_BOOL(ok);
 }
 
 PHP_FUNCTION(nocopy_remember)

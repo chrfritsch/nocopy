@@ -402,19 +402,15 @@ static void store_impl(zval *key, zval *val, zend_long ttl, bool add_only, zval 
 		RETURN_THROWS();
 	}
 	array_init(return_value);
+	if (nocopy_apc_on) {
+		nocopy_store_multi(Z_ARRVAL_P(key), &o, Z_ARRVAL_P(return_value));
+		return;
+	}
 	zend_ulong h;
 	zend_string *k;
-	zval *v;
-	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(key), h, k, v) {
+	ZEND_HASH_FOREACH_KEY(Z_ARRVAL_P(key), h, k) {
 		zend_string *ks = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
-		bool ok = nocopy_apc_on && nocopy_store(ks, v, &o) == NOCOPY_OK;
-		if (EG(exception)) {
-			zend_string_release(ks);
-			break;
-		}
-		if (!ok) {
-			add_assoc_long_ex(return_value, ZSTR_VAL(ks), ZSTR_LEN(ks), -1);
-		}
+		add_assoc_long_ex(return_value, ZSTR_VAL(ks), ZSTR_LEN(ks), -1);
 		zend_string_release(ks);
 	} ZEND_HASH_FOREACH_END();
 }
@@ -486,14 +482,7 @@ static void fetch_impl(zval *key, zval *success, zval *return_value)
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	zval *v;
-	ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(key), v) {
-		ZVAL_DEREF(v);
-		zval t;
-		if (Z_TYPE_P(v) == IS_STRING && nocopy_fetch(Z_STR_P(v), &t)) {
-			zend_symtable_update(Z_ARRVAL_P(return_value), Z_STR_P(v), &t);
-		}
-	} ZEND_HASH_FOREACH_END();
+	nocopy_fetch_multi(Z_ARRVAL_P(key), Z_ARRVAL_P(return_value));
 	if (success) {
 		ZEND_TRY_ASSIGN_REF_TRUE(success);
 	}

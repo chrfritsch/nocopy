@@ -492,18 +492,51 @@ void nocopy_vk_close(nocopy_vk *v, bool forked)
 
 #define READY(v) nocopy_vk *v = &NOCOPY_G(vk); if (v->fd < 0 && !nocopy_vk_ready()) return -1
 
-int nocopy_vk_get(const char *k, size_t kl, const char **val, size_t *vl)
+int nocopy_vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 {
 	READY(v);
 	smart_str s = {0};
-	vk_reply r;
-	head(&s, 2), ARG(&s, "GET"), key_arg(&s, k, kl);
-	if (!vk_call(v, &s, &r) || (r.t != '$' && r.t != '_')) {
+	vk_reply r, c;
+	head(&s, (int) n + 1), ARG(&s, "MGET");
+	for (uint32_t i = 0; i < n; i++) {
+		key_arg(&s, ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
+	}
+	if (!vk_call(v, &s, &r) || r.t != '*' || r.n != (int64_t) n) {
 		return -1;
 	}
-	*val = r.s;
-	*vl = r.len;
-	return r.t == '$';
+	const char *end = v->buf + v->pos, *q = r.body;
+	for (uint32_t i = 0; i < n; i++) {
+		q = resp_parse(q, end, &c);
+		vals[i] = c.t == '$' ? zend_string_init(c.s, c.len, 0) : NULL;
+	}
+	return 1;
+}
+
+int nocopy_vk_mset(uint32_t n, const nocopy_vk_kv *kv, int64_t pxat, int8_t *res)
+{
+	memset(res, -1, n);
+	READY(v);
+	smart_str s = {0};
+	char b[24];
+	size_t bl = pxat ? (size_t) snprintf(b, sizeof b, "%" PRId64, pxat) : 0;
+	for (uint32_t i = 0; i < n; i++) {
+		head(&s, pxat ? 5 : 3), ARG(&s, "SET"), key_arg(&s, kv[i].k, kv[i].kl), arg(&s, kv[i].v, kv[i].vl);
+		if (pxat) {
+			ARG(&s, "PXAT"), arg(&s, b, bl);
+		}
+	}
+	smart_str_0(&s);
+	if (!vk_send(v, &s)) {
+		return -1;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		vk_reply r;
+		if (!vk_read(v, &r)) {
+			return -1;
+		}
+		res[i] = r.t == '+' ? 1 : -1;
+	}
+	return 1;
 }
 
 int nocopy_vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)

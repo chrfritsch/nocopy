@@ -84,23 +84,29 @@ class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsIn
     $this->epoch = $state[0];
   }
 
+  // The trait hands over every preloaded tag at once: one lookup, one write for the missing ones.
   protected function getTagInvalidationCounts(array $tags) {
-    $counts = [];
+    $keys = [];
     foreach ($tags as $tag) {
-      $token = nocopy_get($this->getTagKey($tag), $hit);
-      if (!$hit) {
-        $token = random_int(1, 2 ** 48);
-        nocopy_put($this->getTagKey($tag), $token);
-      }
-      $counts[$tag] = $token;
+      $keys[$this->getTagKey((string) $tag)] = $tag;
+    }
+    $found = nocopy_get_multiple(array_keys($keys));
+    $counts = $new = [];
+    foreach ($keys as $key => $tag) {
+      $counts[$tag] = $found[$key] ?? ($new[$key] = random_int(1, 2 ** 48));
+    }
+    if ($new) {
+      nocopy_put_multiple($new);
     }
     return $counts;
   }
 
   protected function doInvalidateTags(array $tags) {
+    $new = [];
     foreach ($tags as $tag) {
-      nocopy_put($this->getTagKey($tag), random_int(1, 2 ** 48));
+      $new[$this->getTagKey($tag)] = random_int(1, 2 ** 48);
     }
+    nocopy_put_multiple($new);
     $this->journal->record(NocopyJournal::TAGS, $tags);
   }
 
