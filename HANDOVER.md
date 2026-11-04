@@ -36,6 +36,10 @@ Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the
   `ab.sh 3 read` vs e6c6f6d, copy mode: fetch string 10KB 182 -> 12.8 ns, array 10 rows 682 -> 12.8, 1k rows 68 us -> 12.8 ns, 10k rows 711 us -> 12.8 ns, 10k rows + modify 1 (COW) 707 -> 57 us; zero-copy unchanged.
   Costs: fetch int -2%, string 100B -4.5% (0.8 ns; short strings are not kept), `fetch 10 keys` -3.5%. First version kept every copy: 100k distinct strings 37 -> 64 ns, 20k distinct 10-row arrays 360 -> 590 (freeing cold evictees);
   now a copy is kept on its second fetch (`seen`, TinyLFU's doorkeeper) and strings only from 512 B: 37.5 -> 36.3 / 375 -> 387 ns (best of 5, load 3-5: noise). Test 041; 015 caught a double free (slot released, then flushed again).
+- Asymmetric fence for pins (`membarrier`, reader fence moved to `reclaim()`) measured and dropped (2026-11-04, Linux Docker arm64, 11 CPUs):
+  new pins per fetch (instrumented build): ~0 for hot keys, keys read in order, every zero-copy run and at 512M; 0.92 in copy mode at 32M once the keys read span more than `nsegs/16` segments (100k shuffled keys, 200-key random pages), with or without a writer.
+  Removing the reader fence there (seq_cst store + fence -> relaxed + signal fence; unsafe, an upper bound): shuffled 40.9 -> 41.3 ns, pages 61.0 -> 59.0, hot 10.5 = 10.5, 8 parallel readers 50 -> 51 M/s (best of 5): the fence hides under the cache misses those fetches take anyway.
+  The writer's price: `reclaim()` reaches its fence once per 399 stores at 32M (6419 at 512M), and `MEMBARRIER_CMD_GLOBAL_EXPEDITED` costs 0.4 / 6.2 / 17 / 46 us with 0 / 4 / 8 / 16 busy registered processes, under the shard lock: ~10 us of stores would pay 6-46 us. Not adopted.
 - Gotcha: a container started right after a host-side file write sometimes saw `stash.c` truncated ("expected declaration at end of input"): rerun.
 
 ### Rebuild of the core (2026-11-03, second half of the day)
