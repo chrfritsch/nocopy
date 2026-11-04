@@ -45,18 +45,20 @@ Pages that barely touch the cache gain nothing. The gain appears where requests 
 **Drupal 11** (2,000 nodes, php-fpm 8 workers, MariaDB, one server; [module](drupal), [raw numbers](bench/results-drupal)).
 Lowest–highest of 3 full runs, config order rotated between runs:
 
-| | stock (DB + APCu) | stock + igbinary | nocopy, all bins |
-|---|---:|---:|---:|
-| anonymous `/` (page cache) | 3,380–4,192 req/s | 3,199–3,782 req/s | **11,716–12,340 req/s** |
-| logged-in node page | 553–751 req/s | 567–742 req/s | **899–1,096 req/s** |
-| logged-in front page | 636–746 req/s | 628–898 req/s | **1,120–1,232 req/s** |
-| editor: save / edit form / view after save (p50) | 34–36 / 55–61 / 45–48 ms | 32–34 / 52–55 / 43–44 ms | **24 / 37–38 / 22–23 ms** |
-| readers served during editing | 413–474 req/s | 462–507 req/s | **677–698 req/s** |
-| database queries per logged-in request | 29–31 | 29–31 | **7** |
+| | stock (DB + APCu) | stock + igbinary | nocopy fast layer + routes | nocopy, all bins |
+|---|---:|---:|---:|---:|
+| anonymous `/` (page cache) | 2,950–3,954 req/s | 3,761–4,143 req/s | 3,594–4,075 req/s | **10,363–11,229 req/s** |
+| logged-in node page | 715–754 req/s | 590–780 req/s | 698–757 req/s | **897–1,085 req/s** |
+| logged-in front page | 654–837 req/s | 790–828 req/s | 762–800 req/s | **1,016–1,209 req/s** |
+| editor: save / edit form / view after save (p50) | 33–40 / 53–58 / 43–51 ms | 32–43 / 49–64 / 42–56 ms | 32–35 / 55–56 / 44–45 ms | **24–25 / 38 / 22–24 ms** |
+| readers served during editing | 424–483 req/s | 416–499 req/s | 494–516 req/s | **665–684 req/s** |
+| database queries per logged-in request | 29–31 | 29–31 | 29–31 | **7** |
 
-nocopy only as APCu's replacement in front of the database lands in the stock range (659–893 req/s logged-in): the gain comes
-from moving all bins and the cache tags off the database. Trade-offs: single server, and Drush and cron do not share php-fpm's
-cache ([details](drupal#trade-offs)).
+The fast layer (`ChainedFastBackend` with nocopy instead of APCu, here with `routes` added to `bootstrap`, `config`, `discovery`) is the setup
+that also works on several web servers. It lands in the stock range, with or without `routes` (726–763 req/s logged-in node page without):
+chainedfast still asks the database for each bin's last write on every request, and those bins were never the bottleneck. The gain
+comes from moving all bins and the cache tags off the database, which needs a single server. Trade-offs: Drush and cron do not
+share php-fpm's cache ([details](drupal#trade-offs)).
 
 ## Features
 

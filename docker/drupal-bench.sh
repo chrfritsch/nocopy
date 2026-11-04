@@ -1,9 +1,9 @@
 #!/bin/sh
-# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, four cache configs, anonymous / logged-in / editor / cold start.
+# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, five cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
-# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-all"
+# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all"
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
-CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-all"}
+CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all"}
 B=http://127.0.0.1:8099; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
@@ -79,6 +79,9 @@ apc.serializer=igbinary"; SET=stock ;;
     nocopy-fast) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fast ;;
+    nocopy-fast-routes) EXT="extension=/build/modules/nocopy.so
+extension=igbinary
+nocopy.serializer=igbinary"; SET=fastroutes ;;
     nocopy-all) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary"; SET=all ;;

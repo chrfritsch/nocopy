@@ -1,5 +1,6 @@
 config	probe_bytes
 nocopy-all	5000
 nocopy-fast	5000
+nocopy-fast-routes	5000
 stock	115104
 stock-igbinary	5032

@@ -1,5 +1,6 @@
 config	first_ms	settled_at_request	warm_p50_ms	nocopy_used_bytes
-nocopy-all	568.8	3	7	10821392
-nocopy-fast	212.1	2	11	4374304
-stock	296.5	2	10	0
-stock-igbinary	203.7	2	8	0
+nocopy-all	538.5	3	7	10822912
+nocopy-fast	217.9	2	8	4342600
+nocopy-fast-routes	231.1	2	10	4220688
+stock	225.2	2	11	0
+stock-igbinary	228.4	2	9	0
