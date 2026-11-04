@@ -370,18 +370,8 @@ static zend_string *key_str(zval *z)
 	return zval_get_string(z);
 }
 
-static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
+static void store_impl(zval *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
 {
-	zval *key, *val = NULL;
-	zend_long ttl = 0;
-
-	ZEND_PARSE_PARAMETERS_START(1, 3)
-		Z_PARAM_ZVAL(key)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_ZVAL(val)
-		Z_PARAM_LONG(ttl)
-	ZEND_PARSE_PARAMETERS_END();
-
 	if (ttl < 0) {
 		zend_argument_value_error(3, "must be greater than or equal to 0");
 		RETURN_THROWS();
@@ -429,8 +419,36 @@ static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
 	} ZEND_HASH_FOREACH_END();
 }
 
+static void apcu_store_impl(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
+{
+	zval *key, *val = NULL;
+	zend_long ttl = 0;
+
+	ZEND_PARSE_PARAMETERS_START(1, 3)
+		Z_PARAM_ZVAL(key)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_ZVAL(val)
+		Z_PARAM_LONG(ttl)
+	ZEND_PARSE_PARAMETERS_END();
+
+	store_impl(key, val, ttl, add_only, return_value);
+}
+
 PHP_FUNCTION(apcu_store) { apcu_store_impl(INTERNAL_FUNCTION_PARAM_PASSTHRU, false); }
 PHP_FUNCTION(apcu_add)   { apcu_store_impl(INTERNAL_FUNCTION_PARAM_PASSTHRU, true); }
+
+#if PHP_VERSION_ID >= 80400
+/* Frameless variants (PHP 8.4+): a call the compiler resolved skips the VM's call frame. */
+ZEND_FRAMELESS_FUNCTION(apcu_store, 1) { store_impl(arg1, NULL, 0, false, return_value); } /* must exist: a 1-arg call would pick arity 2, and $value has no default */
+ZEND_FRAMELESS_FUNCTION(apcu_store, 2) { store_impl(arg1, arg2, 0, false, return_value); }
+ZEND_FRAMELESS_FUNCTION(apcu_store, 3)
+{
+	zend_long ttl;
+	Z_FLF_PARAM_LONG(3, ttl);
+	store_impl(arg1, arg2, ttl, false, return_value);
+flf_clean:;
+}
+#endif
 
 PHP_FUNCTION(apcu_enabled)
 {
@@ -438,16 +456,8 @@ PHP_FUNCTION(apcu_enabled)
 	RETURN_BOOL(stash_apc_on);
 }
 
-PHP_FUNCTION(apcu_fetch)
+static void fetch_impl(zval *key, zval *success, zval *return_value)
 {
-	zval *key, *success = NULL;
-
-	ZEND_PARSE_PARAMETERS_START(1, 2)
-		Z_PARAM_ZVAL(key)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_ZVAL(success)
-	ZEND_PARSE_PARAMETERS_END();
-
 	if (success) {
 		ZEND_TRY_ASSIGN_REF_FALSE(success);
 	}
@@ -489,16 +499,27 @@ PHP_FUNCTION(apcu_fetch)
 	}
 }
 
-static bool exists(zend_string *key) { return stash_info(key, NULL); }
-
-PHP_FUNCTION(apcu_exists)
+PHP_FUNCTION(apcu_fetch)
 {
-	zval *key;
+	zval *key, *success = NULL;
 
-	ZEND_PARSE_PARAMETERS_START(1, 1)
+	ZEND_PARSE_PARAMETERS_START(1, 2)
 		Z_PARAM_ZVAL(key)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_ZVAL(success)
 	ZEND_PARSE_PARAMETERS_END();
 
+	fetch_impl(key, success, return_value);
+}
+
+#if PHP_VERSION_ID >= 80400
+ZEND_FRAMELESS_FUNCTION(apcu_fetch, 1) { fetch_impl(arg1, NULL, return_value); }
+#endif
+
+static bool exists(zend_string *key) { return stash_info(key, NULL); }
+
+static void exists_impl(zval *key, zval *return_value)
+{
 	if (Z_TYPE_P(key) != IS_ARRAY) {
 		if (!stash_apc_on) {
 			RETURN_FALSE;
@@ -528,7 +549,7 @@ PHP_FUNCTION(apcu_exists)
 	} ZEND_HASH_FOREACH_END();
 }
 
-PHP_FUNCTION(apcu_delete)
+PHP_FUNCTION(apcu_exists)
 {
 	zval *key;
 
@@ -536,6 +557,15 @@ PHP_FUNCTION(apcu_delete)
 		Z_PARAM_ZVAL(key)
 	ZEND_PARSE_PARAMETERS_END();
 
+	exists_impl(key, return_value);
+}
+
+#if PHP_VERSION_ID >= 80400
+ZEND_FRAMELESS_FUNCTION(apcu_exists, 1) { exists_impl(arg1, return_value); }
+#endif
+
+static void delete_impl(zval *key, zval *return_value)
+{
 	if (Z_TYPE_P(key) == IS_OBJECT && instanceof_function(Z_OBJCE_P(key), iter_ce)) {
 		stash_iter *it = ITER(Z_OBJ_P(key));
 		if (!it->initialized) {
@@ -570,6 +600,21 @@ PHP_FUNCTION(apcu_delete)
 		}
 	} ZEND_HASH_FOREACH_END();
 }
+
+PHP_FUNCTION(apcu_delete)
+{
+	zval *key;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_ZVAL(key)
+	ZEND_PARSE_PARAMETERS_END();
+
+	delete_impl(key, return_value);
+}
+
+#if PHP_VERSION_ID >= 80400
+ZEND_FRAMELESS_FUNCTION(apcu_delete, 1) { delete_impl(arg1, return_value); }
+#endif
 
 static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 {

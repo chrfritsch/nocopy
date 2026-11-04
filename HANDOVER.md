@@ -13,6 +13,16 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 
 Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 
+### Performance pass (2026-11-04)
+Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the VM's internal call frame), then `docker/ab.sh 3 "read write parallel"` vs ddf5da4 (Linux Docker arm64, load ~1.6):
+- Frameless handlers (PHP 8.4+, `@frameless-function` in the stubs): `apcu_fetch`/`apcu_exists`/`apcu_delete`/`stash_get` arity 1, `apcu_store` 1-3, `stash_put` 2-3. `apcu_store` needs arity 1: a 1-arg call would pick arity 2 and `$value` has no default (ZEND_UNREACHABLE). gen_stub's legacy output leaves the `#else` (8.3) branch empty: the ZEND_FE lines there are added by hand after regenerating. MINIT adds the handler count to opcache's system id (file cache stores handler indices). Test 040.
+- Arena globals `visibility hidden` (no GOT load) and `stash_find` takes the shard index directly (`sh - shards` divided by 1280).
+- Idle pins (see ARCHITECTURE "Pins"): copy mode no longer re-pins (seq_cst store + fence) on every call.
+- Result, copy / zero-copy ns: fetch int 15.5 -> 12.5 / 13.8 -> 12.2, string 100B 21.6 -> 17.4 / 13.4 -> 12.3, 100k distinct keys 44.2 -> 22.8, 10 keys array form 250 -> 145, miss 10.6 -> 9.5, exists 13.7 -> 10.9 / 11.7 -> 10.9; parallel fetch int x8 +16% / +25%. Stores, inc, big array copies within +-2.5% (layout).
+- First idle-pin version (writer did not drop its own pins, no cap) broke 029: hot keys kept 1 of 20 (merges evicted around its own pinned segments).
+- Suite 8.3/8.4/8.5 + ZTS 8.4, tests/c (TSAN), `docker/stress.sh 5` clean. Not re-run: Symfony smoke, APCu's suite, fpm benchmark.
+- Gotcha: a container started right after a host-side file write sometimes saw `stash.c` truncated ("expected declaration at end of input"): rerun.
+
 ### Rebuild of the core (2026-11-03, second half of the day)
 - Split: the arena (no PHP; `stash_arena.h` public with the read path inline, `stash_arena_int.h` internal; `stash_arena.c`, `stash_evict.c`, `stash_lease.c`, `stash_owner.c` since 2026-11-04), `stash.c` (values, store API in `stash_php.h`, `stash_*`, module), `stash_apcu.c` (only the store API). stash.c used to `#include` stash_arena.c so the write path inlined (~3 ns per write then); separate units measured 2026-11-04 (`docker/ab.sh 5 read write`): writes equal or 1-4% faster, zero-copy fetches +0.25 ns (layout), so they are separate now. `-fvisibility=hidden`: only `get_module` is exported.
 - `tests/c/stress.c` + `tests/c/run.sh`: 8 threads on the arena alone, model-checked, plain and ThreadSanitizer: clean (TSAN on gcc ignores fences: only false alarms possible, none seen). Also builds and passes natively on macOS.

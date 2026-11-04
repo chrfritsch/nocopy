@@ -12,6 +12,7 @@
 #include "zend_smart_str.h"
 #include "SAPI.h"
 #include "zend_interfaces.h"
+#include "zend_system_id.h"
 #include "stash_arginfo.h"
 #include <pthread.h>
 #include <math.h>
@@ -705,6 +706,23 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 
 /* ---- stash_* ---- */
 
+static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize, zval *return_value)
+{
+	if (ttl < 0) {
+		zend_argument_value_error(3, "must be greater than or equal to 0");
+		RETURN_THROWS();
+	}
+	if (!stash_tracked()) {
+		RETURN_THROWS();
+	}
+	const stash_opts o = {.ttl = ttl, .objects = serialize ? STASH_SERIALIZE_OBJECTS : STASH_REFUSE_OBJECTS};
+	stash_status st = stash_store(key, val, &o);
+	if (EG(exception)) {
+		RETURN_THROWS();
+	}
+	RETURN_BOOL(st == STASH_OK);
+}
+
 PHP_FUNCTION(stash_put)
 {
 	zend_string *key;
@@ -720,19 +738,7 @@ PHP_FUNCTION(stash_put)
 		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (ttl < 0) {
-		zend_argument_value_error(3, "must be greater than or equal to 0");
-		RETURN_THROWS();
-	}
-	if (!stash_tracked()) {
-		RETURN_THROWS();
-	}
-	const stash_opts o = {.ttl = ttl, .objects = serialize ? STASH_SERIALIZE_OBJECTS : STASH_REFUSE_OBJECTS};
-	stash_status st = stash_store(key, val, &o);
-	if (EG(exception)) {
-		RETURN_THROWS();
-	}
-	RETURN_BOOL(st == STASH_OK);
+	put_impl(key, val, ttl, serialize, return_value);
 }
 
 PHP_FUNCTION(stash_get)
@@ -754,6 +760,43 @@ PHP_FUNCTION(stash_get)
 		ZEND_TRY_ASSIGN_REF_BOOL(hit, found);
 	}
 }
+
+#if PHP_VERSION_ID >= 80400
+/* Frameless variants (PHP 8.4+): a call the compiler resolved skips the VM's call frame. */
+ZEND_FRAMELESS_FUNCTION(stash_get, 1)
+{
+	zval tmp;
+	zend_string *key;
+	Z_FLF_PARAM_STR(1, key, tmp);
+	if (stash_tracked()) {
+		stash_fetch(key, return_value);
+	}
+flf_clean:
+	Z_FLF_PARAM_FREE_STR(1, tmp);
+}
+
+ZEND_FRAMELESS_FUNCTION(stash_put, 2)
+{
+	zval tmp;
+	zend_string *key;
+	Z_FLF_PARAM_STR(1, key, tmp);
+	put_impl(key, arg2, 0, false, return_value);
+flf_clean:
+	Z_FLF_PARAM_FREE_STR(1, tmp);
+}
+
+ZEND_FRAMELESS_FUNCTION(stash_put, 3)
+{
+	zval tmp;
+	zend_string *key;
+	zend_long ttl;
+	Z_FLF_PARAM_STR(1, key, tmp);
+	Z_FLF_PARAM_LONG(3, ttl);
+	put_impl(key, arg2, ttl, false, return_value);
+flf_clean:
+	Z_FLF_PARAM_FREE_STR(1, tmp);
+}
+#endif
 
 PHP_FUNCTION(stash_delete)
 {
@@ -829,6 +872,9 @@ PHP_FUNCTION(stash_stats)
 static ZEND_NAMED_FUNCTION(stash_handle_request)
 {
 	STASH_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
+	stash_ctx *c = &STASH_G(ctx);
+	c->transient = c->slot >= 0;
+	stash_drop_transient(c); /* idle pins: the worker now waits for a request */
 	orig_handle_request(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 
@@ -1013,6 +1059,14 @@ PHP_MINIT_FUNCTION(stash)
 	if (apcu_compat) {
 		stash_apcu_minit(module_number);
 	}
+#if PHP_VERSION_ID >= 80400
+	/* opcache's file cache stores frameless handler indices: another extension set must not reuse them */
+	size_t n = 0; /* zend_flf_count is not exported */
+	while (zend_flf_handlers && zend_flf_handlers[n]) {
+		n++;
+	}
+	zend_add_system_entropy("stash", "frameless", &n, sizeof(n));
+#endif
 	return SUCCESS;
 }
 

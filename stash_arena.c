@@ -182,10 +182,16 @@ static void reclaim(stash_shard *sh)
 			held[w] |= b[w];
 		}
 	}
+	bool blocked = false;
 	for (uint32_t s = sh->lo; s < sh->hi; s++) {
 		if ((dead[s >> 6] & ~held[s >> 6]) >> (s & 63) & 1) {
 			seg_free(sh, s);
+		} else if (dead[s >> 6] >> (s & 63) & 1) {
+			blocked = true;
 		}
+	}
+	if (blocked) {
+		__atomic_add_fetch(&stash_a->unpin_gen, 1, __ATOMIC_RELAXED); /* ask readers to drop idle pins */
 	}
 }
 
@@ -574,6 +580,9 @@ stash_put_result stash_commit(stash_shard *sh, stash_entry *e, bool add_only)
 
 stash_entry *stash_put_begin(stash_put *p, stash_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl)
 {
+	if (!c->pin_refs) {
+		stash_drop_transient(c); /* our own idle pins would block reclaim; only mixed read/write loops pay */
+	}
 	stash_shard *sh = stash_shard_of(h);
 	stash_lock(sh);
 	time_t now = time(NULL), exp = ttl ? now + ttl : 0; /* inside the lock: measured faster under write contention than before it */

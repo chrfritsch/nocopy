@@ -7,7 +7,12 @@
 
 function apcu_enabled(): bool {}
 
-/** @param array|string $key */
+/**
+ * @param array|string $key
+ * @frameless-function {"arity": 1}
+ * @frameless-function {"arity": 2}
+ * @frameless-function {"arity": 3}
+ */
 function apcu_store($key, mixed $value = UNKNOWN, int $ttl = 0): array|bool {}
 
 /** @param array|string $key */
@@ -16,13 +21,20 @@ function apcu_add($key, mixed $value = UNKNOWN, int $ttl = 0): array|bool {}
 /**
  * @param array|string $key
  * @param bool $success
+ * @frameless-function {"arity": 1}
  */
 function apcu_fetch($key, &$success = null): mixed {}
 
-/** @param array|string $key */
+/**
+ * @param array|string $key
+ * @frameless-function {"arity": 1}
+ */
 function apcu_exists($key): array|bool {}
 
-/** @param APCUIterator|array|string $key */
+/**
+ * @param APCUIterator|array|string $key
+ * @frameless-function {"arity": 1}
+ */
 function apcu_delete($key): array|bool {}
 
 /** @param bool $success */

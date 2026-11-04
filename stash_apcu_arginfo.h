@@ -1,5 +1,5 @@
-/* This is a generated file, edit the .stub.php file instead.
- * Stub hash: e976c96cb7ff3d8b6106c7bde92222f83b4d12de */
+/* This is a generated file, edit stash_apcu.stub.php instead.
+ * Stub hash: 59db899583b8ffeced7ac73c8172427e86a2cc52 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_apcu_enabled, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
@@ -83,6 +83,43 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_class_APCUIterator_getTotalCount arginfo_class_APCUIterator_getTotalHits
 
+
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_store, 1);
+ZEND_FRAMELESS_FUNCTION(apcu_store, 2);
+ZEND_FRAMELESS_FUNCTION(apcu_store, 3);
+static const zend_frameless_function_info frameless_function_infos_apcu_store[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_store, 1), 1 },
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_store, 2), 2 },
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_store, 3), 3 },
+	{ 0 },
+};
+#endif
+
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_fetch, 1);
+static const zend_frameless_function_info frameless_function_infos_apcu_fetch[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_fetch, 1), 1 },
+	{ 0 },
+};
+#endif
+
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_exists, 1);
+static const zend_frameless_function_info frameless_function_infos_apcu_exists[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_exists, 1), 1 },
+	{ 0 },
+};
+#endif
+
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_delete, 1);
+static const zend_frameless_function_info frameless_function_infos_apcu_delete[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_delete, 1), 1 },
+	{ 0 },
+};
+#endif
+
 ZEND_FUNCTION(apcu_enabled);
 ZEND_FUNCTION(apcu_store);
 ZEND_FUNCTION(apcu_add);
@@ -109,11 +146,27 @@ ZEND_METHOD(APCUIterator, getTotalCount);
 
 static const zend_function_entry ext_functions[] = {
 	ZEND_FE(apcu_enabled, arginfo_apcu_enabled)
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_store", zif_apcu_store, arginfo_apcu_store, 0, frameless_function_infos_apcu_store, NULL)
+#else
 	ZEND_FE(apcu_store, arginfo_apcu_store)
+#endif
 	ZEND_FE(apcu_add, arginfo_apcu_add)
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_fetch", zif_apcu_fetch, arginfo_apcu_fetch, 0, frameless_function_infos_apcu_fetch, NULL)
+#else
 	ZEND_FE(apcu_fetch, arginfo_apcu_fetch)
+#endif
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_exists", zif_apcu_exists, arginfo_apcu_exists, 0, frameless_function_infos_apcu_exists, NULL)
+#else
 	ZEND_FE(apcu_exists, arginfo_apcu_exists)
+#endif
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_delete", zif_apcu_delete, arginfo_apcu_delete, 0, frameless_function_infos_apcu_delete, NULL)
+#else
 	ZEND_FE(apcu_delete, arginfo_apcu_delete)
+#endif
 	ZEND_FE(apcu_inc, arginfo_apcu_inc)
 	ZEND_FE(apcu_dec, arginfo_apcu_dec)
 	ZEND_FE(apcu_cas, arginfo_apcu_cas)

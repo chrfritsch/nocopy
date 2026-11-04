@@ -91,6 +91,7 @@ typedef struct {
 	time_t start_time;
 	uint64_t expunges;
 	uint32_t lock_steals;
+	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
 	uint64_t inserts __attribute__((aligned(64))); /* atomic */
 	stash_shard shards[STASH_MAX_SHARDS];
 	stash_worker workers[STASH_MAX_WORKERS];
@@ -104,6 +105,8 @@ typedef struct {
 	int pin_refs;     /* calls currently reading the arena */
 	bool transient;   /* mine has bits that are not in keep */
 	uint32_t rng;     /* xorshift state for the read counter */
+	uint32_t unpin_seen; /* stash_a->unpin_gen when the idle pins were last dropped */
+	uint32_t idle;       /* pins taken since then (upper bound) */
 	uint64_t mine[STASH_SEG_WORDS]; /* published as pinned */
 	uint64_t keep[STASH_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
 } stash_ctx;
@@ -118,13 +121,15 @@ typedef struct {
 	bool locked; /* small block: filled under the shard lock */
 } stash_put;
 
-/* Read-only after stash_arena_create(); valid in forked children (same address). */
+/* Read-only after stash_arena_create(); valid in forked children (same address). Hidden: no GOT load on the read path. */
+#pragma GCC visibility push(hidden)
 extern stash_arena *stash_a;
 extern char *stash_seg_base;
 extern unsigned stash_seg_shift;
 extern uint32_t stash_shard_mask, stash_tab_mask;
 extern stash_slot *stash_tabs[STASH_MAX_SHARDS];
 extern uint64_t stash_self; /* this process's owner id */
+#pragma GCC visibility pop
 
 /* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
 void stash_rebase(stash_entry *e, const stash_entry *from);
@@ -177,11 +182,9 @@ uint32_t stash_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max)
 
 static inline const char *stash_key(const stash_entry *e) { return (const char *) e + e->koff; }
 static inline uint32_t stash_seg_of(const void *p) { return (uint32_t) (((const char *) p - stash_seg_base) >> stash_seg_shift); }
-static inline stash_shard *stash_shard_of(uint64_t h)
-{
-	/* Fibonacci mix of the high bits: the low ones pick the slot */
-	return &stash_a->shards[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask];
-}
+/* Fibonacci mix of the high bits: the low ones pick the slot */
+static inline uint32_t stash_shard_idx(uint64_t h) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask; }
+static inline stash_shard *stash_shard_of(uint64_t h) { return &stash_a->shards[stash_shard_idx(h)]; }
 static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
 static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
@@ -216,6 +219,7 @@ static inline bool stash_hold(stash_ctx *c, const void *p)
 	}
 	c->mine[w] |= b;
 	c->transient = true;
+	c->idle++;
 	__atomic_store_n(&stash_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return true;
@@ -240,13 +244,25 @@ static inline void stash_drop_transient(stash_ctx *c)
 		}
 	}
 	c->transient = false;
+	c->idle = 0;
+}
+
+/* Idle pins outlive the call (re-pinning costs a full fence per call); dropped once a writer asks, past nsegs/16, at request end.
+ * ponytail: a process idle between calls holds up to nsegs/16 segments; revoking them would need the per-call fence back. */
+static inline void stash_drop_if_asked(stash_ctx *c)
+{
+	uint32_t g = __atomic_load_n(&stash_a->unpin_gen, __ATOMIC_RELAXED);
+	if (c->transient && (g != c->unpin_seen || c->idle > (stash_a->nsegs >> 4))) {
+		c->unpin_seen = g;
+		stash_drop_transient(c);
+	}
 }
 
 static inline void stash_borrow_begin(stash_ctx *c) { c->pin_refs++; }
 static inline void stash_borrow_end(stash_ctx *c)
 {
 	if (--c->pin_refs == 0) {
-		stash_drop_transient(c);
+		stash_drop_if_asked(c);
 	}
 }
 
@@ -263,8 +279,9 @@ static inline uint32_t stash_rand(stash_ctx *c)
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
 static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
 {
-	stash_shard *sh = stash_shard_of(h);
-	const stash_slot *t = stash_tabs[sh - stash_a->shards];
+	uint32_t si = stash_shard_idx(h); /* not sh - shards: that divides by sizeof(stash_shard) */
+	stash_shard *sh = &stash_a->shards[si];
+	const stash_slot *t = stash_tabs[si];
 	uint32_t m = stash_tab_mask, tag = (uint32_t) h;
 	for (;;) {
 	retry:;
