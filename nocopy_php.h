@@ -39,7 +39,7 @@ typedef struct {
 	int fd;          /* -1: not connected */
 	char *buf;       /* replies and pushes, persistent memory */
 	size_t len, pos, cap;
-	time_t retry_at; /* after a failure: no new attempt before */
+	int64_t retry_at; /* ms, monotonic: after a failure, no new attempt before */
 	bool ever;       /* had a connection: the next one clears the local arena (missed invalidations) */
 	bool synced;     /* pushes applied in this request */
 } nocopy_vk;

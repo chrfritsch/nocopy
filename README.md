@@ -202,8 +202,10 @@ usual shared setup: drupal/redis with phpredis on the same Valkey, APCu chainedf
 A web save on server A and a Drush save both show up on server B in both shared setups. Anonymous traffic beats the single-server
 mode because Valkey replaces the journal query that every request paid.
 
-- Valkey unreachable: nocopy serves no local data (it could be stale), fetches miss and writes return `false`, with one warning per second
-  and worker. After a lost connection the local arena is cleared on reconnect.
+- Valkey unreachable: nocopy serves no local data (it could be stale), fetches miss and writes return `false`, with one warning per attempt,
+  retried every 0.5-1.5 s (jittered) per worker. After a lost connection the local arena is cleared on reconnect; a connection found closed at
+  the start of a request is reopened at once. Each connection subscribes to one idle channel, so Valkey's `timeout` does not close idle
+  workers (and clear the arena), and uses TCP keepalive (60 s) against load balancers that drop idle connections.
 - Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. An optional nocopy module for Valkey is planned to save round trips.
 - Local only: `APCUIterator`, `apcu_cache_info`, `nocopy_stats()`, and the single flight of `nocopy_remember`/`apcu_entry` (per server).
 - Valkey evicts by its own `maxmemory-policy`; an evicted key is a miss everywhere. The Drupal module is built for `volatile-lfu` ([details](drupal/README.md)).

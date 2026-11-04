@@ -36,4 +36,6 @@ command in a few functions in `nocopy_valkey.c`, so the module only swaps their 
 - BCAST: every write is pushed to every worker connection of every server (servers x workers messages). Fine for cache traffic, not for
   write-heavy counters.
 - A worker connecting fresh while all others of its server lost their connection unnoticed may read stale data until one of them notices.
+- Each connection subscribes to `__nocopy_keepalive__` (exempt from Valkey's idle `timeout`), so it counts as pubsub for
+  `client-output-buffer-limit` (default 32mb, or 8mb for 60 s of unread pushes): a worker idle through that many invalidations is disconnected.
 - Long CLI processes that only hit locally see pushes at their next Valkey round trip.

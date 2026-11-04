@@ -7,6 +7,8 @@
 
 #include "nocopy_php.h"
 #include "zend_smart_str.h"
+#include "ext/random/php_random.h"
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netdb.h>
@@ -115,6 +117,13 @@ void nocopy_vk_mshutdown(void)
 
 /* ---- connection ---- */
 
+static int64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static bool vk_fail(nocopy_vk *v)
 {
 	if (v->fd >= 0) {
@@ -123,7 +132,7 @@ static bool vk_fail(nocopy_vk *v)
 	v->fd = -1;
 	v->len = v->pos = 0;
 	v->synced = false;
-	v->retry_at = time(NULL) + 1;
+	v->retry_at = now_ms() + php_mt_rand_range(500, 1500); /* jitter: after a Valkey restart, workers do not reconnect in step */
 	return false;
 }
 
@@ -181,8 +190,19 @@ static int vk_dial(void)
 	}
 	freeaddrinfo(res);
 	if (fd >= 0) {
-		int one = 1;
+		int one = 1, idle = 60, intvl = 10, cnt = 3;
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+		/* keepalive: load balancers and NAT drop idle TCP (AWS: 350 s); a dead peer is noticed in ~90 s */
+		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
+#ifdef TCP_KEEPIDLE
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
+#elif defined(TCP_KEEPALIVE)
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle); /* macOS */
+#endif
+#ifdef TCP_KEEPINTVL
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+		setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
+#endif
 	}
 	return fd;
 }
@@ -283,6 +303,11 @@ static int vk_recv(nocopy_vk *v, bool block)
 {
 	if (v->pos == v->len) {
 		v->pos = v->len = 0;
+		if (v->cap > 1024 * 1024) { /* a large reply is consumed: do not keep its buffer for the worker's life */
+			pefree(v->buf, 1);
+			v->buf = NULL;
+			v->cap = 0;
+		}
 	}
 	if (v->cap - v->len < 16384) {
 		if (v->pos) {
@@ -422,8 +447,7 @@ static bool vk_call(nocopy_vk *v, smart_str *s, vk_reply *r)
 
 static bool vk_connect(nocopy_vk *v)
 {
-	time_t now = time(NULL);
-	if (now < v->retry_at) {
+	if (now_ms() < v->retry_at) {
 		return false;
 	}
 	if ((v->fd = vk_dial()) < 0) {
@@ -438,6 +462,12 @@ static bool vk_connect(nocopy_vk *v)
 	}
 	head(&s, 7);
 	ARG(&s, "CLIENT"), ARG(&s, "TRACKING"), ARG(&s, "ON"), ARG(&s, "BCAST"), ARG(&s, "PREFIX"), arg(&s, vk_prefix, vk_plen), ARG(&s, "NOLOOP");
+	/* Subscribed clients are exempt from Valkey's idle `timeout`, which would otherwise close an idle worker's connection and
+	 * cost a full local clear on its reconnect. Its reply is a push, skipped like the others.
+	 * ponytail: the connection now counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of
+	 * unread pushes; a worker idle through that many invalidations is disconnected and clears on reconnect, as before. */
+	head(&s, 2);
+	ARG(&s, "SUBSCRIBE"), ARG(&s, "__nocopy_keepalive__");
 	smart_str_0(&s);
 	vk_reply r = {0};
 	if (!vk_send(v, &s) || !vk_read(v, &r) || r.t == '-' || r.t == '!' || !vk_read(v, &r) || r.t != '+') {
@@ -458,6 +488,9 @@ bool nocopy_vk_ready(void)
 	nocopy_vk *v = &NOCOPY_G(vk);
 	if (EXPECTED(v->synced)) {
 		return true;
+	}
+	if (v->fd >= 0 && !vk_drain(v)) {
+		v->retry_at = 0; /* found closed with no command in flight: reconnect now, not after the pause */
 	}
 	if ((v->fd < 0 && !vk_connect(v)) || !vk_drain(v)) {
 		return false;

@@ -1,5 +1,5 @@
 --TEST--
-nocopy.valkey: unreachable means misses and failed writes, one warning per second; a lost connection clears the local copies on reconnect
+nocopy.valkey: unreachable means misses and failed writes, one attempt per 0.5-1.5 s; a lost connection clears the local copies on reconnect
 --EXTENSIONS--
 nocopy
 --SKIPIF--
@@ -16,7 +16,7 @@ nocopy_get('k');
 vk('CLIENT', 'KILL', 'SKIPME', 'yes'); // drops nocopy's connection
 vk('SET', 't052:k', '2');              // an invalidation nocopy never sees
 var_dump(nocopy_get('other'));         // the round trip finds the connection gone
-sleep(1);
+sleep(2);                              // past the jittered retry pause
 var_dump(nocopy_get('k'));             // reconnected: local copies cleared, Valkey's value
 ?>
 --EXPECT--
