@@ -523,25 +523,56 @@ static nocopy_status publish(nocopy_put *p, bool add_only)
 	}
 }
 
+static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
+
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
+	if (UNEXPECTED(nocopy_vk_on)) {
+		return vk_store(key, val, o, 0);
+	}
 	nocopy_put p;
 	nocopy_status s = build(&p, key, val, o);
 	return s == NOCOPY_OK ? publish(&p, o->add_only) : s;
 }
 
-bool nocopy_drop(zend_string *key)
+bool nocopy_drop_local(const char *k, size_t len)
 {
-	zend_ulong h = zend_string_hash_val(key);
+	zend_ulong h = zend_hash_func(k, len); /* = zend_string_hash_val() */
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
-	bool found = nocopy_remove(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	bool found = nocopy_remove(sh, h, k, (uint32_t) len);
 	nocopy_unlock(sh);
 	return found;
 }
 
+bool nocopy_drop(zend_string *key)
+{
+	if (UNEXPECTED(nocopy_vk_on)) {
+		int r = nocopy_vk_ready() ? nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		return r == 1;
+	}
+	return nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+}
+
+void nocopy_clear_all(void)
+{
+	if (nocopy_vk_on && nocopy_vk_ready()) {
+		nocopy_vk_clear();
+	}
+	nocopy_clear();
+}
+
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
+	if (UNEXPECTED(nocopy_vk_on)) {
+		int64_t v = 0;
+		zend_long t = ttl ? ttl : nocopy_ini_ttl;
+		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) t * 1000, &v) : -1;
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key)); /* the next read fetches it */
+		*out = (zend_long) v;
+		return r == 1;
+	}
 	zend_ulong h = zend_string_hash_val(key);
 	nocopy_shard *sh = nocopy_shard_of(h);
 	for (;;) {
@@ -571,6 +602,11 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
+	if (UNEXPECTED(nocopy_vk_on)) {
+		int r = nocopy_vk_ready() ? nocopy_vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		return r == 1;
+	}
 	zend_ulong h = zend_string_hash_val(key);
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
@@ -614,7 +650,7 @@ static bool cache_unserialize(zval *rv, const char *buf, size_t len, uint8_t fla
 }
 
 /* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
-static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	bool copy = !NOCOPY_G(zero_copy);
@@ -657,6 +693,141 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 	return hit;
 }
 
+/* ---- Valkey tier: the cache of record behind the local arena ---- */
+
+#define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
+
+static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
+{
+	if (Z_TYPE_P(val) == IS_LONG) {
+		return zend_long_to_str(Z_LVAL_P(val));
+	}
+	zval ser;
+	bool igb;
+	if (!serialize_value(val, &ser, &igb)) {
+		return NULL;
+	}
+	zend_string *s = zend_string_alloc(VK_HDR + Z_STRLEN(ser), 0);
+	char *b = ZSTR_VAL(s);
+	int64_t x = expires;
+	b[0] = 0;
+	b[1] = igb ? ENTRY_IGBINARY : 0;
+	memcpy(b + 2, &x, 8);
+	memcpy(b + 10, &user, 4);
+	memcpy(b + VK_HDR, Z_STRVAL(ser), Z_STRLEN(ser) + 1);
+	zval_ptr_dtor(&ser);
+	return s;
+}
+
+static bool vk_decode(const char *b, size_t n, zval *rv, time_t *expires, uint32_t *user)
+{
+	*expires = 0;
+	*user = 0;
+	if (n && b[0] != 0) {
+		zend_long l;
+		if (is_numeric_string(b, n, &l, NULL, false) != IS_LONG) {
+			return false; /* not written by nocopy */
+		}
+		ZVAL_LONG(rv, l);
+		return true;
+	}
+	if (n < VK_HDR) {
+		return false;
+	}
+	int64_t x;
+	memcpy(&x, b + 2, 8);
+	memcpy(user, b + 10, 4);
+	*expires = (time_t) x;
+	if (x && x < time(NULL)) {
+		return false;
+	}
+	uint8_t flags = ENTRY_SERIALIZED | (uint8_t) b[1];
+	zend_string *copy = zend_string_init(b + VK_HDR, n - VK_HDR, 0); /* unserialize may run user code that calls Valkey again */
+	bool ok = cache_unserialize(rv, ZSTR_VAL(copy), ZSTR_LEN(copy), flags);
+	zend_string_release(copy);
+	return ok;
+}
+
+/* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
+static zend_never_inline bool vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+{
+	if (!nocopy_vk_ready()) {
+		ZVAL_NULL(rv);
+		return false; /* no invalidations: local data may be stale */
+	}
+	if (local_fetch(key, rv, exp, delta)) {
+		return true;
+	}
+	uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
+	const char *b;
+	size_t n;
+	time_t expires;
+	uint32_t user;
+	if (nocopy_vk_get(ZSTR_VAL(key), ZSTR_LEN(key), &b, &n) != 1 || !vk_decode(b, n, rv, &expires, &user)) {
+		return false;
+	}
+	time_t now = time(NULL);
+	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - now) : 0, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	nocopy_put p;
+	if (build(&p, key, rv, &o) == NOCOPY_OK) {
+		p.e->user = user;
+		if (publish(&p, false) == NOCOPY_OK && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
+			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		}
+	}
+	if (exp) {
+		*exp = expires;
+		*delta = user;
+	}
+	return true;
+}
+
+static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+{
+	if (UNEXPECTED(nocopy_vk_on)) {
+		return vk_fetch(key, rv, exp, delta);
+	}
+	return local_fetch(key, rv, exp, delta);
+}
+
+/* Valkey first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
+static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+{
+	if (!nocopy_vk_ready()) {
+		return NOCOPY_NO_ROOM;
+	}
+	nocopy_put p;
+	nocopy_status s = NOCOPY_OK;
+	if (!o->add_only && (s = build(&p, key, val, o)) == NOCOPY_OK) {
+		p.e->user = user;
+		publish(&p, false);
+	}
+	if (s == NOCOPY_REFUSED) {
+		return s;
+	}
+	zend_long ttl = o->ttl ? o->ttl : nocopy_ini_ttl;
+	time_t expires = ttl ? time(NULL) + ttl : 0;
+	zend_string *enc = vk_encode(val, expires, user);
+	if (!enc) {
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		return NOCOPY_REFUSED;
+	}
+	int r = nocopy_vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), expires ? ((int64_t) expires + 1) * 1000 : 0, o->add_only);
+	zend_string_release(enc);
+	if (r != 1) {
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		return r == 0 ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+	}
+	if (o->add_only && (s = build(&p, key, val, o)) == NOCOPY_OK) {
+		p.e->user = user;
+		publish(&p, false);
+	} else if (s == NOCOPY_REFUSED) {
+		nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)); /* a resource: APCu refuses it */
+		return s;
+	}
+	return NOCOPY_OK;
+}
+
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
 
 static nocopy_meta meta_of(const nocopy_entry *e)
@@ -664,7 +835,7 @@ static nocopy_meta meta_of(const nocopy_entry *e)
 	return (nocopy_meta) {.created = e->created, .expires = e->expires, .size = e->size, .seq = e->seq};
 }
 
-bool nocopy_info(zend_string *key, nocopy_meta *m)
+static bool local_info(zend_string *key, nocopy_meta *m)
 {
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	nocopy_borrow_begin(c);
@@ -676,8 +847,32 @@ bool nocopy_info(zend_string *key, nocopy_meta *m)
 	return e != NULL;
 }
 
+bool nocopy_info(zend_string *key, nocopy_meta *m)
+{
+	if (!nocopy_vk_on) {
+		return local_info(key, m);
+	}
+	if (!nocopy_vk_ready()) {
+		return false;
+	}
+	if (!local_info(key, m)) {
+		zval t;
+		if (!fetch(key, &t, NULL, NULL)) {
+			return false;
+		}
+		zval_ptr_dtor(&t);
+		if (!local_info(key, m) && m) {
+			*m = (nocopy_meta) {.created = time(NULL)}; /* in Valkey, not kept here */
+		}
+	}
+	return true;
+}
+
 void nocopy_scan(nocopy_scan_fn fn, void *arg)
 {
+	if (nocopy_vk_on && !nocopy_vk_ready()) {
+		return;
+	}
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	nocopy_borrow_begin(c); /* pins, not the lock: fn may allocate */
 	nocopy_entry *e;
@@ -729,9 +924,14 @@ static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		return;
 	}
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
+	uint32_t user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
+	if (nocopy_vk_on) {
+		vk_store(key, rv, o, user);
+		return;
+	}
 	nocopy_put p;
 	if (build(&p, key, rv, o) == NOCOPY_OK) {
-		p.e->user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
+		p.e->user = user;
 		publish(&p, o->add_only);
 	}
 }
@@ -954,6 +1154,7 @@ PHP_FUNCTION(nocopy_stats)
 static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 {
 	NOCOPY_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
+	nocopy_vk_new_request();
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	c->transient = c->slot >= 0;
 	nocopy_drop_transient(c); /* idle pins: the worker now waits for a request */
@@ -1028,6 +1229,9 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
 	PHP_INI_ENTRY("nocopy.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
+	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
+	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, nocopy_vk_on_prefix)
+	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, nocopy_vk_on_timeout)
 PHP_INI_END()
 
 static const zend_ini_entry_def ini_nocopy[] = {
@@ -1121,6 +1325,7 @@ static void atfork_child(void)
 	if (nocopy_a) {
 		nocopy_after_fork(&NOCOPY_G(ctx));
 	}
+	nocopy_vk_close(&NOCOPY_G(vk), true);
 }
 
 static PHP_GINIT_FUNCTION(nocopy)
@@ -1130,6 +1335,7 @@ static PHP_GINIT_FUNCTION(nocopy)
 #endif
 	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
 	nocopy_globals->ctx.slot = -1;
+	nocopy_globals->vk.fd = -1;
 	nocopy_globals->keys.slot = pecalloc(NOCOPY_KEYS, sizeof(nocopy_kslot), 1);
 }
 
@@ -1140,6 +1346,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 		nocopy_release(&nocopy_globals->ctx);
 	}
 	pefree(nocopy_globals->keys.slot, 1);
+	nocopy_vk_close(&nocopy_globals->vk, false);
 }
 
 PHP_MINIT_FUNCTION(nocopy)
@@ -1196,6 +1403,7 @@ PHP_MSHUTDOWN_FUNCTION(nocopy)
 	nocopy_release(&NOCOPY_G(ctx));
 	nocopy_arena_destroy();
 	UNREGISTER_INI_ENTRIES();
+	nocopy_vk_mshutdown();
 	return SUCCESS;
 }
 
@@ -1209,6 +1417,7 @@ PHP_RINIT_FUNCTION(nocopy)
 	}
 	NOCOPY_G(zero_copy) = request_scope;
 	NOCOPY_G(local_ok) = local_size > 0;
+	nocopy_vk_new_request();
 	return SUCCESS;
 }
 

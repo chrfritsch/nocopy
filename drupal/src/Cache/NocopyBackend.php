@@ -28,7 +28,11 @@ class NocopyBackend implements CacheBackendInterface {
     protected TimeInterface $time,
     // NULL: no journal (fast layer, the database is the source of truth).
     protected ?NocopyJournal $journal = new NocopyJournal(),
-  ) {}
+  ) {
+    if (NocopyJournal::shared()) {
+      $this->journal = NULL;
+    }
+  }
 
   protected ?float $replayedFor = NULL;
 

@@ -1,7 +1,8 @@
-# Drupal test + bench image: nocopy-linux plus Drupal's PHP extensions, MariaDB and composer.
+# Drupal test + bench image: nocopy-linux plus Drupal's PHP extensions, MariaDB and composer. phpredis only for the bench's drupal/redis baseline.
 #   docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-drupal -f docker/Dockerfile.drupal docker
 FROM nocopy-linux:8.5
 RUN apt-get update && apt-get install -y --no-install-recommends libpng-dev libjpeg-dev libfreetype-dev libzip-dev unzip git mariadb-server \
  && rm -rf /var/lib/apt/lists/* \
  && docker-php-ext-configure gd --with-jpeg --with-freetype && docker-php-ext-install gd zip pdo_mysql \
+ && pecl install redis </dev/null && rm -f /usr/local/etc/php/conf.d/*redis* \
  && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer

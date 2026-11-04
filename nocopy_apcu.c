@@ -708,7 +708,7 @@ PHP_FUNCTION(apcu_clear_cache)
 	if (!nocopy_apc_on) {
 		RETURN_TRUE;
 	}
-	nocopy_clear();
+	nocopy_clear_all();
 	RETURN_TRUE;
 }
 

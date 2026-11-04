@@ -34,6 +34,16 @@ typedef struct {
 	zval v;
 } nocopy_local;
 
+/* Valkey connection of this worker (nocopy_valkey.c). */
+typedef struct {
+	int fd;          /* -1: not connected */
+	char *buf;       /* replies and pushes, persistent memory */
+	size_t len, pos, cap;
+	time_t retry_at; /* after a failure: no new attempt before */
+	bool ever;       /* had a connection: the next one clears the local arena (missed invalidations) */
+	bool synced;     /* pushes applied in this request */
+} nocopy_vk;
+
 ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_ctx ctx;
 	bool zero_copy; /* this request may be handed pointers into the arena */
@@ -43,6 +53,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_local *local; /* request memory, NULL until the first copy-mode fetch */
 	size_t local_bytes;
 	bool local_ok; /* between RINIT and RSHUTDOWN */
+	nocopy_vk vk;
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
@@ -91,6 +102,26 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
 /* Fetch, or run fci once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
 void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, double beta, zval *rv);
 
-void nocopy_apcu_minit(int module_number); /* apcu_* functions, APCUIterator, APC_* constants */
+void nocopy_clear_all(void); /* apcu_clear_cache: Valkey's keys under the prefix too */
+bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */
+
+void nocopy_apcu_minit(int module_number);
+
+/* ---- Valkey tier (nocopy_valkey.c): nocopy.valkey set. Commands take keys without the prefix; -1: unreachable or failed. ---- */
+extern bool nocopy_vk_on;
+ZEND_INI_MH(nocopy_vk_on_url);
+ZEND_INI_DISP(nocopy_vk_display);
+ZEND_INI_MH(nocopy_vk_on_prefix);
+ZEND_INI_MH(nocopy_vk_on_timeout);
+void nocopy_vk_mshutdown(void);
+bool nocopy_vk_ready(void); /* connected and this request's pushes applied; false: serve no local data */
+void nocopy_vk_new_request(void);
+void nocopy_vk_close(nocopy_vk *v, bool forked);
+int nocopy_vk_get(const char *k, size_t kl, const char **val, size_t *vl); /* 1 hit (val valid until the next call), 0 miss */
+int nocopy_vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx); /* 0: nx and it exists */
+int nocopy_vk_unlink(const char *k, size_t kl); /* 1: it existed */
+int nocopy_vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out); /* 0: not an integer */
+int nocopy_vk_cas(const char *k, size_t kl, int64_t old, int64_t nw);
+int nocopy_vk_clear(void); /* apcu_* functions, APCUIterator, APC_* constants */
 
 #endif

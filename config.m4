@@ -103,7 +103,7 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
 
   dnl Configure extension sources and compilation flags.
   PHP_NEW_EXTENSION([nocopy],
-    [nocopy.c nocopy_apcu.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c],
+    [nocopy.c nocopy_apcu.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c nocopy_valkey.c],
     [$ext_shared],,
     [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden])
 ])

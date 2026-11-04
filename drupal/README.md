@@ -1,6 +1,6 @@
 # nocopy for Drupal
 
-Cache backend and cache tag checksums on the [nocopy](https://github.com/chrfritsch/nocopy) PHP extension, for **single-server** sites.
+Cache backend and cache tag checksums on the [nocopy](https://github.com/chrfritsch/nocopy) PHP extension, for single-server sites, or for several servers sharing Valkey (`nocopy.valkey`).
 All cache bins and tag checksums live in shared memory, so cache reads and tag checks no longer touch the database. Cached arrays
 (config, the container definition, most bootstrap data) are read without a copy.
 
@@ -44,6 +44,9 @@ $settings['bootstrap_container_definition'] = [
 
 Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays contain objects, which are stored serialized).
 
+**Several web servers:** add `nocopy.valkey=host:6379` to php.ini (php-fpm and CLI). The same `settings.php` then shares all bins and tag
+checksums through Valkey, each server keeps zero-copy local copies, and the journal is off: Drush and cron writes reach php-fpm through Valkey.
+
 **Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
 It uses `cache.backend.nocopy_fast`, which keeps no journal (chainedfast already checks the database on every request) and falls back to
@@ -51,8 +54,8 @@ the database alone where the extension is not loaded, like core's APCu fast laye
 
 ## Trade-offs
 
-- **Single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
-- **Drush, cron and other CLI processes have their own memory.** They log every cache write, cache clear and tag invalidation
+- **Without `nocopy.valkey`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
+- **Drush, cron and other CLI processes have their own memory.** (With `nocopy.valkey` none of this applies.) They log every cache write, cache clear and tag invalidation
   to the `nocopy_journal` table. Each web request reads the journal's last id (one query, also on page cache hits) and replays what is new,
   so `drush cr`, `drush cim`, `drush updb` and content saved by `drush cron` reach php-fpm on the next request. Cron drops entries
   older than a day, and a web worker that missed dropped entries starts with an empty cache. Long-running CLI processes (queue

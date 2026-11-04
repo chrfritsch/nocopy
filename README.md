@@ -71,7 +71,8 @@ a journal table ([details](drupal#trade-offs)).
 - **Smarter eviction when full.** APCu wipes the whole cache. nocopy evicts its oldest segments and keeps entries read since they were written, using Segcache-style merging with a ghost list for keys that return.
 - **Stampede protection.** `nocopy_remember()` and `apcu_entry()` run the callback once per key across all workers. `nocopy_remember()` also refreshes early via XFetch.
 - **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
-- **Drupal module** with a cache backend for all bins and cache tag checksums in shared memory (single server).
+- **Valkey tier** (`nocopy.valkey`): Valkey becomes the cache of record shared by all servers, nocopy the zero-copy local copy in front of it. nocopy.so speaks RESP3 itself (no phpredis) and keeps local copies in sync through Valkey's client-side tracking.
+- **Drupal module** with a cache backend for all bins and cache tag checksums in shared memory (single server, or several with `nocopy.valkey`).
 
 ## Quick start
 
@@ -166,10 +167,42 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | `nocopy.local_size` | `8M` | Copy mode only: keeps private copies of arrays and strings (≥ 512 B) fetched twice and hands them out again while the entry is unchanged. Counts against `memory_limit`. `0` = off |
 | `nocopy.serializer` | `php` | `php` or `igbinary`: the format for values stored serialized (objects, shared references). Arrays and scalars are never serialized. `igbinary` needs the igbinary extension, otherwise a startup warning and `php`. Alias: `apc.serializer` |
 | `nocopy.apcu_compat` | `1` | Registers `apcu_*`, `APCUIterator`, `APC_*` and `apc.*`. `0`: only `nocopy_*`, so real APCu can be loaded too. If APCu is already loaded, nocopy switches to `0` itself and logs a startup warning |
+| `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `host:port` or `unix:///path`: share the cache through Valkey ([below](#valkey)). `phpinfo()` hides the credentials |
+| `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey; servers with the same prefix share one cache |
+| `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connect or a reply before treating Valkey as down |
 | `apc.enabled`, `apc.enable_cli` | `1`, `0` | As in APCu. These switch the `apcu_*` functions, not `nocopy_*` |
 
 If both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
 FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_request()`, whatever `request_scope` says.
+
+### Valkey
+
+With `nocopy.valkey` set, every write goes to Valkey and to the local arena, every local miss is fetched from Valkey and kept locally,
+and deletes, `apcu_inc/dec/cas` and `apcu_clear_cache` run in Valkey. Each worker has one connection with client-side tracking
+(`CLIENT TRACKING ON BCAST PREFIX <prefix> NOLOOP`): a change made anywhere else, including expiry and eviction in Valkey, drops the local copy
+at the next nocopy call of a request. Local hits stay zero-copy and cost no round trip. So several servers share one cache, a php-fpm restart
+or a new server starts warm, and CLI processes (Drush, cron, workers) see web writes and the other way round.
+
+Drupal 11, 2,000 nodes, php-fpm 8 workers, all bins and tags shared (one run, `bench/results-drupal/valkey`). The baseline is the
+usual shared setup: drupal/redis with phpredis on the same Valkey, APCu chainedfast in front of bootstrap/config/discovery.
+
+| req/s (p50) | drupal/redis | nocopy + Valkey | nocopy, single server |
+|---|---|---|---|
+| anonymous `/` | 5,129 (2 ms) | 12,546 (1 ms) | 9,109 (1 ms) |
+| logged-in `/` | 727 (10 ms) | 1,437 (5 ms) | 1,454 (5 ms) |
+| logged-in node | 711 (11 ms) | 1,299 (6 ms) | 1,239 (6 ms) |
+| first logged-in request after an fpm restart | 157 ms | 182 ms | 504 ms |
+| second server, requests 6-30 (p50) | 6.6 ms | 4.3 ms | n/a |
+
+A web save on server A and a Drush save both show up on server B in both shared setups. Anonymous traffic beats the single-server
+mode because Valkey replaces the journal query that every request paid.
+
+- Valkey unreachable: nocopy serves no local data (it could be stale), fetches miss and writes return `false`, with one warning per second
+  and worker. After a lost connection the local arena is cleared on reconnect.
+- Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. An optional nocopy module for Valkey is planned to save round trips.
+- Local only: `APCUIterator`, `apcu_cache_info`, `nocopy_stats()`, and the single flight of `nocopy_remember`/`apcu_entry` (per server).
+- Values are stored with `nocopy.serializer` (integers as plain numbers), so all servers need the same serializer.
+- Every change is pushed to every worker connection of every server: meant for cache traffic, not for counters hammered on every request.
 
 ## How it works
 

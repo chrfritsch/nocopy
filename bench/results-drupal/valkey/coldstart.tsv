@@ -1,0 +1,4 @@
+config	first_ms	settled_at_request	warm_p50_ms	nocopy_used_bytes
+nocopy-all	504.4	3	5	10843424
+nocopy-valkey	182.3	2	5	6514736
+redis	157.0	2	10	0

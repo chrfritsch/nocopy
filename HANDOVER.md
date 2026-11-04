@@ -14,6 +14,11 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 Works, not released. Git repo, MIT license (2026-11-04). CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 Renamed stash -> nocopy (2026-11-04): extension, `nocopy_*` functions, `nocopy.*` INI, `NOCOPY_*` macros, files, Symfony bundle (`Chrfritsch\NocopyBundle`, `cache.adapter.nocopy`), Docker images `nocopy-linux`/`nocopy-zts`. The `apcu_*` layer is unchanged. Packagist, PECL and nocopy.dev were free; the GitHub user `nocopy` is taken.
 
+### Valkey tier (2026-11-04)
+`nocopy.valkey`: Valkey is the cache of record, the arena a zero-copy local copy kept in sync by RESP3 client-side tracking (BCAST, NOLOOP); own client in `nocopy_valkey.c`, no phpredis.
+Spec `docs/superpowers/specs/2026-11-04-valkey-design.md`, ARCHITECTURE "Valkey tier". Tests 050-054 (need valkey-server, in the 8.5 image; skip elsewhere), Drupal generic suite passes in Valkey mode (no journal).
+Bench (one run, `bench/results-drupal/valkey`): vs drupal/redis+phpredis 2x logged-in, 2.4x anonymous; fpm restart 182 ms first request (single-server nocopy 504). Next: rotated 3-run bench, optional Valkey module (phase 2), Symfony adapter check, CI job with a Valkey service.
+
 ### Performance pass (2026-11-04)
 Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the VM's internal call frame), then `docker/ab.sh 3 "read write parallel"` vs ddf5da4 (Linux Docker arm64, load ~1.6):
 - Frameless handlers (PHP 8.4+, `@frameless-function` in the stubs): `apcu_fetch`/`apcu_exists`/`apcu_delete`/`nocopy_get` arity 1, `apcu_store` 1-3, `nocopy_put` 2-3. `apcu_store` needs arity 1: a 1-arg call would pick arity 2 and `$value` has no default (ZEND_UNREACHABLE). gen_stub's legacy output leaves the `#else` (8.3) branch empty: the ZEND_FE lines there are added by hand after regenerating. MINIT adds the handler count to opcache's system id (file cache stores handler indices). Test 040.

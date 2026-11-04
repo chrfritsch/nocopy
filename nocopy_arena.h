@@ -94,6 +94,7 @@ typedef struct {
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
+	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];

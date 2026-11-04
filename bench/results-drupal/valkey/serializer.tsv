@@ -1,0 +1,4 @@
+config	probe_bytes
+nocopy-all	5000
+nocopy-valkey	5000
+redis	115104

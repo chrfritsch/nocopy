@@ -52,6 +52,9 @@ class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsIn
 
   // Web requests: fresh tokens for tags that CLI processes invalidated, once per request.
   protected function replay(): void {
+    if (NocopyJournal::shared()) {
+      return;
+    }
     $request = NocopyJournal::request();
     if ($this->replayedFor === $request || ($this->journal->writer && $this->replayedFor !== NULL)) {
       return;

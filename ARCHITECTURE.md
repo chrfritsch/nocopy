@@ -108,6 +108,19 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 `apcu_sma_info` reports one segment per shard (its slice and that slice's free runs): an entry only fits into its own shard's free space.
 `apcu_inc/dec/cas` go through `nocopy_add_long`/`nocopy_cas_long`: the integer is modified in place under the shard lock with relaxed atomics (readers copy that word). `apcu_clear_cache` takes all shard locks in index order.
 
+## Valkey tier (`nocopy_valkey.c`)
+
+`nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` routes `nocopy_store`/`fetch`/`drop`/`info`/`add_long`/`cas_long`,
+`compute` and `nocopy_clear_all` through it (`vk_*`); `nocopy_valkey.c` owns the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
+- One connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH]`, `CLIENT TRACKING ON BCAST PREFIX p NOLOOP`.
+  Any error or timeout closes it (the reply stream would be out of step); a new attempt waits a second. A reconnect after a lost connection clears the arena.
+- `nocopy_vk_ready()` once per request (`synced`, reset in RINIT and per FrankenPHP request): connect if needed, then drain the socket without blocking and apply pushes.
+  Every reply read also applies the pushes queued in front of it. While not ready nothing local is served.
+- Push `invalidate [keys]`: `inval_gen++` (seq_cst) first, then `nocopy_drop_local` per key; a null list (FLUSHALL) clears the arena.
+- Fill guard: `vk_fetch` reads `inval_gen` before its `GET` and drops the copy it just stored if the counter moved. A drainer bumps before it drops, so either the filler sees the bump or the drop comes after the store.
+- Writes: local first, then `SET` (an invalidation from elsewhere can only remove our copy, never be overtaken by it). `add`: `SET NX` first, local after. Siblings on the same server get our write pushed too (NOLOOP is per connection) and drop their shared copy: one refetch per write per server.
+- Encoding: integers as decimal (for `INCRBY`); else `0x00, flags, int64 expires, uint32 compute ms` + the serialized value. `PXAT` = (expires + 1) s.
+
 ## Invariants worth remembering
 
 - Never allocate (emalloc, zvals) while holding a shard lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker. `nocopy_rebase` runs under the lock: it only rewrites pointers.

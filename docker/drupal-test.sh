@@ -12,11 +12,14 @@ rm -rf /drupal/web/modules/contrib/nocopy && mkdir -p /drupal/web/modules/contri
 cd /drupal
 rc=0
 # kernel tests run in child processes, which do not inherit -d flags: settings go to conf.d
-for mode in "" "nocopy.request_scope=1"; do
+valkey-cli ping >/dev/null 2>&1 || valkey-server --daemonize yes --save '' --appendonly no >/dev/null
+for mode in "" "nocopy.request_scope=1" "nocopy.valkey=127.0.0.1:6379"; do
   echo "== mode: ${mode:-copy} $EXTRA"
   printf '%s\n' "extension=/build/modules/nocopy.so" "extension=igbinary" "nocopy.serializer=igbinary" "memory_limit=1G" $mode $EXTRA > /usr/local/etc/php/conf.d/zz-nocopy.ini
   rm -f /tmp/t.sqlite*
+  # Valkey carries invalidations: no journal, so its tests do not apply
+  case $mode in *valkey*) filter="--filter Nocopy(Backend|CacheTagsChecksum)Test" ;; *) filter= ;; esac
   SIMPLETEST_DB=sqlite://localhost//tmp/t.sqlite SIMPLETEST_BASE_URL=http://localhost \
-    php vendor/bin/phpunit -c web/core --fail-on-skipped --display-skipped web/modules/contrib/nocopy/tests || rc=1
+    php vendor/bin/phpunit -c web/core --fail-on-skipped --display-skipped $filter web/modules/contrib/nocopy/tests || rc=1
 done
 exit $rc

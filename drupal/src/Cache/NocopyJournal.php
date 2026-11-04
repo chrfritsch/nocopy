@@ -21,13 +21,18 @@ final class NocopyJournal {
 
   public function __construct(public readonly bool $writer = PHP_SAPI === 'cli') {}
 
+  // nocopy.valkey: every process shares Valkey, which carries invalidations itself.
+  public static function shared(): bool {
+    return (string) ini_get('nocopy.valkey') !== '';
+  }
+
   public static function request(): float {
     return (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? 0);
   }
 
   // NULL: the whole bin.
   public function record(string $name, ?array $items): void {
-    if (!$this->writer) {
+    if (!$this->writer || self::shared()) {
       return;
     }
     $db = Database::getConnection();
