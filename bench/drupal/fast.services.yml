@@ -1,0 +1,7 @@
+# nocopy as chainedfast's fast backend, database behind it.
+services:
+  cache.backend.chainedfast:
+    class: Drupal\Core\Cache\ChainedFastBackendFactory
+    arguments: ['@settings', null, 'cache.backend.nocopy']
+    calls:
+      - [setContainer, ['@service_container']]
