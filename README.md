@@ -132,10 +132,15 @@ The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` a
 
 ### Drupal
 
-The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 10.3+ / 11) puts every cache bin and the cache tag checksums
+The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 11.2+) puts every cache bin and the cache tag checksums
 in nocopy, so cache reads and tag checks no longer touch the database. Install it, enable it, and add the `settings.php` lines from
-[`drupal/README.md`](drupal/README.md). It is for single-server sites. Read the trade-offs there first; the main one is that Drush runs in its own
-memory, so reload php-fpm after deploys and CLI changes. Reproduce the benchmark:
+[`drupal/README.md`](drupal/README.md). It is for single-server sites.
+
+> **Drush and cron do not reach php-fpm's cache.** CLI processes get their own memory, so cache clears and tag invalidations from
+> `drush cr`, `drush cim`, `drush updb` or `drush cron` (scheduled publishing, queues, migrations) never reach the web workers, and they keep
+> serving stale pages. Reload php-fpm after every CLI run that changes content or config, or run cron through the web (`/cron/<key>`).
+
+Reproduce the benchmark:
 
 ```sh
 docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-drupal -f docker/Dockerfile.drupal docker

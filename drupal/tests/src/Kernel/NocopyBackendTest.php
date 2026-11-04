@@ -10,6 +10,7 @@ use Drupal\KernelTests\Core\Cache\GenericCacheBackendUnitTestBase;
 use Drupal\nocopy\Cache\NocopyBackend;
 use Drupal\nocopy\Cache\NocopyCacheTagsChecksum;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
@@ -82,6 +83,24 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
       }
     }
     $this->assertGreaterThan(0, $hits);
+  }
+
+  public function testDeletedItemsStayDeletedWhenVersionKeyIsLost(): void {
+    $b = $this->createCacheBackend('fresh_bin');
+    $b->set('k', 'old');
+    $b->deleteAll();
+    nocopy_delete($this->prefix . '::fresh_bin::version');
+    $this->assertFalse($b->get('k'));
+  }
+
+  #[IgnoreDeprecations]
+  public function testInvalidatedItemsStayInvalidWhenMarkerIsLost(): void {
+    $b = $this->getCacheBackend();
+    $b->set('k', 'v');
+    $this->expectUserDeprecationMessage('CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622');
+    $b->invalidateAll();
+    nocopy_delete($this->prefix . '::' . $this->getTestBin() . '::invalidated_at');
+    $this->assertFalse($b->get('k'));
   }
 
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\nocopy\Kernel;
 
+use Drupal\Core\Cache\CacheTagsChecksumInterface;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\nocopy\Cache\NocopyCacheTagsChecksum;
 use PHPUnit\Framework\Attributes\Group;
@@ -55,6 +56,18 @@ class NocopyCacheTagsChecksumTest extends KernelTestBase {
       $seen[$t] = TRUE;
     }
     $this->assertCount(1000, $seen);
+  }
+
+  public function testInvalidationInsideTransactionWaitsForCommit(): void {
+    $c = $this->checksum->getCurrentChecksum(['a']);
+    $before = nocopy_get($this->checksum->getTagKey('a'));
+    $tx = \Drupal::database()->startTransaction();
+    $this->checksum->invalidateTags(['a']);
+    $this->assertSame(CacheTagsChecksumInterface::INVALID_CHECKSUM_WHILE_IN_TRANSACTION, $this->checksum->getCurrentChecksum(['a']));
+    $this->assertFalse($this->checksum->isValid($c, ['a']));
+    $this->assertSame($before, nocopy_get($this->checksum->getTagKey('a')));
+    unset($tx);
+    $this->assertNotSame($before, nocopy_get($this->checksum->getTagKey('a')));
   }
 
 }

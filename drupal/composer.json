@@ -5,9 +5,12 @@
     "license": "MIT",
     "require": {
         "php": ">=8.3",
-        "drupal/core": "^10.3 || ^11"
+        "drupal/core": "^11.2"
     },
     "suggest": {
         "ext-nocopy": "The nocopy extension (github.com/chrfritsch/nocopy) must be loaded."
+    },
+    "extra": {
+        "installer-name": "nocopy"
     }
 }

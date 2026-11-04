@@ -50,9 +50,12 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 ## Trade-offs
 
 - **Single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
-- **Drush and other CLI processes do not share php-fpm's cache.** The CLI gets its own memory. `drush cr`, `drush cim`, `drush updb`,
-  or content saved from the CLI do not reach the web workers' cache. Reload php-fpm after deploys and CLI changes (`systemctl reload php-fpm`):
-  a reload starts with an empty cache. Changes made through the web UI are invalidated as usual.
+- **Drush, cron and other CLI processes do not share php-fpm's cache.** The CLI gets its own memory. `drush cr`, `drush cim`, `drush updb`,
+  and content saved by `drush cron` (scheduled publishing, queue workers, migrations) do not reach the web workers' cache, which keeps
+  serving stale pages. Reload php-fpm after deploys and CLI changes (`systemctl reload php-fpm`): a reload starts with an empty cache.
+  Run cron through the web (`/cron/<key>` or automated_cron) instead of `drush cron`. Changes made through the web UI are invalidated as usual.
+- **Do not set `nocopy.ttl`** (or `apc.ttl`): it would expire cache tag tokens, and a lost token for a common tag such as `rendered`
+  invalidates most of the site at once.
 - **The cache is empty after a php-fpm restart or reload,** so the first requests rebuild it. In the benchmark, the first logged-in
   request after a restart took 537 ms (stock: 223 ms, where the database caches survive), and requests were back to normal from the third one.
 - **Memory:** `nocopy.shm_size` must hold the cache, render cache included. When it is full, nocopy evicts entries (cache misses, not errors).

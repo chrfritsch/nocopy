@@ -2,4 +2,4 @@ name: nocopy
 type: module
 description: 'Cache backend and cache tag checksums on the nocopy extension (single server).'
 package: Performance
-core_version_requirement: ^10.3 || ^11
+core_version_requirement: ^11.2

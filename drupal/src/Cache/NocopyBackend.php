@@ -18,7 +18,7 @@ class NocopyBackend implements CacheBackendInterface {
   // Positions in the stored array.
   private const DATA = 0, CREATED = 1, EXPIRE = 2, TAGS = 3, CHECKSUM = 4;
 
-  // ponytail: invalidated items outlive their expiry by this long for $allow_invalid readers, then nocopy may drop them.
+  // Invalidated items outlive their expiry by this long for $allow_invalid readers, then nocopy may drop them.
   private const TTL_SLACK = 3600;
 
   public function __construct(
@@ -32,10 +32,23 @@ class NocopyBackend implements CacheBackendInterface {
     return $this->sitePrefix . '::' . $this->bin . '::' . $name;
   }
 
-  // Read on every call: another request may have cleared the bin.
-  protected function key(string $cid): string {
+  // [version, invalidated_at], read on every call: another request may have cleared the bin.
+  // Either key lost (new bin, eviction, nocopy.ttl): start a fresh version. That only costs misses, a default could revive deleted items.
+  protected function state(): array {
     $version = nocopy_get($this->binKey('version'), $hit);
-    return $this->binKey(($hit ? $version : '0') . '::' . $cid);
+    $invalidated = nocopy_get($this->binKey('invalidated_at'), $invalidatedHit);
+    if (!$hit || !$invalidatedHit) {
+      $version = bin2hex(random_bytes(6));
+      nocopy_put($this->binKey('version'), $version);
+      nocopy_put($this->binKey('invalidated_at'), [$version, 0.0]);
+      return [$version, 0.0];
+    }
+    // invalidateAll() of an older version does not apply after deleteAll().
+    return [$version, $invalidated[0] === $version ? $invalidated[1] : 0.0];
+  }
+
+  protected function key(string $cid, ?string $version = NULL): string {
+    return $this->binKey(($version ?? $this->state()[0]) . '::' . $cid);
   }
 
   public function get($cid, $allow_invalid = FALSE) {
@@ -45,8 +58,9 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function getMultiple(&$cids, $allow_invalid = FALSE) {
     $raw = [];
+    [$version, $invalidatedAt] = $this->state();
     foreach ($cids as $cid) {
-      $item = nocopy_get($this->key((string) $cid));
+      $item = nocopy_get($this->key((string) $cid, $version));
       if (is_array($item)) {
         $raw[$cid] = $item;
       }
@@ -60,7 +74,6 @@ class NocopyBackend implements CacheBackendInterface {
       }
       $this->checksumProvider->registerCacheTagsForPreload(array_merge(...$tags));
     }
-    $invalidatedAt = nocopy_get($this->binKey('invalidated_at'));
     $cache = [];
     foreach ($raw as $cid => $item) {
       if ($prepared = $this->prepareItem($cid, $item, $allow_invalid, $invalidatedAt)) {
@@ -71,7 +84,7 @@ class NocopyBackend implements CacheBackendInterface {
     return $cache;
   }
 
-  protected function prepareItem(string|int $cid, array $item, bool $allow_invalid, mixed $invalidatedAt): object|false {
+  protected function prepareItem(string|int $cid, array $item, bool $allow_invalid, float $invalidatedAt): object|false {
     $cache = new \stdClass();
     $cache->cid = $cid;
     $cache->data = $item[self::DATA];
@@ -80,7 +93,7 @@ class NocopyBackend implements CacheBackendInterface {
     $cache->tags = $item[self::TAGS] === '' ? [] : explode(' ', $item[self::TAGS]);
     $cache->checksum = $item[self::CHECKSUM];
     $cache->valid = ($cache->expire == CacheBackendInterface::CACHE_PERMANENT || $cache->expire >= $this->time->getRequestTime())
-      && !(is_float($invalidatedAt) && $cache->created <= $invalidatedAt)
+      && $cache->created > $invalidatedAt
       && $this->checksumProvider->isValid($cache->checksum, $cache->tags);
     return $allow_invalid || $cache->valid ? $cache : FALSE;
   }
@@ -143,7 +156,7 @@ class NocopyBackend implements CacheBackendInterface {
   public function invalidateAll() {
     @trigger_error("CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622", E_USER_DEPRECATED);
     // Rounded like 'created', so every item created up to now compares <=.
-    nocopy_put($this->binKey('invalidated_at'), round(microtime(TRUE), 3));
+    nocopy_put($this->binKey('invalidated_at'), [$this->state()[0], round(microtime(TRUE), 3)]);
   }
 
   public function garbageCollection() {
