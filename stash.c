@@ -5,7 +5,7 @@
 #endif
 
 #include "stash_php.h"
-#include "stash_arena.c" /* one unit with the write path: alloc and commit inline into it (measured ~3 ns per write) */
+#include "stash_arena.h"
 #include "ext/standard/info.h"
 #include "ext/standard/php_var.h"
 #include "ext/standard/basic_functions.h"

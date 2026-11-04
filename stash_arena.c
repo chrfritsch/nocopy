@@ -152,7 +152,7 @@ bool stash_claim(stash_ctx *c)
 				while (cur < (uint32_t) i + 1
 				 && !__atomic_compare_exchange_n(&stash_a->nworkers, &cur, i + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
 				c->slot = i;
-				c->rng = (uint32_t) (stash_self ^ (stash_self >> 32)) * 2654435761u + (uint32_t) i | 1;
+				c->rng = ((uint32_t) (stash_self ^ (stash_self >> 32)) * 2654435761u + (uint32_t) i) | 1;
 				return true;
 			}
 		}

@@ -1,7 +1,7 @@
 # Architecture
 
 Three files:
-- `stash_arena.c/.h`: the shared-memory store. No PHP in it: entries are a header plus the caller's bytes. The read path (`stash_find`, pins, the lock fast path) is inline in the header.
+- `stash_arena.c/.h`: the shared-memory store. No PHP in it: entries are a header plus the caller's bytes. The read path (`stash_find`, pins, the lock fast path) is inline in the header. Its own compilation unit, as in `tests/c` (`tests/c/repair.c` alone includes the .c, for its statics).
 - `stash.c`: PHP values in and out of the arena (persist, copy-out, unserialize), `stash_*`, the module, FrankenPHP's worker hook.
 - `stash_apcu.c`: `apcu_*` and `APCUIterator` on top of `stash.c`, registered only with `stash.apcu_compat=1`.
 

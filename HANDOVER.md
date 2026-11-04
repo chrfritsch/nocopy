@@ -14,7 +14,7 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 Works, not released. Git repo, no license yet. CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 
 ### Rebuild of the core (2026-11-03, second half of the day)
-- Split: `stash_arena.c/.h` (no PHP; read path inline in the header), `stash.c` (values, `stash_*`, module; `#include`s stash_arena.c so the write path inlines: one unit), `stash_apcu.c`. `-fvisibility=hidden`: only `get_module` is exported.
+- Split: `stash_arena.c/.h` (no PHP; read path inline in the header), `stash.c` (values, `stash_*`, module), `stash_apcu.c`. stash.c used to `#include` stash_arena.c so the write path inlined (~3 ns per write then); separate units measured 2026-11-04 (`docker/ab.sh 5 read write`): writes equal or 1-4% faster, zero-copy fetches +0.25 ns (layout), so they are separate now. `-fvisibility=hidden`: only `get_module` is exported.
 - `tests/c/stress.c` + `tests/c/run.sh`: 8 threads on the arena alone, model-checked, plain and ThreadSanitizer: clean (TSAN on gcc ignores fences: only false alarms possible, none seen). Also builds and passes natively on macOS.
 - Shards own fixed segment slices (>= 8 MB, >= 16 segments each): no pool lock, no cross-shard help; an entry must fit in a slice.
 - Slot tables fixed (no `grow()`), sized from `apc.entries_hint` / shm size; full table evicts. Backward-shift deletes (no tombstones); readers retry a miss if the shard's `mseq` moved. Test 018 checks that and fails reliably with the retry removed.
