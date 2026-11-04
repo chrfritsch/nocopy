@@ -1,0 +1,20 @@
+<?php
+
+/**
+ * Implements hook_schema().
+ */
+function nocopy_schema(): array {
+  return [
+    'nocopy_journal' => [
+      'description' => 'Cache writes by CLI processes, replayed by web requests.',
+      'fields' => [
+        'id' => ['type' => 'serial', 'size' => 'big', 'unsigned' => TRUE, 'not null' => TRUE],
+        'created' => ['type' => 'int', 'not null' => TRUE],
+        'name' => ['type' => 'varchar_ascii', 'length' => 255, 'not null' => TRUE],
+        'items' => ['type' => 'text', 'size' => 'big'],
+      ],
+      'primary key' => ['id'],
+      'indexes' => ['created' => ['created']],
+    ],
+  ];
+}

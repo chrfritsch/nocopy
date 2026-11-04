@@ -18,16 +18,67 @@ use Drupal\Core\Site\Settings;
  */
 class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsInvalidatorInterface, CacheTagsChecksumPreloadInterface {
 
-  use CacheTagsChecksumTrait;
+  use CacheTagsChecksumTrait {
+    getCurrentChecksum as traitGetCurrentChecksum;
+    isValid as traitIsValid;
+  }
 
   protected string $prefix;
 
-  public function __construct(string $root, string $sitePath) {
+  // Tag keys live under an epoch, so a web request that lost its journal position drops all tokens at once.
+  protected string $epoch = '';
+
+  protected ?float $replayedFor = NULL;
+
+  public function __construct(string $root, string $sitePath, protected NocopyJournal $journal = new NocopyJournal()) {
     $this->prefix = Settings::getApcuPrefix('nocopy_tags', $root, $sitePath);
   }
 
   public function getTagKey(string $tag): string {
-    return $this->prefix . '::' . $tag;
+    $this->replay();
+    return $this->prefix . '::' . $this->epoch . '::' . $tag;
+  }
+
+  // The trait answers from its tag cache first, so replay before it.
+  public function getCurrentChecksum(array $tags) {
+    $this->replay();
+    return $this->traitGetCurrentChecksum($tags);
+  }
+
+  public function isValid($checksum, array $tags) {
+    $this->replay();
+    return $this->traitIsValid($checksum, $tags);
+  }
+
+  // Web requests: fresh tokens for tags that CLI processes invalidated, once per request.
+  protected function replay(): void {
+    $request = NocopyJournal::request();
+    if ($this->replayedFor === $request || ($this->journal->writer && $this->replayedFor !== NULL)) {
+      return;
+    }
+    $this->replayedFor = $request;
+    $last = $this->journal->writer ? 0 : $this->journal->lastId();
+    // [epoch, applied journal id]
+    $state = nocopy_get($this->prefix . '::state', $hit);
+    if (!$hit) {
+      $state = [bin2hex(random_bytes(6)), $last];
+      nocopy_put($this->prefix . '::state', $state);
+    }
+    elseif ($last > $state[1]) {
+      foreach ($this->journal->since($state[1], NocopyJournal::TAGS) as $tags) {
+        if ($tags === NULL) {
+          $state[0] = bin2hex(random_bytes(6));
+          break;
+        }
+        foreach ($tags as $tag) {
+          nocopy_put($this->prefix . '::' . $state[0] . '::' . $tag, random_int(1, 2 ** 48));
+        }
+      }
+      $state[1] = $last;
+      nocopy_put($this->prefix . '::state', $state);
+      $this->reset();
+    }
+    $this->epoch = $state[0];
   }
 
   protected function getTagInvalidationCounts(array $tags) {
@@ -47,6 +98,7 @@ class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsIn
     foreach ($tags as $tag) {
       nocopy_put($this->getTagKey($tag), random_int(1, 2 ** 48));
     }
+    $this->journal->record(NocopyJournal::TAGS, $tags);
   }
 
   // Only reached on invalidation, for the trait's transaction check.

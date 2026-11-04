@@ -1,0 +1,10 @@
+<?php
+
+use Drupal\nocopy\Cache\NocopyJournal;
+
+/**
+ * Implements hook_cron().
+ */
+function nocopy_cron(): void {
+  NocopyJournal::prune();
+}

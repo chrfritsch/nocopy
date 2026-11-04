@@ -57,8 +57,8 @@ Lowest–highest of 3 full runs, config order rotated between runs:
 The fast layer (`ChainedFastBackend` with nocopy instead of APCu, here with `routes` added to `bootstrap`, `config`, `discovery`) is the setup
 that also works on several web servers. It lands in the stock range, with or without `routes` (726–763 req/s logged-in node page without):
 chainedfast still asks the database for each bin's last write on every request, and those bins were never the bottleneck. The gain
-comes from moving all bins and the cache tags off the database, which needs a single server. Trade-offs: Drush and cron do not
-share php-fpm's cache ([details](drupal#trade-offs)).
+comes from moving all bins and the cache tags off the database, which needs a single server. Drush and cron changes reach php-fpm through
+a journal table ([details](drupal#trade-offs)).
 
 ## Features
 
@@ -139,9 +139,9 @@ The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 11.2+) put
 in nocopy, so cache reads and tag checks no longer touch the database. Install it, enable it, and add the `settings.php` lines from
 [`drupal/README.md`](drupal/README.md). It is for single-server sites.
 
-> **Drush and cron do not reach php-fpm's cache.** CLI processes get their own memory, so cache clears and tag invalidations from
-> `drush cr`, `drush cim`, `drush updb` or `drush cron` (scheduled publishing, queues, migrations) never reach the web workers, and they keep
-> serving stale pages. Reload php-fpm after every CLI run that changes content or config, or run cron through the web (`/cron/<key>`).
+CLI processes such as Drush and cron get their own memory. They log every cache write and tag invalidation to a database table,
+and each web request replays what is new, at the cost of one query per request. So `drush cr`, `drush cim` and `drush cron` reach
+php-fpm on the next request ([details](drupal#trade-offs)).
 
 Reproduce the benchmark:
 

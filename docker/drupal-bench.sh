@@ -44,7 +44,7 @@ nodes=$($DRUSH sqlq 'select count(*) from node'); echo "nodes: $nodes"
 [ "$nodes" -ge 1000 ] || { echo "content generation failed"; exit 1; }
 rm -rf $D/web/modules/contrib/nocopy && mkdir -p $D/web/modules/contrib && cp -r /src/drupal $D/web/modules/contrib/nocopy
 cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/sites/default/
-$DRUSH en nocopy -y >/dev/null 2>&1
+$DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
 echo '<?php apcu_store("probe", new ArrayObject(array_fill(0, 1000, str_repeat("x", 100)))); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
@@ -116,6 +116,12 @@ nocopy.serializer=igbinary"; SET=all ;;
   done >> /out/editor.tsv.$cfg
   cat /out/editor.tsv.$cfg
 
+  # a node saved by Drush must show up in php-fpm's pages
+  title="cli-$cfg-$(date +%s)"
+  $DRUSH php:eval "\$n = \\Drupal\\node\\Entity\\Node::load($NODE); \$n->setTitle('$title'); \$n->save();" >/dev/null 2>&1
+  printf '%s\t%s\t%s\n' "$cfg" "$(curl -s "$B/node/$NODE" | grep -c "$title")" "$(curl -s -b /tmp/ck "$B/node/$NODE" | grep -c "$title")" > /out/cli.tsv.$cfg
+  cat /out/cli.tsv.$cfg
+
   used=$(curl -s "$B/nocopy-used.php")
   printf '%s\t%s\n' "$cfg" "$(curl -s "$B/serializer-probe.php")" >> /out/serializer.tsv.$cfg
   # cold start: 100 sequential logged-in requests to / right after a php-fpm restart
@@ -132,6 +138,7 @@ cp /src/bench/drupal/settings.stock.php $D/web/sites/default/settings.bench.php
 rm -f /usr/local/etc/php/conf.d/zz-bench.ini
 { printf 'config\tstep\tp50_ms\treader_req_s\n'; cat /out/editor.tsv.* 2>/dev/null; } > /out/editor.tsv
 { printf 'config\tfirst_ms\tsettled_at_request\twarm_p50_ms\tnocopy_used_bytes\n'; cat /out/coldstart.tsv.* 2>/dev/null; } > /out/coldstart.tsv
+{ printf 'config\tanonymous_sees_cli_save\tlogged_in_sees_cli_save\n'; cat /out/cli.tsv.* 2>/dev/null; } > /out/cli.tsv
 { printf 'config\tprobe_bytes\n'; cat /out/serializer.tsv.* 2>/dev/null; } > /out/serializer.tsv
-rm -f /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.*
+rm -f /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.* /out/cli.tsv.*
 mariadb-admin shutdown

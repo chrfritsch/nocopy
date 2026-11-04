@@ -26,7 +26,10 @@ class NocopyBackend implements CacheBackendInterface {
     protected string $sitePrefix,
     protected CacheTagsChecksumInterface $checksumProvider,
     protected TimeInterface $time,
+    protected NocopyJournal $journal = new NocopyJournal(),
   ) {}
+
+  protected ?float $replayedFor = NULL;
 
   protected function binKey(string $name): string {
     return $this->sitePrefix . '::' . $this->bin . '::' . $name;
@@ -35,6 +38,7 @@ class NocopyBackend implements CacheBackendInterface {
   // [version, invalidated_at], read on every call: another request may have cleared the bin.
   // Either key lost (new bin, eviction, nocopy.ttl): start a fresh version. That only costs misses, a default could revive deleted items.
   protected function state(): array {
+    $this->replay();
     $version = nocopy_get($this->binKey('version'), $hit);
     $invalidated = nocopy_get($this->binKey('invalidated_at'), $invalidatedHit);
     if (!$hit || !$invalidatedHit) {
@@ -45,6 +49,29 @@ class NocopyBackend implements CacheBackendInterface {
     }
     // invalidateAll() of an older version does not apply after deleteAll().
     return [$version, $invalidated[0] === $version ? $invalidated[1] : 0.0];
+  }
+
+  // Web requests: apply what CLI processes wrote since this bin last looked, once per request.
+  protected function replay(): void {
+    if ($this->journal->writer || $this->replayedFor === NocopyJournal::request()) {
+      return;
+    }
+    $this->replayedFor = NocopyJournal::request();
+    $last = $this->journal->lastId();
+    $applied = nocopy_get($this->binKey('applied'), $hit);
+    if (!$hit) {
+      // Position unknown: start over.
+      $this->deleteAll();
+    }
+    elseif ($last > $applied) {
+      foreach ($this->journal->since($applied, $this->bin) as $cids) {
+        $cids === NULL ? $this->deleteAll() : $this->deleteMultiple($cids);
+      }
+    }
+    else {
+      return;
+    }
+    nocopy_put($this->binKey('applied'), $last);
   }
 
   protected function key(string $cid, ?string $version = NULL): string {
@@ -99,6 +126,11 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   public function set($cid, $data, $expire = CacheBackendInterface::CACHE_PERMANENT, array $tags = []) {
+    $this->store($cid, $data, $expire, $tags);
+    $this->journal->record($this->bin, [$cid]);
+  }
+
+  protected function store($cid, $data, $expire, array $tags): void {
     assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
     $tags = array_unique($tags);
     $this->put((string) $cid, [$data, round(microtime(TRUE), 3), $expire, implode(' ', $tags), $this->checksumProvider->getCurrentChecksum($tags)]);
@@ -119,23 +151,26 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function setMultiple(array $items) {
     foreach ($items as $cid => $item) {
-      $this->set($cid, $item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
+      $this->store($cid, $item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
     }
+    $this->journal->record($this->bin, array_keys($items));
   }
 
   public function delete($cid) {
-    nocopy_delete($this->key((string) $cid));
+    $this->deleteMultiple([$cid]);
   }
 
   public function deleteMultiple(array $cids) {
     foreach ($cids as $cid) {
-      $this->delete($cid);
+      nocopy_delete($this->key((string) $cid));
     }
+    $this->journal->record($this->bin, $cids);
   }
 
   // Old entries leave through eviction.
   public function deleteAll() {
     nocopy_put($this->binKey('version'), bin2hex(random_bytes(6)));
+    $this->journal->record($this->bin, NULL);
   }
 
   public function invalidate($cid) {
@@ -151,12 +186,14 @@ class NocopyBackend implements CacheBackendInterface {
         $this->put((string) $cid, $item);
       }
     }
+    $this->journal->record($this->bin, $cids);
   }
 
   public function invalidateAll() {
     @trigger_error("CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622", E_USER_DEPRECATED);
     // Rounded like 'created', so every item created up to now compares <=.
     nocopy_put($this->binKey('invalidated_at'), [$this->state()[0], round(microtime(TRUE), 3)]);
+    $this->journal->record($this->bin, NULL);
   }
 
   public function garbageCollection() {

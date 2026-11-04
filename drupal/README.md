@@ -50,10 +50,11 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 ## Trade-offs
 
 - **Single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
-- **Drush, cron and other CLI processes do not share php-fpm's cache.** The CLI gets its own memory. `drush cr`, `drush cim`, `drush updb`,
-  and content saved by `drush cron` (scheduled publishing, queue workers, migrations) do not reach the web workers' cache, which keeps
-  serving stale pages. Reload php-fpm after deploys and CLI changes (`systemctl reload php-fpm`): a reload starts with an empty cache.
-  Run cron through the web (`/cron/<key>` or automated_cron) instead of `drush cron`. Changes made through the web UI are invalidated as usual.
+- **Drush, cron and other CLI processes have their own memory.** They log every cache write, cache clear and tag invalidation
+  to the `nocopy_journal` table. Each web request reads the journal's last id (one query, also on page cache hits) and replays what is new,
+  so `drush cr`, `drush cim`, `drush updb` and content saved by `drush cron` reach php-fpm on the next request. Cron drops entries
+  older than a day, and a web worker that missed dropped entries starts with an empty cache. Long-running CLI processes (queue
+  workers, migrations) do not see web changes made while they run.
 - **Do not set `nocopy.ttl`** (or `apc.ttl`): it would expire cache tag tokens, and a lost token for a common tag such as `rendered`
   invalidates most of the site at once.
 - **The cache is empty after a php-fpm restart or reload,** so the first requests rebuild it. In the benchmark, the first logged-in
