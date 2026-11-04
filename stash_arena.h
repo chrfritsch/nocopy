@@ -275,6 +275,25 @@ static inline uint32_t stash_rand(stash_ctx *c)
 	return c->rng = x;
 }
 
+/* Equal n bytes; keys up to 16 bytes without a memcmp call (two overlapping loads). */
+static inline __attribute__((always_inline)) bool stash_key_eq(const char *a, const char *b, uint32_t n)
+{
+	uint64_t x, y, p, q;
+	if (n >= 8 && n <= 16) {
+		memcpy(&x, a, 8); memcpy(&y, b, 8); memcpy(&p, a + n - 8, 8); memcpy(&q, b + n - 8, 8);
+		return ((x ^ y) | (p ^ q)) == 0;
+	}
+	if (n >= 4 && n < 8) {
+		uint32_t u, v, s, t;
+		memcpy(&u, a, 4); memcpy(&v, b, 4); memcpy(&s, a + n - 4, 4); memcpy(&t, b + n - 4, 4);
+		return ((u ^ v) | (s ^ t)) == 0;
+	}
+	if (n < 4) {
+		return !n || (a[0] == b[0] && a[n >> 1] == b[n >> 1] && a[n - 1] == b[n - 1]);
+	}
+	return !memcmp(a, b, n);
+}
+
 /* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
 static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
@@ -298,7 +317,7 @@ static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *
 			if (stash_hold(c, e) && __atomic_load_n(&t[i], __ATOMIC_ACQUIRE) != s) {
 				goto retry; /* unlinked while we were pinning: the memory may be reused */
 			}
-			if (e->h == h && e->klen == klen && !memcmp(stash_key(e), k, klen)) {
+			if (e->h == h && e->klen == klen && stash_key_eq(stash_key(e), k, klen)) {
 				if (stash_expired(e)) {
 					return NULL;
 				}

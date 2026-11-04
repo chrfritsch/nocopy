@@ -37,10 +37,18 @@ function apcu_exists($key): array|bool {}
  */
 function apcu_delete($key): array|bool {}
 
-/** @param bool $success */
+/**
+ * @param bool $success
+ * @frameless-function {"arity": 1}
+ * @frameless-function {"arity": 2}
+ */
 function apcu_inc(string $key, int $step = 1, &$success = null, int $ttl = 0): int|false {}
 
-/** @param bool $success */
+/**
+ * @param bool $success
+ * @frameless-function {"arity": 1}
+ * @frameless-function {"arity": 2}
+ */
 function apcu_dec(string $key, int $step = 1, &$success = null, int $ttl = 0): int|false {}
 
 function apcu_cas(string $key, int $old, int $new): bool {}

@@ -21,6 +21,7 @@ Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the
 - Result, copy / zero-copy ns: fetch int 15.5 -> 12.5 / 13.8 -> 12.2, string 100B 21.6 -> 17.4 / 13.4 -> 12.3, 100k distinct keys 44.2 -> 22.8, 10 keys array form 250 -> 145, miss 10.6 -> 9.5, exists 13.7 -> 10.9 / 11.7 -> 10.9; parallel fetch int x8 +16% / +25%. Stores, inc, big array copies within +-2.5% (layout).
 - First idle-pin version (writer did not drop its own pins, no cap) broke 029: hot keys kept 1 of 20 (merges evicted around its own pinned segments).
 - Suite 8.3/8.4/8.5 + ZTS 8.4, tests/c (TSAN), `docker/stress.sh 5` clean. Not re-run: Symfony smoke, APCu's suite, fpm benchmark.
+- Then frameless `apcu_inc`/`apcu_dec` (arity 1, 2) and `stash_key_eq` (keys <= 16 bytes compared with two overlapping loads, no memcmp call; exhaustive check in tests/c/stress.c), vs c82d6fc: zero-copy fetches 12.0 -> 11.2 ns, inc 12.5 -> 11.7, exists 10.6 -> 9.9, 10 keys array form -11..12%; miss +0.27 ns (layout: no compare on that path). `apcu_entry`/`stash_remember` left framed: callable parsing by hand (trampolines, error wording) for ~1 ns of 22.
 - Gotcha: a container started right after a host-side file write sometimes saw `stash.c` truncated ("expected declaration at end of input"): rerun.
 
 ### Rebuild of the core (2026-11-03, second half of the day)

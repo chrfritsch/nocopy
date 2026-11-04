@@ -305,7 +305,7 @@ static stash_slot *locate(stash_shard *sh, uint64_t h, const char *k, uint32_t k
 		}
 		if ((uint32_t) (s >> 32) == tag) {
 			stash_entry *e = stash_slot_entry(s);
-			if (e->h == h && e->klen == klen && !memcmp(stash_key(e), k, klen)) {
+			if (e->h == h && e->klen == klen && stash_key_eq(stash_key(e), k, klen)) {
 				*found = e;
 				return &t[i];
 			}

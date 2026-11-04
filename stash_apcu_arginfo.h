@@ -1,5 +1,5 @@
 /* This is a generated file, edit stash_apcu.stub.php instead.
- * Stub hash: 59db899583b8ffeced7ac73c8172427e86a2cc52 */
+ * Stub hash: 5d6285ec38737815ebc341140348c912de7db734 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_apcu_enabled, 0, 0, _IS_BOOL, 0)
 ZEND_END_ARG_INFO()
@@ -120,6 +120,26 @@ static const zend_frameless_function_info frameless_function_infos_apcu_delete[]
 };
 #endif
 
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_inc, 1);
+ZEND_FRAMELESS_FUNCTION(apcu_inc, 2);
+static const zend_frameless_function_info frameless_function_infos_apcu_inc[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_inc, 1), 1 },
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_inc, 2), 2 },
+	{ 0 },
+};
+#endif
+
+#if (PHP_VERSION_ID >= 80400)
+ZEND_FRAMELESS_FUNCTION(apcu_dec, 1);
+ZEND_FRAMELESS_FUNCTION(apcu_dec, 2);
+static const zend_frameless_function_info frameless_function_infos_apcu_dec[] = {
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_dec, 1), 1 },
+	{ ZEND_FRAMELESS_FUNCTION_NAME(apcu_dec, 2), 2 },
+	{ 0 },
+};
+#endif
+
 ZEND_FUNCTION(apcu_enabled);
 ZEND_FUNCTION(apcu_store);
 ZEND_FUNCTION(apcu_add);
@@ -167,8 +187,16 @@ static const zend_function_entry ext_functions[] = {
 #else
 	ZEND_FE(apcu_delete, arginfo_apcu_delete)
 #endif
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_inc", zif_apcu_inc, arginfo_apcu_inc, 0, frameless_function_infos_apcu_inc, NULL)
+#else
 	ZEND_FE(apcu_inc, arginfo_apcu_inc)
+#endif
+#if (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("apcu_dec", zif_apcu_dec, arginfo_apcu_dec, 0, frameless_function_infos_apcu_dec, NULL)
+#else
 	ZEND_FE(apcu_dec, arginfo_apcu_dec)
+#endif
 	ZEND_FE(apcu_cas, arginfo_apcu_cas)
 	ZEND_FE(apcu_clear_cache, arginfo_apcu_clear_cache)
 	ZEND_FE(apcu_cache_info, arginfo_apcu_cache_info)

@@ -616,6 +616,8 @@ PHP_FUNCTION(apcu_delete)
 ZEND_FRAMELESS_FUNCTION(apcu_delete, 1) { delete_impl(arg1, return_value); }
 #endif
 
+static void incdec_impl(zend_string *key, zend_long delta, zval *success, zend_long ttl, zval *return_value);
+
 static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 {
 	zend_string *key;
@@ -630,6 +632,11 @@ static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
+	incdec_impl(key, sign * step, success, ttl, return_value);
+}
+
+static void incdec_impl(zend_string *key, zend_long delta, zval *success, zend_long ttl, zval *return_value)
+{
 	if (success) {
 		ZEND_TRY_ASSIGN_REF_FALSE(success);
 	}
@@ -640,7 +647,7 @@ static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 		RETURN_THROWS();
 	}
 	zend_long nv;
-	if (!stash_add_long(key, sign * step, ttl, &nv)) {
+	if (!stash_add_long(key, delta, ttl, &nv)) {
 		RETURN_FALSE;
 	}
 	if (success) {
@@ -651,6 +658,32 @@ static void incdec(INTERNAL_FUNCTION_PARAMETERS, int sign)
 
 PHP_FUNCTION(apcu_inc) { incdec(INTERNAL_FUNCTION_PARAM_PASSTHRU, 1); }
 PHP_FUNCTION(apcu_dec) { incdec(INTERNAL_FUNCTION_PARAM_PASSTHRU, -1); }
+
+#if PHP_VERSION_ID >= 80400
+#define FLF_INCDEC(name, sign) \
+	ZEND_FRAMELESS_FUNCTION(name, 1) \
+	{ \
+		zval tmp; \
+		zend_string *key; \
+		Z_FLF_PARAM_STR(1, key, tmp); \
+		incdec_impl(key, sign, NULL, 0, return_value); \
+	flf_clean: \
+		Z_FLF_PARAM_FREE_STR(1, tmp); \
+	} \
+	ZEND_FRAMELESS_FUNCTION(name, 2) \
+	{ \
+		zval tmp; \
+		zend_string *key; \
+		zend_long step; \
+		Z_FLF_PARAM_STR(1, key, tmp); \
+		Z_FLF_PARAM_LONG(2, step); \
+		incdec_impl(key, sign * step, NULL, 0, return_value); \
+	flf_clean: \
+		Z_FLF_PARAM_FREE_STR(1, tmp); \
+	}
+FLF_INCDEC(apcu_inc, 1)
+FLF_INCDEC(apcu_dec, -1)
+#endif
 
 PHP_FUNCTION(apcu_cas)
 {

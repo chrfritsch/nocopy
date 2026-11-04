@@ -2,6 +2,7 @@
  * Each thread writes, deletes and reads its own keys against a model, reads every other thread's keys,
  * and holds some values pinned across later operations: a value read must always be intact. */
 #include "../../stash_arena.h"
+#include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -172,6 +173,16 @@ int main(int argc, char **argv)
 	size_t mb = argc > 1 ? (size_t) atoi(argv[1]) : 8;
 	nthreads = argc > 2 ? atoi(argv[2]) : 8;
 	seconds = argc > 3 ? atoi(argv[3]) : 3;
+	for (uint32_t n = 0; n <= 40; n++) { /* stash_key_eq: equal, and a difference at every position */
+		char a[41], b[41];
+		memset(a, 'k', n); memcpy(b, a, n);
+		assert(stash_key_eq(a, b, n));
+		for (uint32_t i = 0; i < n; i++) {
+			b[i] ^= 1;
+			assert(!stash_key_eq(a, b, n));
+			b[i] ^= 1;
+		}
+	}
 	const char *err = stash_arena_create(mb << 20, 0, &(size_t){0});
 	if (err) {
 		fprintf(stderr, "%s\n", err);
