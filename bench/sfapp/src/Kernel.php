@@ -3,7 +3,7 @@ namespace App;
 
 use Symfony\Bundle\FrameworkBundle\FrameworkBundle;
 use Symfony\Bundle\FrameworkBundle\Kernel\MicroKernelTrait;
-use Lab\NocopyBundle\NocopyBundle;
+use Chrfritsch\NocopyBundle\NocopyBundle;
 use Symfony\Component\Cache\Adapter\ApcuAdapter;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
 use Symfony\Component\HttpKernel\Kernel as BaseKernel;

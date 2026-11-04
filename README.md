@@ -59,7 +59,7 @@ Before the TTL ends it refreshes early by XFetch (Vattani et al., VLDB 2015): wi
 
 ## Symfony
 
-Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Lab\NocopyBundle\NocopyBundle`) adds `cache.adapter.nocopy`: `NocopyAdapter` on `nocopy_*`, no marshaller, so it also works with `nocopy.apcu_compat=0` and next to real APCu:
+Symfony 8's `cache.adapter.apcu` (not 6.4's) serializes values before they reach the extension, which hides the benefit. The bundle in `symfony/` (`Chrfritsch\NocopyBundle\NocopyBundle`) adds `cache.adapter.nocopy`: `NocopyAdapter` on `nocopy_*`, no marshaller, so it also works with `nocopy.apcu_compat=0` and next to real APCu:
 
 ```yaml
 framework:

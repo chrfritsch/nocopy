@@ -12,7 +12,7 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 ## State (2026-11-04)
 
 Works, not released. Git repo, MIT license (2026-11-04). CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
-Renamed stash -> nocopy (2026-11-04): extension, `nocopy_*` functions, `nocopy.*` INI, `NOCOPY_*` macros, files, Symfony bundle (`Lab\NocopyBundle`, `cache.adapter.nocopy`), Docker images `nocopy-linux`/`nocopy-zts`. The `apcu_*` layer is unchanged. Packagist, PECL and nocopy.dev were free; the GitHub user `nocopy` is taken.
+Renamed stash -> nocopy (2026-11-04): extension, `nocopy_*` functions, `nocopy.*` INI, `NOCOPY_*` macros, files, Symfony bundle (`Chrfritsch\NocopyBundle`, `cache.adapter.nocopy`), Docker images `nocopy-linux`/`nocopy-zts`. The `apcu_*` layer is unchanged. Packagist, PECL and nocopy.dev were free; the GitHub user `nocopy` is taken.
 
 ### Performance pass (2026-11-04)
 Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the VM's internal call frame), then `docker/ab.sh 3 "read write parallel"` vs ddf5da4 (Linux Docker arm64, load ~1.6):
@@ -248,5 +248,5 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 3. Shards: expiry of a shard without writes waits for memory pressure. Fixed slices: one hot shard cannot borrow from idle ones.
 4. Compaction runs under the global lock (~ms stall); RSS drifts to `apc.shm_size` because segments are reused only under pressure; `MADV_HUGEPAGE`. A one-pass `copy_out` was considered: `zend_array_dup` of an immutable array is already one memcpy, the cost was per-key allocation (fixed by key dedupe).
 5. Milestone 3 features that justify a price: tags, cross-server invalidation (single-flight `apcu_entry` + `nocopy_remember` with XFetch: done, tests 030/031; APCu's own suite not re-run since). Bigger idea: Redis client-side cache tier (Relay model, RESP3 tracking), where the gain is 100x not 2x.
-6. Packaging: vendor name undecided (`lab` placeholder) (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
+6. Packaging: vendor `chrfritsch` (`composer.json` is still the ext_skel skeleton); PIE install needs a GitHub release.
    `preload_path`; slam defense.

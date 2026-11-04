@@ -1,7 +1,7 @@
 <?php
 // php -d extension=nocopy.so -d zend.assertions=1 tests/smoke.php <dir with vendor/autoload.php>  (also with nocopy.apcu_compat=0)
 
-use Lab\NocopyBundle\NocopyBundle;
+use Chrfritsch\NocopyBundle\NocopyBundle;
 use Symfony\Bundle\FrameworkBundle\FrameworkBundle;
 use Symfony\Bundle\FrameworkBundle\Kernel\MicroKernelTrait;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
@@ -41,7 +41,7 @@ $c = $k->getContainer();
 $id = new ReflectionMethod(Symfony\Component\Cache\Adapter\AbstractAdapter::class, 'getId');
 foreach (['cache.app', 'my.pool'] as $name) {
     $pool = $c->get($name);
-    assert($pool instanceof Lab\NocopyBundle\NocopyAdapter, "$name adapter");
+    assert($pool instanceof Chrfritsch\NocopyBundle\NocopyAdapter, "$name adapter");
     $pool->save($pool->getItem('k')->set(['rows' => [1, 2, 3]]));
     $pool->save($pool->getItem('o')->set(new ArrayObject([1])));
     assert($pool->getItem('k')->get() === ['rows' => [1, 2, 3]], "$name roundtrip");

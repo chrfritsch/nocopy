@@ -1,6 +1,6 @@
 <?php
 
-namespace Lab\NocopyBundle;
+namespace Chrfritsch\NocopyBundle;
 
 use Symfony\Component\Cache\Adapter\AbstractAdapter;
 use Symfony\Component\Cache\Exception\CacheException;
