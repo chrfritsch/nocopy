@@ -22,14 +22,17 @@ typedef struct stash_entry {
 	uint64_t h;       /* key hash */
 	size_t size;      /* whole block */
 	time_t expires;   /* last second it is alive; 0: never */
-	time_t created;
 	uint64_t seq;     /* insertion order, for iterators */
+	uint32_t created; /* unix time: 32 bits keep the header at 48 bytes (good until 2106) */
 	uint32_t klen;
 	uint8_t koff;     /* key bytes at (char *) e + koff */
 	uint8_t live;     /* published and not yet unlinked */
 	uint8_t hot;      /* reads since written, log2-ish (stash_find); halved when merge moves it */
 	uint8_t flags;    /* the user's */
+	uint32_t user;    /* the user's; kept when merge moves the entry */
 } stash_entry;
+
+_Static_assert(sizeof(stash_entry) == 48, "stash_entry grew");
 
 /* low 32 bits: arena offset / 8, high 32: low 32 bits of the hash (home slot + probe filter); 0 empty */
 typedef uint64_t stash_slot;

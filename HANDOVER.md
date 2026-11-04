@@ -195,6 +195,7 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 - Per-entry hit counts are intentionally unsupported (would be a shared write per read).
 - Comments in code: one short line only (user preference).
 - Slot tables are fixed rather than growable: no stall, no frozen tables, no table re-check on hits; the price is evicting by entry count when entries are tiny (`apc.entries_hint`).
+- `stash_remember`'s compute time is the header field `stash_entry.user`, not the value zval's `u2` (2026-11-04); `created` became 32-bit so the header stays 48 bytes. Instructions per op unchanged (callgrind +0.08%); timings moved 0.3-2 ns either way (layout).
 - Single-flight leases live in a fixed per-shard table, not in the cache (2026-11-04): they used slots and segments, showed up in `APCUIterator`, were wiped by `apcu_clear_cache`, and dropping by key could drop a lease another worker had retaken. `docker/stampede.sh` unchanged (1 callback run per expiry, same req/s).
 - No way to release zero-copy pins before the request ends (`stash_checkpoint`, `stash_scope` and FrankenPHP `request_scope=1` zero-copy were removed 2026-11-03): each relied on userland not keeping a value, and a broken promise was a use-after-free. Long-lived workers get copy mode.
 

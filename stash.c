@@ -238,7 +238,6 @@ static void persist_entry(stash_entry *e, const zend_string *key, zval *val)
 	zend_string *k = persist_str(key);
 	e->koff = (uint8_t) (ZSTR_VAL(k) - (char *) e);
 	ZVAL_COPY_VALUE(entry_val(e), val);
-	Z_EXTRA_P(entry_val(e)) = 0; /* stash_remember's compute time, ms */
 	if (Z_TYPE_P(val) == IS_ARRAY) {
 		keys_reset();
 	}
@@ -250,7 +249,6 @@ static void persist_entry(stash_entry *e, const zend_string *key, zval *val)
 void stash_relocate(stash_entry *dst, const stash_entry *src)
 {
 	persist_entry(dst, entry_key(src), &((php_entry *) src)->val);
-	Z_EXTRA_P(entry_val(dst)) = Z_EXTRA(((php_entry *) src)->val);
 }
 
 /* ---- leaving shared memory: deep copies ---- */
@@ -403,6 +401,7 @@ stash_entry *stash_build(zend_string *key, zval *val, zend_long ttl, bool apcu_s
 		e->expires = exp;
 		e->created = now;
 		e->flags = serialized ? ENTRY_SERIALIZED : 0;
+		e->user = 0;
 		persist_entry(e, key, val);
 	}
 	if (serialized) {
@@ -473,7 +472,7 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 		zval *v = entry_val(e);
 		if (exp) {
 			*exp = e->expires;
-			*delta = Z_EXTRA_P(v);
+			*delta = e->user;
 		}
 		if (e->flags & ENTRY_SERIALIZED) {
 			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v));
@@ -539,7 +538,7 @@ static bool compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	bool locked;
 	stash_entry *e = stash_build(key, rv, ttl, true, &locked);
 	if (e) {
-		Z_EXTRA_P(entry_val(e)) = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
+		e->user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
 		stash_publish(e, apcu, locked); /* apcu_entry: add, like APCu */
 	}
 	return !EG(exception);

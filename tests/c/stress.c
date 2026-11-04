@@ -78,6 +78,7 @@ static bool put(const char *k, uint32_t ver, uint32_t len, time_t ttl)
 		e->expires = ttl ? now + ttl : 0;
 		e->created = now;
 		e->flags = 0;
+		e->user = 0;
 		memcpy((char *) e + HDR, k, klen + 1);
 		payload *p = pl(e);
 		p->ver = ver;

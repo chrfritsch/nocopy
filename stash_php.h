@@ -37,6 +37,7 @@ typedef struct {
 } php_entry;
 
 #define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
+/* stash_entry.user: stash_remember's compute time, ms (XFetch) */
 
 static inline zval *entry_val(stash_entry *e) { return &((php_entry *) e)->val; }
 static inline zend_string *entry_key(const stash_entry *e) { return (zend_string *) (stash_key(e) - _ZSTR_HEADER_SIZE); }

@@ -489,6 +489,7 @@ static bool relocate(stash_shard *sh, stash_entry *old)
 	n->klen = old->klen;
 	n->koff = old->koff;
 	n->flags = old->flags;
+	n->user = old->user;
 	n->hot = __atomic_load_n(&old->hot, __ATOMIC_RELAXED) >> 1; /* aging: must be read again to stay on top */
 	stash_relocate(n, old);
 	sh->evacuated += n->size;

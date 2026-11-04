@@ -13,7 +13,7 @@ Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so fo
 
 `[ header | workers | segment table | slot tables ][ segment 0 ][ segment 1 ] ...`
 - Segment size = power of two so that there are at most 256 segments (min 64 KB). Entries larger than half a segment take a run of contiguous segments.
-- Entry = `stash_entry` header (hash, size, expiry, seq, key length/offset, live/hot/flags: 48 bytes) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
+- Entry = `stash_entry` header (hash, size, expiry, seq, 32-bit created, key length/offset, live/hot/flags, the user's 32-bit `user`: 48 bytes, `_Static_assert`ed) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
   Equal array keys are stored once per entry (rows of a result set share their column names): a 256-slot table by hash (`STASH_G(keys)`, `key_slot`/`key_hit`) remembers this value's keys; a miss overwrites the slot.
   Its decisions depend only on the sequence of key contents, so `calc_zval`, `persist_*` and a later relocation of the arena copy dedupe exactly alike and agree on the size.
@@ -88,7 +88,7 @@ A lease is not a cache entry: each shard has 32 fixed `stash_lease` slots `{key 
 a holder found dead (`owner_dead`, checked outside the lock since it reads /proc) is replaced on a second pass only if it still holds, and `stash_lease_drop` clears a lease only if this worker slot still holds it, so nobody drops a lease another worker retook.
 Leases are keyed by the 64-bit hash: two keys with the same hash share one (one waits for the other, then computes). Waiters poll (50 us doubling to 5 ms) for the value. Held leases are listed in module globals and dropped in post-deactivate if a callback bailed out.
 `stash_stats()['leases']` counts the held ones; `APCUIterator`, `apcu_cache_info` and `apcu_clear_cache` never see them.
-The callback's run time (ms) is kept in the stored value zval's `u2` (unused there; `ZVAL_COPY_VALUE` does not copy it, `stash_relocate` does). XFetch on a hit: refresh when `now - delta * beta * ln(rand) >= expires`; the refresher needs the lease, the rest return the current value.
+The callback's run time (ms) is kept in the header's `user` field (the arena copies it when merge moves the entry, test 036). XFetch on a hit: refresh when `now - delta * beta * ln(rand) >= expires`; the refresher needs the lease, the rest return the current value.
 
 ## APCu layer
 
