@@ -40,8 +40,8 @@ if ($group === 'read') {
     apcu_store('arr1k', rows(1000));
     apcu_store('arr10k', rows(10000));
     apcu_store('arr1k_u', unserialize(serialize(rows(1000)))); // every key its own string, as from unserialize/json_decode
-    if (function_exists('stash_stats')) {
-        $u = stash_stats()['used']; apcu_store('mem1k', rows(1000)); out('arena bytes, array 1k rows', stash_stats()['used'] - $u, 'bytes');
+    if (function_exists('nocopy_stats')) {
+        $u = nocopy_stats()['used']; apcu_store('mem1k', rows(1000)); out('arena bytes, array 1k rows', nocopy_stats()['used'] - $u, 'bytes');
     }
     $o = new Obj; $o->child = new Obj; apcu_store('obj', $o);
 
@@ -159,7 +159,7 @@ if ($group === 'ttl') {
     out('ttl churn: failed stores', $fail, 'count');
     out('ttl churn: stores > 50us', $slow, 'count');
     out('ttl churn: slowest store', $max / 1e3, 'us');
-    if (function_exists('stash_stats')) out('ttl churn: evacuated', (stash_stats()['evacuated_bytes'] ?? -1e6) / 1e6, 'MB');
+    if (function_exists('nocopy_stats')) out('ttl churn: evacuated', (nocopy_stats()['evacuated_bytes'] ?? -1e6) / 1e6, 'MB');
 }
 
 if ($group === 'mixed') {

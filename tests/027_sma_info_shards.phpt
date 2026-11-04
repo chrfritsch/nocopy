@@ -1,7 +1,7 @@
 --TEST--
-stash: apcu_sma_info() reports one segment per shard, with that slice's free blocks
+nocopy: apcu_sma_info() reports one segment per shard, with that slice's free blocks
 --EXTENSIONS--
-stash
+nocopy
 --INI--
 apc.enable_cli=1
 apc.shm_size=32M

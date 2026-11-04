@@ -1,4 +1,4 @@
-/* This is a generated file, edit stash_apcu.stub.php instead.
+/* This is a generated file, edit nocopy_apcu.stub.php instead.
  * Stub hash: 5d6285ec38737815ebc341140348c912de7db734 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_apcu_enabled, 0, 0, _IS_BOOL, 0)

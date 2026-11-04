@@ -1,13 +1,13 @@
 --TEST--
-stash: readers never miss keys that a concurrent delete shifts back in the slot table
+nocopy: readers never miss keys that a concurrent delete shifts back in the slot table
 --EXTENSIONS--
-stash
+nocopy
 pcntl
 --INI--
 apc.shm_size=4M
 --FILE--
 <?php
-// Home slot of a key in this 16k-slot table: mirrors stash_slot_tag() (bits below 2^46 suffice).
+// Home slot of a key in this 16k-slot table: mirrors nocopy_slot_tag() (bits below 2^46 suffice).
 function home(string $k): int {
     $m = (1 << 46) - 1; $h = 5381;
     for ($i = 0, $n = strlen($k); $i < $n; $i++) $h = ($h * 33 + ord($k[$i])) & $m;
@@ -22,19 +22,19 @@ $pick = function (string $p, int $want): array {
 };
 $fill = $pick("fill", 6000);
 $stable = $pick("s", 3500);
-foreach ($fill as $i => $k) stash_put($k, $i);
-foreach ($stable as $i => $k) stash_put($k, $i % 2 ? $i : "v$i");
+foreach ($fill as $i => $k) nocopy_put($k, $i);
+foreach ($stable as $i => $k) nocopy_put($k, $i % 2 ? $i : "v$i");
 $pids = [];
 for ($w = 0; $w < 8; $w++) {
     $pid = pcntl_fork();
     if ($pid === 0) {
         $bad = 0;
         if ($w < 4) { // deleting fillers moves the stable keys behind them back, one shift at a time
-            for ($i = $w; $i < 6000; $i += 4) { stash_delete($fill[$i]); for ($j = 0; $j < 20; $j++) stash_put("tmp$w", $j); }
-            stash_put("done$w", 1);
+            for ($i = $w; $i < 6000; $i += 4) { nocopy_delete($fill[$i]); for ($j = 0; $j < 20; $j++) nocopy_put("tmp$w", $j); }
+            nocopy_put("done$w", 1);
         } else {
-            $done = fn() => stash_get("done0") && stash_get("done1") && stash_get("done2") && stash_get("done3");
-            while (!$done()) foreach ($stable as $i => $k) $bad += stash_get($k) !== ($i % 2 ? $i : "v$i");
+            $done = fn() => nocopy_get("done0") && nocopy_get("done1") && nocopy_get("done2") && nocopy_get("done3");
+            while (!$done()) foreach ($stable as $i => $k) $bad += nocopy_get($k) !== ($i % 2 ? $i : "v$i");
         }
         exit($bad ? 1 : 0);
     }
@@ -42,7 +42,7 @@ for ($w = 0; $w < 8; $w++) {
 }
 $failed = 0;
 foreach ($pids as $p) { pcntl_waitpid($p, $st); $failed += !pcntl_wifexited($st) || pcntl_wexitstatus($st) !== 0; }
-$s = stash_stats();
+$s = nocopy_stats();
 var_dump($failed, $s['entries'], $s['expunges']);
 ?>
 --EXPECT--

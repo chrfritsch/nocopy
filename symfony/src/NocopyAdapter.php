@@ -1,28 +1,28 @@
 <?php
 
-namespace Lab\StashBundle;
+namespace Lab\NocopyBundle;
 
 use Symfony\Component\Cache\Adapter\AbstractAdapter;
 use Symfony\Component\Cache\Exception\CacheException;
 
-/** Symfony cache pool on stash_*: works with stash.apcu_compat=0 and next to real APCu. */
-class StashAdapter extends AbstractAdapter
+/** Symfony cache pool on nocopy_*: works with nocopy.apcu_compat=0 and next to real APCu. */
+class NocopyAdapter extends AbstractAdapter
 {
     public function __construct(string $namespace = '', int $defaultLifetime = 0, ?string $version = null)
     {
-        if (!\function_exists('stash_get')) {
-            throw new CacheException('The stash extension is not loaded.');
+        if (!\function_exists('nocopy_get')) {
+            throw new CacheException('The nocopy extension is not loaded.');
         }
         parent::__construct($namespace, $defaultLifetime);
-        // ponytail: clear() bumps a namespace version instead of deleting keys; stash's eviction drops the unread old ones
+        // ponytail: clear() bumps a namespace version instead of deleting keys; nocopy's eviction drops the unread old ones
         $this->enableVersioning();
 
         if (null !== $version) {
             $marker = $version.'@'.$namespace;
-            stash_get($marker, $hit);
+            nocopy_get($marker, $hit);
             if (!$hit) {
                 $this->clear();
-                stash_put($marker, true);
+                nocopy_put($marker, true);
             }
         }
     }
@@ -33,7 +33,7 @@ class StashAdapter extends AbstractAdapter
         try {
             $values = [];
             foreach ($ids as $id) {
-                $v = stash_get($id, $hit);
+                $v = nocopy_get($id, $hit);
                 if ($hit) {
                     $values[$id] = $v;
                 }
@@ -49,7 +49,7 @@ class StashAdapter extends AbstractAdapter
 
     protected function doHave(string $id): bool
     {
-        stash_get($id, $hit);
+        nocopy_get($id, $hit);
 
         return $hit;
     }
@@ -62,7 +62,7 @@ class StashAdapter extends AbstractAdapter
     protected function doDelete(array $ids): bool
     {
         foreach ($ids as $id) {
-            stash_delete($id);
+            nocopy_delete($id);
         }
 
         return true;
@@ -72,7 +72,7 @@ class StashAdapter extends AbstractAdapter
     {
         $failed = [];
         foreach ($values as $id => $v) {
-            if (!stash_put($id, $v, $lifetime, true)) {
+            if (!nocopy_put($id, $v, $lifetime, true)) {
                 $failed[] = $id;
             }
         }

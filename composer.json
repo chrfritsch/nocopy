@@ -1,5 +1,5 @@
 {
-    "name": "lab/stash",
+    "name": "lab/nocopy",
     "type": "php-ext",
     "license": "proprietary",
     "description": "Zero-copy shared-memory cache for PHP, drop-in for APCu (apcu_* API, APCUIterator, apc.* INI)",
@@ -7,12 +7,12 @@
         "php": ">=8.3"
     },
     "php-ext": {
-        "extension-name": "stash",
+        "extension-name": "nocopy",
         "configure-options": [
             {
-                "name": "enable-stash",
+                "name": "enable-nocopy",
                 "needs-value": false,
-                "description": "Enable stash support"
+                "description": "Enable nocopy support"
             }
         ]
     }

@@ -1,10 +1,10 @@
 #!/bin/sh
 # Inside the image: bench/sfapp (with vendor, mounted at /appsrc) behind nginx + php-fpm (static workers), load from ab, median of 3.
-#   docker run --rm -v "$PWD":/src:ro -v <app with vendor>:/appsrc:ro stash-linux:8.5 /src/docker/fpm-bench.sh
+#   docker run --rm -v "$PWD":/src:ro -v <app with vendor>:/appsrc:ro nocopy-linux:8.5 /src/docker/fpm-bench.sh
 /src/docker/test.sh >/dev/null 2>&1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
-rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && mkdir -p /app/stash-bundle && cp -r /src/symfony/src /app/stash-bundle/ && chown -R www-data /app/var 2>/dev/null; mkdir -p /app/var && chown -R www-data /app/var
+rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && mkdir -p /app/nocopy-bundle && cp -r /src/symfony/src /app/nocopy-bundle/ && chown -R www-data /app/var 2>/dev/null; mkdir -p /app/var && chown -R www-data /app/var
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/bench.conf <<'EOF'
 server { listen 8099; access_log off; location / { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/public/index.php; } }
@@ -27,7 +27,7 @@ run_cfg() { name=$1; raw=$2; shift 2
   kill $fpm; wait $fpm 2>/dev/null; sleep 1
 }
 run_cfg "apcu / default pool" 0 "extension=$APCU" "apc.serializer=default"
-run_cfg "stash / default pool" 0 "extension=/build/modules/stash.so"
+run_cfg "nocopy / default pool" 0 "extension=/build/modules/nocopy.so"
 run_cfg "apcu / raw pool" 1 "extension=$APCU" "apc.serializer=default"
-run_cfg "stash copy / raw pool" 1 "extension=/build/modules/stash.so" "stash.request_scope=0"
-run_cfg "stash zero / raw pool" 1 "extension=/build/modules/stash.so"
+run_cfg "nocopy copy / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.request_scope=0"
+run_cfg "nocopy zero / raw pool" 1 "extension=/build/modules/nocopy.so"

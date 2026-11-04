@@ -9,7 +9,7 @@
 $fp = (float) $fp; $ohw = (float) $ohw;
 $v = str_repeat('x', 500);
 $per = 640; // bytes an entry takes in the arena (header + zval + key + 500 B)
-$keys = (int) (stash_stats()['size'] * $fp / $per);
+$keys = (int) (nocopy_stats()['size'] * $fp / $per);
 $reqs = 40 * $keys;
 mt_srand(42);
 if ($wl === 'zipf') {
@@ -26,12 +26,12 @@ if ($wl === 'zipf') {
 }
 $hits = $n = $u = 0; $acc = 0.0;
 for ($q = 0; $q < $reqs; $q++) {
-    for ($acc += $ohw; $acc >= 1; $acc--) stash_put('u' . $u++, $v);
+    for ($acc += $ohw; $acc >= 1; $acc--) nocopy_put('u' . $u++, $v);
     $k = 'r' . $next();
-    stash_get($k, $hit);
-    if (!$hit) stash_put($k, $v);
+    nocopy_get($k, $hit);
+    if (!$hit) nocopy_put($k, $v);
     if ($q >= $reqs / 4) { $n++; $hits += $hit; } // first quarter warms up
 }
-$st = stash_stats();
+$st = nocopy_stats();
 echo json_encode(['name' => "$wl fp=$fp ohw=$ohw", 'v' => round(100 * $hits / $n, 1), 'unit' => '% hits',
     'evicted' => $st['evicted'], 'ghost_hits' => $st['ghost_hits'] ?? null]), "\n";

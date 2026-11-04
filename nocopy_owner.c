@@ -1,6 +1,6 @@
-/* stash arena: owner ids of lock holders, worker slots and leases. */
+/* nocopy arena: owner ids of lock holders, worker slots and leases. */
 
-#include "stash_arena_int.h"
+#include "nocopy_arena_int.h"
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -47,13 +47,13 @@ static uint32_t proc_start(int pid)
 #endif
 }
 
-uint64_t stash_owner_self(void)
+uint64_t nocopy_owner_self(void)
 {
 	int pid = getpid();
 	return (uint64_t) (uint32_t) pid | (uint64_t) proc_start(pid) << 32;
 }
 
-bool stash_owner_dead(uint64_t id)
+bool nocopy_owner_dead(uint64_t id)
 {
 	int pid = (int) (uint32_t) id;
 	if (kill(pid, 0) == -1 && errno == ESRCH) {

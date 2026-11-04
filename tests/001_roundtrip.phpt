@@ -1,28 +1,28 @@
 --TEST--
-stash: values round-trip and arrays come back immutable
+nocopy: values round-trip and arrays come back immutable
 --EXTENSIONS--
-stash
+nocopy
 --INI--
-stash.request_scope=1
+nocopy.request_scope=1
 --FILE--
 <?php
 $v = ['a' => 1, 'b' => [1, 2.5, 'x', null, true], 3 => 'str'];
-var_dump(stash_put('k', $v));
-var_dump(stash_get('k', $hit) === $v, $hit);
-var_dump(stash_get('missing', $hit), $hit);
-stash_put('s', 'hello');
-var_dump(stash_get('s'));
-stash_put('e', []);
-var_dump(stash_get('e'));
+var_dump(nocopy_put('k', $v));
+var_dump(nocopy_get('k', $hit) === $v, $hit);
+var_dump(nocopy_get('missing', $hit), $hit);
+nocopy_put('s', 'hello');
+var_dump(nocopy_get('s'));
+nocopy_put('e', []);
+var_dump(nocopy_get('e'));
 $r = ['x' => 1]; $ref = &$r['x'];
-stash_put('r', $r);
-var_dump(stash_get('r'));
+nocopy_put('r', $r);
+var_dump(nocopy_get('r'));
 // shows "interned": the array lives in shared memory, no refcounting
-debug_zval_dump(stash_get('k'));
+debug_zval_dump(nocopy_get('k'));
 // writing separates, the stored copy is untouched
-$a = stash_get('k'); $a['a'] = 99;
-var_dump(stash_get('k')['a']);
-try { stash_put('o', new stdClass); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$a = nocopy_get('k'); $a['a'] = 99;
+var_dump(nocopy_get('k')['a']);
+try { nocopy_put('o', new stdClass); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 ?>
 --EXPECTF--
 bool(true)
@@ -57,4 +57,4 @@ array(3) interned {
   string(3) "str" interned
 }
 int(1)
-stash_put(): Argument #2 ($value) must not contain objects or resources
+nocopy_put(): Argument #2 ($value) must not contain objects or resources

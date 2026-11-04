@@ -1,7 +1,7 @@
 /* Threaded stress test of the arena without PHP: build with tests/c/run.sh (plain -O2 and ThreadSanitizer).
  * Each thread writes, deletes and reads its own keys against a model, reads every other thread's keys,
  * and holds some values pinned across later operations: a value read must always be intact. */
-#include "../../stash_arena.h"
+#include "../../nocopy_arena.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #define KEYS 600     /* per thread */
-#define HDR STASH_ALIGN(sizeof(stash_entry))
+#define HDR NOCOPY_ALIGN(sizeof(nocopy_entry))
 
 static int nthreads = 8, seconds = 3;
 static volatile int stop;
@@ -17,7 +17,7 @@ static uint64_t failures;
 
 typedef struct { uint32_t ver, len; } payload; /* after the key; then len bytes of a pattern of (key, ver) */
 
-void stash_rebase(stash_entry *e, const stash_entry *from)
+void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	(void) e, (void) from; /* the payload holds no pointers */
 }
@@ -33,14 +33,14 @@ static uint64_t hash(const char *k, size_t n)
 
 static uint8_t pat(uint64_t h, uint32_t ver, uint32_t i) { return (uint8_t) (h ^ ver * 31 ^ i * 7); }
 
-static payload *pl(stash_entry *e) { return (payload *) ((char *) e + HDR + STASH_ALIGN(e->klen + 1)); }
+static payload *pl(nocopy_entry *e) { return (payload *) ((char *) e + HDR + NOCOPY_ALIGN(e->klen + 1)); }
 
 /* Checks a found entry; returns its ver or -1 if corrupt. */
-static long check(stash_entry *e, uint64_t h, const char *k, size_t klen)
+static long check(nocopy_entry *e, uint64_t h, const char *k, size_t klen)
 {
 	payload *p = pl(e);
 	const uint8_t *d = (const uint8_t *) (p + 1);
-	if (e->h != h || e->klen != klen || memcmp(stash_key(e), k, klen)) {
+	if (e->h != h || e->klen != klen || memcmp(nocopy_key(e), k, klen)) {
 		return -1;
 	}
 	if ((char *) (d + p->len) > (char *) e + e->size) {
@@ -60,12 +60,12 @@ static void fail(const char *what, const char *k)
 	fprintf(stderr, "FAIL %s %s\n", what, k);
 }
 
-static bool put(stash_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t ttl)
+static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t ttl)
 {
-	size_t klen = strlen(k), total = HDR + STASH_ALIGN(klen + 1) + STASH_ALIGN(sizeof(payload) + len);
+	size_t klen = strlen(k), total = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len);
 	uint64_t h = hash(k, klen);
-	stash_put p;
-	stash_entry *e = stash_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl);
+	nocopy_put p;
+	nocopy_entry *e = nocopy_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl);
 	if (!e) {
 		return false;
 	}
@@ -76,26 +76,26 @@ static bool put(stash_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t 
 	for (uint32_t i = 0; i < len; i++) {
 		((uint8_t *) (pp + 1))[i] = pat(h, ver, i);
 	}
-	return stash_put_commit(&p, false) == PUT_OK;
+	return nocopy_put_commit(&p, false) == PUT_OK;
 }
 
 static void del(const char *k)
 {
 	uint64_t h = hash(k, strlen(k));
-	stash_shard *sh = stash_shard_of(h);
-	stash_lock(sh);
-	stash_remove(sh, h, k, (uint32_t) strlen(k));
-	stash_unlock(sh);
+	nocopy_shard *sh = nocopy_shard_of(h);
+	nocopy_lock(sh);
+	nocopy_remove(sh, h, k, (uint32_t) strlen(k));
+	nocopy_unlock(sh);
 }
 
-typedef struct { stash_entry *e; uint64_t h; char k[32]; long ver; } held;
+typedef struct { nocopy_entry *e; uint64_t h; char k[32]; long ver; } held;
 
 static void *worker(void *arg)
 {
 	int me = (int) (intptr_t) arg;
 	unsigned seed = (unsigned) me * 7919 + 1;
-	stash_ctx c = {.slot = -1};
-	if (!stash_claim(&c)) {
+	nocopy_ctx c = {.slot = -1};
+	if (!nocopy_claim(&c)) {
 		fail("claim", "");
 		return NULL;
 	}
@@ -113,7 +113,7 @@ static void *worker(void *arg)
 		int i = rand_r(&seed) % KEYS, r = rand_r(&seed) % 100;
 		snprintf(k, sizeof k, "t%d_%d", me, i);
 		if (r < 35) {
-			uint64_t ex = __atomic_load_n(&stash_a->expunges, __ATOMIC_RELAXED);
+			uint64_t ex = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
 			uint32_t len = sizes[rand_r(&seed) % (r < 2 ? 6 : 5)];
 			bool ttl = rand_r(&seed) % 8 == 0;
 			if (put(&c, k, ++ver, len, ttl ? 1 + rand_r(&seed) % 2 : 0)) {
@@ -133,24 +133,24 @@ static void *worker(void *arg)
 			}
 			size_t klen = strlen(k);
 			uint64_t h = hash(k, klen);
-			stash_borrow_begin(&c);
-			stash_entry *e = stash_find(&c, h, k, (uint32_t) klen);
+			nocopy_borrow_begin(&c);
+			nocopy_entry *e = nocopy_find(&c, h, k, (uint32_t) klen);
 			long got = e ? check(e, h, k, klen) : -1;
 			if (e && got < 0) {
 				fail("corrupt read", k);
 			}
 			if (!other && model[i] != -2) {
-				uint64_t ex = __atomic_load_n(&stash_a->expunges, __ATOMIC_RELAXED);
+				uint64_t ex = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
 				if (e ? got != model[i] : model[i] >= 0 && ex == at[i]) {
 					fail(e ? "wrong version" : "lost key", k);
 				}
 			}
 			if (e && nh < 16 && rand_r(&seed) % 4 == 0) { /* hold it like a zero-copy value */
-				stash_keep(&c, e);
+				nocopy_keep(&c, e);
 				hold[nh++] = (held) {e, h, "", got};
 				strcpy(hold[nh - 1].k, k);
 			}
-			stash_borrow_end(&c);
+			nocopy_borrow_end(&c);
 		}
 		if (nh && rand_r(&seed) % 50 == 0) { /* end of "request": held values must be untouched, then let go */
 			for (int j = 0; j < nh; j++) {
@@ -159,10 +159,10 @@ static void *worker(void *arg)
 				}
 			}
 			nh = 0;
-			stash_keep_release(&c);
+			nocopy_keep_release(&c);
 		}
 	}
-	stash_release(&c);
+	nocopy_release(&c);
 	free(model);
 	free(at);
 	return NULL;
@@ -173,17 +173,17 @@ int main(int argc, char **argv)
 	size_t mb = argc > 1 ? (size_t) atoi(argv[1]) : 8;
 	nthreads = argc > 2 ? atoi(argv[2]) : 8;
 	seconds = argc > 3 ? atoi(argv[3]) : 3;
-	for (uint32_t n = 0; n <= 40; n++) { /* stash_key_eq: equal, and a difference at every position */
+	for (uint32_t n = 0; n <= 40; n++) { /* nocopy_key_eq: equal, and a difference at every position */
 		char a[41], b[41];
 		memset(a, 'k', n); memcpy(b, a, n);
-		assert(stash_key_eq(a, b, n));
+		assert(nocopy_key_eq(a, b, n));
 		for (uint32_t i = 0; i < n; i++) {
 			b[i] ^= 1;
-			assert(!stash_key_eq(a, b, n));
+			assert(!nocopy_key_eq(a, b, n));
 			b[i] ^= 1;
 		}
 	}
-	const char *err = stash_arena_create(mb << 20, 0, &(size_t){0});
+	const char *err = nocopy_arena_create(mb << 20, 0, &(size_t){0});
 	if (err) {
 		fprintf(stderr, "%s\n", err);
 		return 2;
@@ -197,8 +197,8 @@ int main(int argc, char **argv)
 	for (int i = 0; i < nthreads; i++) {
 		pthread_join(t[i], NULL);
 	}
-	stash_stats_t s;
-	stash_stats(&s);
+	nocopy_stats_t s;
+	nocopy_stats(&s);
 	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, failures %llu\n", mb, nthreads, seconds,
 		(unsigned long long) s.entries, s.shards, (unsigned long long) s.expunges, (unsigned long long) (s.evacuated >> 20),
 		(unsigned long long) failures);

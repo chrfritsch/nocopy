@@ -1,15 +1,15 @@
 --TEST--
-stash (ZTS): threads share the arena; each claims its own worker slot and gives it back when it ends
+nocopy (ZTS): threads share the arena; each claims its own worker slot and gives it back when it ends
 --EXTENSIONS--
-stash
+nocopy
 parallel
 --INI--
 apc.shm_size=64M
-stash.request_scope=0
+nocopy.request_scope=0
 --FILE--
 <?php
-stash_put('shared', ['a' => range(1, 100)]);
-$before = stash_stats()['pinned_segments'];
+nocopy_put('shared', ['a' => range(1, 100)]);
+$before = nocopy_stats()['pinned_segments'];
 $work = function (int $t) {
     mt_srand($t);
     $model = []; $bad = 0;
@@ -18,15 +18,15 @@ $work = function (int $t) {
         $r = mt_rand(0, 9);
         if ($r < 4) {
             $v = array_fill(0, [1, 10, 100, 300][mt_rand(0, 3)], "v$t.$i");
-            $e = stash_stats()['expunges'];
-            if (stash_put($k, $v)) { $model[$k] = [$v, $e]; } else { stash_delete($k); unset($model[$k]); }
+            $e = nocopy_stats()['expunges'];
+            if (nocopy_put($k, $v)) { $model[$k] = [$v, $e]; } else { nocopy_delete($k); unset($model[$k]); }
         } elseif ($r < 6) {
-            stash_delete($k); unset($model[$k]);
+            nocopy_delete($k); unset($model[$k]);
         } elseif ($r < 8) {
-            $bad += stash_get('shared') !== ['a' => range(1, 100)];
+            $bad += nocopy_get('shared') !== ['a' => range(1, 100)];
         } else {
-            $got = stash_get($k, $hit);
-            if ($hit ? !isset($model[$k]) || $got !== $model[$k][0] : isset($model[$k]) && stash_stats()['expunges'] === $model[$k][1]) $bad++;
+            $got = nocopy_get($k, $hit);
+            if ($hit ? !isset($model[$k]) || $got !== $model[$k][0] : isset($model[$k]) && nocopy_stats()['expunges'] === $model[$k][1]) $bad++;
         }
     }
     return $bad;
@@ -38,7 +38,7 @@ foreach ($futures as $f) $bad += $f->value();
 unset($futures);
 gc_collect_cycles();
 usleep(200000); // runtimes shut their threads down
-var_dump($bad, stash_get('shared') === ['a' => range(1, 100)], stash_stats()['pinned_segments'] <= $before + 1);
+var_dump($bad, nocopy_get('shared') === ['a' => range(1, 100)], nocopy_stats()['pinned_segments'] <= $before + 1);
 ?>
 --EXPECT--
 int(0)

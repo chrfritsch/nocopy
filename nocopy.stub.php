@@ -10,16 +10,16 @@
  * @frameless-function {"arity": 2}
  * @frameless-function {"arity": 3}
  */
-function stash_put(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
+function nocopy_put(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
 
 /**
  * @frameless-function {"arity": 1}
  */
-function stash_get(string $key, mixed &$hit = null): mixed {}
+function nocopy_get(string $key, mixed &$hit = null): mixed {}
 
-function stash_delete(string $key): bool {}
+function nocopy_delete(string $key): bool {}
 
 /** Fetch, or compute once across workers and store. $beta > 0 refreshes early (XFetch), scaled by the measured compute time. */
-function stash_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
+function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
 
-function stash_stats(): array {}
+function nocopy_stats(): array {}

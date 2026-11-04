@@ -1,7 +1,7 @@
-ARG_ENABLE('stash', 'stash support', 'no');
+ARG_ENABLE('nocopy', 'nocopy support', 'no');
 
-if (PHP_STASH != 'no') {
-	AC_DEFINE('HAVE_STASH', 1, "Define to 1 if the PHP extension 'stash' is available.");
+if (PHP_NOCOPY != 'no') {
+	AC_DEFINE('HAVE_NOCOPY', 1, "Define to 1 if the PHP extension 'nocopy' is available.");
 
-	EXTENSION('stash', 'stash.c stash_apcu.c stash_arena.c stash_evict.c stash_lease.c stash_owner.c', null, '/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1');
+	EXTENSION('nocopy', 'nocopy.c nocopy_apcu.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c', null, '/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1');
 }

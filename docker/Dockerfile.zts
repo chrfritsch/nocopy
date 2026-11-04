@@ -1,6 +1,6 @@
 # Thread-safe PHP (what FrankenPHP and threaded Apache use), with ext-parallel for the threaded tests:
-#   docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t stash-zts:8.4 docker
-#   docker run --rm -v "$PWD":/src:ro stash-zts:8.4 /src/docker/test.sh
+#   docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t nocopy-zts:8.4 docker
+#   docker run --rm -v "$PWD":/src:ro nocopy-zts:8.4 /src/docker/test.sh
 ARG PHP=8.4
 FROM php:${PHP}-zts
 RUN docker-php-ext-install pcntl && pecl install parallel && docker-php-ext-enable parallel

@@ -1,7 +1,7 @@
 --TEST--
 apcu_*: store/add/fetch/exists/delete, array forms, success flag
 --EXTENSIONS--
-stash
+nocopy
 --INI--
 apc.enable_cli=1
 --FILE--

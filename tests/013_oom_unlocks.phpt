@@ -1,7 +1,7 @@
 --TEST--
-stash: a process running out of memory in apcu_cache_info() does not leave the arena locked
+nocopy: a process running out of memory in apcu_cache_info() does not leave the arena locked
 --EXTENSIONS--
-stash
+nocopy
 pcntl
 --INI--
 apc.enable_cli=1

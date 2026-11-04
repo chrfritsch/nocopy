@@ -1,13 +1,13 @@
 --TEST--
-stash: concurrent misses run the callback once (stash_remember, apcu_entry); a killed lease holder does not block the others
+nocopy: concurrent misses run the callback once (nocopy_remember, apcu_entry); a killed lease holder does not block the others
 --EXTENSIONS--
-stash
+nocopy
 pcntl
 --INI--
 apc.enable_cli=1
 --FILE--
 <?php
-foreach (['remember' => fn($cb) => stash_remember('k1', $cb, 60), 'apcu_entry' => fn($cb) => apcu_entry('k2', $cb, 60)] as $name => $get) {
+foreach (['remember' => fn($cb) => nocopy_remember('k1', $cb, 60), 'apcu_entry' => fn($cb) => apcu_entry('k2', $cb, 60)] as $name => $get) {
     apcu_store('calls', 0);
     $pids = [];
     for ($i = 0; $i < 8; $i++) {
@@ -24,11 +24,11 @@ foreach (['remember' => fn($cb) => stash_remember('k1', $cb, 60), 'apcu_entry' =
 }
 
 $p = pcntl_fork();
-if ($p === 0) { stash_remember('d', function () { sleep(60); }); exit; }
+if ($p === 0) { nocopy_remember('d', function () { sleep(60); }); exit; }
 usleep(200000);
 exec("kill -9 $p"); // a zombie until reaped below
 $t = microtime(true);
-var_dump(stash_remember('d', fn() => 'mine'), microtime(true) - $t < 2);
+var_dump(nocopy_remember('d', fn() => 'mine'), microtime(true) - $t < 2);
 pcntl_waitpid($p, $st);
 ?>
 --EXPECT--

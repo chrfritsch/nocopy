@@ -1,14 +1,14 @@
 --TEST--
-stash: stash.apcu_compat=0 drops apcu_*, APCUIterator and apc.*; stash.* sizes the arena
+nocopy: nocopy.apcu_compat=0 drops apcu_*, APCUIterator and apc.*; nocopy.* sizes the arena
 --EXTENSIONS--
-stash
+nocopy
 --INI--
-stash.apcu_compat=0
-stash.shm_size=4M
+nocopy.apcu_compat=0
+nocopy.shm_size=4M
 --FILE--
 <?php
 var_dump(function_exists('apcu_fetch'), class_exists('APCUIterator', false), defined('APC_ITER_ALL'), ini_get('apc.shm_size'));
-var_dump(stash_stats()['size'], stash_put('k', [1]), stash_get('k'));
+var_dump(nocopy_stats()['size'], nocopy_put('k', [1]), nocopy_get('k'));
 ?>
 --EXPECT--
 bool(false)

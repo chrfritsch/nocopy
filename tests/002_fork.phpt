@@ -1,7 +1,7 @@
 --TEST--
-stash: forked workers share one arena, concurrent writers do not lose keys
+nocopy: forked workers share one arena, concurrent writers do not lose keys
 --EXTENSIONS--
-stash
+nocopy
 pcntl
 --FILE--
 <?php
@@ -9,7 +9,7 @@ $pids = [];
 foreach (range(0, 3) as $w) {
     $pid = pcntl_fork();
     if ($pid === 0) {
-        for ($i = 0; $i < 500; $i++) stash_put("w$w:$i", [$w, $i]);
+        for ($i = 0; $i < 500; $i++) nocopy_put("w$w:$i", [$w, $i]);
         exit(0);
     }
     $pids[] = $pid;
@@ -17,7 +17,7 @@ foreach (range(0, 3) as $w) {
 foreach ($pids as $p) pcntl_waitpid($p, $st);
 $missing = 0;
 foreach (range(0, 3) as $w) for ($i = 0; $i < 500; $i++) {
-    if (stash_get("w$w:$i") !== [$w, $i]) $missing++;
+    if (nocopy_get("w$w:$i") !== [$w, $i]) $missing++;
 }
 var_dump($missing);
 ?>

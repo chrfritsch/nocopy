@@ -1,11 +1,11 @@
-/* stash: zero-copy shared-memory store with an apcu_* compatibility layer. This file: values in and out of the arena, stash_*, the module. */
+/* nocopy: zero-copy shared-memory store with an apcu_* compatibility layer. This file: values in and out of the arena, nocopy_*, the module. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif
 
-#include "stash_php.h"
-#include "stash_arena.h"
+#include "nocopy_php.h"
+#include "nocopy_arena.h"
 #include "ext/standard/info.h"
 #include "ext/standard/php_var.h"
 #include "ext/standard/basic_functions.h"
@@ -13,42 +13,42 @@
 #include "SAPI.h"
 #include "zend_interfaces.h"
 #include "zend_system_id.h"
-#include "stash_arginfo.h"
+#include "nocopy_arginfo.h"
 #include <pthread.h>
 #include <math.h>
 #include <unistd.h>
 
-#define STASH_MAX_DEPTH 64
+#define NOCOPY_MAX_DEPTH 64
 #define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
 
-ZEND_DECLARE_MODULE_GLOBALS(stash)
+ZEND_DECLARE_MODULE_GLOBALS(nocopy)
 
 static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
-zend_long stash_ini_ttl;
+zend_long nocopy_ini_ttl;
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
-bool stash_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
+bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
 /* The arena block: core header, the value, then the key string and the value's out-of-line parts. */
 typedef struct {
-	stash_entry h;
+	nocopy_entry h;
 	zval val;
 } php_entry;
 
 #define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
-/* stash_entry.user: stash_remember's compute time, ms (XFetch) */
+/* nocopy_entry.user: nocopy_remember's compute time, ms (XFetch) */
 
 #define KEY_OFF (SALIGN(sizeof(php_entry)) + _ZSTR_HEADER_SIZE) /* the key string comes first after the zval */
 _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 
-static inline zval *entry_val(stash_entry *e) { return &((php_entry *) e)->val; }
-static inline zend_string *entry_key(const stash_entry *e) { return (zend_string *) (stash_key(e) - _ZSTR_HEADER_SIZE); }
+static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
+static inline zend_string *entry_key(const nocopy_entry *e) { return (zend_string *) (nocopy_key(e) - _ZSTR_HEADER_SIZE); }
 
-bool stash_tracked(void)
+bool nocopy_tracked(void)
 {
-	if (STASH_G(ctx).slot < 0) {
-		zend_throw_error(NULL, "stash: no free worker slot");
+	if (NOCOPY_G(ctx).slot < 0) {
+		zend_throw_error(NULL, "nocopy: no free worker slot");
 		return false;
 	}
 	return true;
@@ -57,23 +57,23 @@ bool stash_tracked(void)
 /* ---- the key table: equal array keys stored once per value ---- */
 
 /* Empties the table for the next value. */
-static zend_always_inline void keys_reset(stash_keys *t)
+static zend_always_inline void keys_reset(nocopy_keys *t)
 {
 	if (UNEXPECTED(++t->gen == 0)) {
-		memset(t->slot, 0, STASH_KEYS * sizeof(stash_kslot));
+		memset(t->slot, 0, NOCOPY_KEYS * sizeof(nocopy_kslot));
 		t->gen = 1;
 	}
 }
 
-static zend_always_inline stash_kslot *key_slot(stash_keys *t, zend_ulong h) { return &t->slot[h & (STASH_KEYS - 1)]; }
+static zend_always_inline nocopy_kslot *key_slot(nocopy_keys *t, zend_ulong h) { return &t->slot[h & (NOCOPY_KEYS - 1)]; }
 
 /* An equal key was persisted earlier in this value. Depends only on the key sequence, so sizing and persisting agree. */
-static zend_always_inline bool key_hit(const stash_keys *t, const stash_kslot *s, const zend_string *k, zend_ulong h)
+static zend_always_inline bool key_hit(const nocopy_keys *t, const nocopy_kslot *s, const zend_string *k, zend_ulong h)
 {
 	return s->gen == t->gen && s->h == h && zend_string_equals(s->s, k);
 }
 
-static zend_always_inline void key_put(const stash_keys *t, stash_kslot *s, const zend_string *k, zend_ulong h)
+static zend_always_inline void key_put(const nocopy_keys *t, nocopy_kslot *s, const zend_string *k, zend_ulong h)
 {
 	s->s = k;
 	s->h = h;
@@ -86,7 +86,7 @@ typedef enum { SIZE_OK, SIZE_DEEP, SIZE_OBJECT, SIZE_RESOURCE } size_status;
 
 typedef struct {
 	size_t n;              /* out-of-line bytes persist_zval() will consume */
-	stash_keys keys;       /* this value's view of the table (after keys_reset) */
+	nocopy_keys keys;       /* this value's view of the table (after keys_reset) */
 	bool keep_shared_refs; /* a reference with refcount > 1 must stay shared: SIZE_OBJECT (serialize) */
 } sizing;
 
@@ -110,7 +110,7 @@ static size_status size_array(sizing *z, zend_array *a, int depth)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
 			if (b->key) {
-				stash_kslot *s = key_slot(&z->keys, b->h);
+				nocopy_kslot *s = key_slot(&z->keys, b->h);
 				if (!key_hit(&z->keys, s, b->key, b->h)) {
 					z->n += SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(b->key)));
 					key_put(&z->keys, s, b->key, b->h);
@@ -126,7 +126,7 @@ static size_status size_array(sizing *z, zend_array *a, int depth)
 
 static size_status size_zval(sizing *z, zval *v, int depth)
 {
-	if (depth > STASH_MAX_DEPTH) {
+	if (depth > NOCOPY_MAX_DEPTH) {
 		return SIZE_DEEP;
 	}
 	switch (Z_TYPE_P(v)) {
@@ -153,7 +153,7 @@ static size_status size_zval(sizing *z, zval *v, int depth)
 
 typedef struct {
 	char *cursor; /* next free byte of the block */
-	stash_keys keys;
+	nocopy_keys keys;
 } persist;
 
 static void *take(persist *p, size_t n)
@@ -202,7 +202,7 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(ht, b) {
 			if (b->key) {
-				stash_kslot *s = key_slot(&p->keys, b->h);
+				nocopy_kslot *s = key_slot(&p->keys, b->h);
 				if (key_hit(&p->keys, s, b->key, b->h)) {
 					b->key = (zend_string *) s->s;
 				} else {
@@ -249,7 +249,7 @@ static void persist_zval(persist *p, zval *z)
 }
 
 /* Fills e after its header: the key string (at KEY_OFF), then the value. */
-static void persist_entry(stash_entry *e, const zend_string *key, zval *val, stash_keys *keys)
+static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, nocopy_keys *keys)
 {
 	if (Z_TYPE_P(val) == IS_ARRAY) {
 		keys_reset(keys);
@@ -308,7 +308,7 @@ static void rebase_zval(const rebase *r, zval *z)
 	}
 }
 
-void stash_rebase(stash_entry *e, const stash_entry *from)
+void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	rebase r = {.from = (uintptr_t) from, .size = from->size, .by = (char *) e - (const char *) from};
 	rebase_zval(&r, entry_val(e));
@@ -318,14 +318,14 @@ void stash_rebase(stash_entry *e, const stash_entry *from)
 
 static bool in_arena(const void *p)
 {
-	return (uintptr_t) p - (uintptr_t) stash_a < stash_a->size;
+	return (uintptr_t) p - (uintptr_t) nocopy_a < nocopy_a->size;
 }
 
-static void unshare_zval(stash_keys *keys, zval *z);
-static void unshare_contents(stash_keys *keys, zend_array *a);
+static void unshare_zval(nocopy_keys *keys, zval *z);
+static void unshare_contents(nocopy_keys *keys, zend_array *a);
 
 /* Deep copy of an arena value into ordinary request memory. */
-static void copy_out(stash_keys *keys, zval *dst, const zval *src)
+static void copy_out(nocopy_keys *keys, zval *dst, const zval *src)
 {
 	switch (Z_TYPE_P(src)) {
 		case IS_STRING:
@@ -347,8 +347,8 @@ static void copy_out(stash_keys *keys, zval *dst, const zval *src)
 	}
 }
 
-/* Repoints every key and value of a (private) array that still lives in the arena. Stored values are at most STASH_MAX_DEPTH deep. */
-static void unshare_contents(stash_keys *keys, zend_array *a)
+/* Repoints every key and value of a (private) array that still lives in the arena. Stored values are at most NOCOPY_MAX_DEPTH deep. */
+static void unshare_contents(nocopy_keys *keys, zend_array *a)
 {
 	if (HT_IS_PACKED(a)) {
 		zval *v;
@@ -359,7 +359,7 @@ static void unshare_contents(stash_keys *keys, zend_array *a)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
 			if (b->key && in_arena(b->key)) {
-				stash_kslot *s = key_slot(keys, b->h);
+				nocopy_kslot *s = key_slot(keys, b->h);
 				if (s->gen == keys->gen && s->s == b->key) { /* a deduped key: share its copy */
 					b->key = zend_string_copy(s->copy);
 				} else {
@@ -375,7 +375,7 @@ static void unshare_contents(stash_keys *keys, zend_array *a)
 }
 
 /* Replaces an arena string or array inside a copied-out array with a private copy. */
-static void unshare_zval(stash_keys *keys, zval *z)
+static void unshare_zval(nocopy_keys *keys, zval *z)
 {
 	if ((Z_TYPE_P(z) == IS_STRING || Z_TYPE_P(z) == IS_ARRAY) && in_arena(Z_COUNTED_P(z))) {
 		zval t;
@@ -387,46 +387,46 @@ static void unshare_zval(stash_keys *keys, zval *z)
 /* ---- copy mode: private copies kept for the request ---- */
 
 /* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
-static zend_always_inline stash_local *local_slot(const stash_entry *e, const zval *v)
+static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const zval *v)
 {
 	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
-	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !STASH_G(local_ok) || e->size > local_size
+	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(local_ok) || e->size > local_size
 	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
 		return NULL;
 	}
-	if (UNEXPECTED(!STASH_G(local))) {
-		STASH_G(local) = ecalloc(STASH_LOCAL, sizeof(stash_local));
+	if (UNEXPECTED(!NOCOPY_G(local))) {
+		NOCOPY_G(local) = ecalloc(NOCOPY_LOCAL, sizeof(nocopy_local));
 	}
-	return &STASH_G(local)[(((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 52];
+	return &NOCOPY_G(local)[(((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 52];
 }
 
 static void local_flush(void)
 {
-	for (int i = 0; i < STASH_LOCAL; i++) {
-		if (STASH_G(local)[i].e) {
-			zval_ptr_dtor(&STASH_G(local)[i].v);
-			STASH_G(local)[i].e = NULL;
+	for (int i = 0; i < NOCOPY_LOCAL; i++) {
+		if (NOCOPY_G(local)[i].e) {
+			zval_ptr_dtor(&NOCOPY_G(local)[i].v);
+			NOCOPY_G(local)[i].e = NULL;
 		}
 	}
-	STASH_G(local_bytes) = 0;
+	NOCOPY_G(local_bytes) = 0;
 }
 
 /* ponytail: over budget flushes everything; per-slot eviction if working sets near the budget thrash */
-static void local_put(stash_local *l, const stash_entry *e, const zval *copy)
+static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 {
 	if (l->e) {
-		STASH_G(local_bytes) -= l->size;
+		NOCOPY_G(local_bytes) -= l->size;
 		zval_ptr_dtor(&l->v);
 		l->e = NULL; /* or the flush below releases it again */
 	}
-	if (STASH_G(local_bytes) + e->size > local_size) {
+	if (NOCOPY_G(local_bytes) + e->size > local_size) {
 		local_flush();
 	}
 	l->e = e;
 	l->seq = e->seq;
 	l->size = e->size;
 	ZVAL_COPY(&l->v, copy);
-	STASH_G(local_bytes) += e->size;
+	NOCOPY_G(local_bytes) += e->size;
 }
 
 /* ---- writes ---- */
@@ -448,32 +448,32 @@ static bool serialize_value(zval *val, zval *out)
 	return true;
 }
 
-/* Sizes the value, allocates and fills its entry. STASH_OK: p holds it, ready for publish(). */
-static stash_status build(stash_put *p, zend_string *key, zval *val, const stash_opts *o)
+/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for publish(). */
+static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o)
 {
-	stash_keys *keys = &STASH_G(keys);
+	nocopy_keys *keys = &NOCOPY_G(keys);
 	if (Z_TYPE_P(val) == IS_ARRAY) {
 		keys_reset(keys);
 	}
-	sizing z = {.keys = *keys, .keep_shared_refs = o->objects == STASH_SERIALIZE_OBJECTS};
+	sizing z = {.keys = *keys, .keep_shared_refs = o->objects == NOCOPY_SERIALIZE_OBJECTS};
 	zval ser;
 	bool serialized = false;
 	size_status st = size_zval(&z, val, 0);
 	if (st != SIZE_OK) {
-		if (o->objects == STASH_REFUSE_OBJECTS) {
+		if (o->objects == NOCOPY_REFUSE_OBJECTS) {
 			if (st == SIZE_DEEP) {
-				zend_value_error("stash: value is nested too deeply");
+				zend_value_error("nocopy: value is nested too deeply");
 			} else {
 				zend_argument_type_error(2, "must not contain objects or resources");
 			}
-			return STASH_REFUSED;
+			return NOCOPY_REFUSED;
 		}
 		if (st == SIZE_RESOURCE) {
 			php_error_docref(NULL, E_WARNING, "Cannot store resources in apcu cache");
-			return STASH_REFUSED;
+			return NOCOPY_REFUSED;
 		}
 		if (!serialize_value(val, &ser)) {
-			return STASH_REFUSED;
+			return NOCOPY_REFUSED;
 		}
 		val = &ser;
 		serialized = true;
@@ -481,8 +481,8 @@ static stash_status build(stash_put *p, zend_string *key, zval *val, const stash
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(key))) + z.n;
-	stash_entry *e = stash_put_begin(p, &STASH_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
-		o->ttl ? o->ttl : stash_ini_ttl);
+	nocopy_entry *e = nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
+		o->ttl ? o->ttl : nocopy_ini_ttl);
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED : 0;
 		persist_entry(e, key, val, keys);
@@ -490,76 +490,76 @@ static stash_status build(stash_put *p, zend_string *key, zval *val, const stash
 	if (serialized) {
 		zend_string_release(Z_STR(ser));
 	}
-	return e ? STASH_OK : STASH_NO_ROOM;
+	return e ? NOCOPY_OK : NOCOPY_NO_ROOM;
 }
 
-static stash_status publish(stash_put *p, bool add_only)
+static nocopy_status publish(nocopy_put *p, bool add_only)
 {
-	switch (stash_put_commit(p, add_only)) {
-		case PUT_OK: return STASH_OK;
-		case PUT_EXISTS: return STASH_EXISTS;
-		default: return STASH_NO_ROOM;
+	switch (nocopy_put_commit(p, add_only)) {
+		case PUT_OK: return NOCOPY_OK;
+		case PUT_EXISTS: return NOCOPY_EXISTS;
+		default: return NOCOPY_NO_ROOM;
 	}
 }
 
-stash_status stash_store(zend_string *key, zval *val, const stash_opts *o)
+nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
-	stash_put p;
-	stash_status s = build(&p, key, val, o);
-	return s == STASH_OK ? publish(&p, o->add_only) : s;
+	nocopy_put p;
+	nocopy_status s = build(&p, key, val, o);
+	return s == NOCOPY_OK ? publish(&p, o->add_only) : s;
 }
 
-bool stash_drop(zend_string *key)
+bool nocopy_drop(zend_string *key)
 {
 	zend_ulong h = zend_string_hash_val(key);
-	stash_shard *sh = stash_shard_of(h);
-	stash_lock(sh);
-	bool found = stash_remove(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	stash_unlock(sh);
+	nocopy_shard *sh = nocopy_shard_of(h);
+	nocopy_lock(sh);
+	bool found = nocopy_remove(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	nocopy_unlock(sh);
 	return found;
 }
 
-bool stash_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
+bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	zend_ulong h = zend_string_hash_val(key);
-	stash_shard *sh = stash_shard_of(h);
+	nocopy_shard *sh = nocopy_shard_of(h);
 	for (;;) {
-		stash_lock(sh);
-		stash_entry *e = stash_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-		if (e && !stash_expired(e)) {
+		nocopy_lock(sh);
+		nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+		if (e && !nocopy_expired(e)) {
 			zval *v = entry_val(e);
 			bool is_long = Z_TYPE_P(v) == IS_LONG && !(e->flags & ENTRY_SERIALIZED);
 			if (is_long) {
 				*out = __atomic_add_fetch(&Z_LVAL_P(v), delta, __ATOMIC_RELAXED); /* in place: lock-free readers copy this word */
 			}
-			stash_unlock(sh);
+			nocopy_unlock(sh);
 			return is_long;
 		}
-		stash_unlock(sh);
+		nocopy_unlock(sh);
 		zval init;
 		ZVAL_LONG(&init, delta);
-		const stash_opts create = {.ttl = ttl, .add_only = true, .objects = STASH_REFUSE_OBJECTS};
-		stash_status s = stash_store(key, &init, &create);
-		if (s != STASH_EXISTS) {
+		const nocopy_opts create = {.ttl = ttl, .add_only = true, .objects = NOCOPY_REFUSE_OBJECTS};
+		nocopy_status s = nocopy_store(key, &init, &create);
+		if (s != NOCOPY_EXISTS) {
 			*out = delta;
-			return s == STASH_OK;
+			return s == NOCOPY_OK;
 		}
 		/* someone created it first: go around and update theirs */
 	}
 }
 
-bool stash_cas_long(zend_string *key, zend_long old, zend_long nw)
+bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
 	zend_ulong h = zend_string_hash_val(key);
-	stash_shard *sh = stash_shard_of(h);
-	stash_lock(sh);
-	stash_entry *e = stash_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	nocopy_shard *sh = nocopy_shard_of(h);
+	nocopy_lock(sh);
+	nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
 	zval *v = e ? entry_val(e) : NULL;
-	bool ok = e && !stash_expired(e) && !(e->flags & ENTRY_SERIALIZED) && Z_TYPE_P(v) == IS_LONG && Z_LVAL_P(v) == old;
+	bool ok = e && !nocopy_expired(e) && !(e->flags & ENTRY_SERIALIZED) && Z_TYPE_P(v) == IS_LONG && Z_LVAL_P(v) == old;
 	if (ok) {
 		__atomic_store_n(&Z_LVAL_P(v), nw, __ATOMIC_RELAXED);
 	}
-	stash_unlock(sh);
+	nocopy_unlock(sh);
 	return ok;
 }
 
@@ -589,10 +589,10 @@ static bool cache_unserialize(zval *rv, const char *buf, size_t len)
 /* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
-	stash_ctx *c = &STASH_G(ctx);
-	bool copy = !STASH_G(zero_copy);
-	stash_borrow_begin(c);
-	stash_entry *e = stash_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	nocopy_ctx *c = &NOCOPY_G(ctx);
+	bool copy = !NOCOPY_G(zero_copy);
+	nocopy_borrow_begin(c);
+	nocopy_entry *e = nocopy_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
 	bool hit = e != NULL;
 	ZVAL_NULL(rv);
 	if (e) {
@@ -604,11 +604,11 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 		if (e->flags & ENTRY_SERIALIZED) {
 			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v));
 		} else if (copy) {
-			stash_local *l = local_slot(e, v);
+			nocopy_local *l = local_slot(e, v);
 			if (l && l->e == e && l->seq == e->seq) {
 				ZVAL_COPY(rv, &l->v); /* same version as last time: share it, COW keeps it intact */
 			} else {
-				stash_keys *keys = &STASH_G(keys);
+				nocopy_keys *keys = &NOCOPY_G(keys);
 				if (Z_TYPE_P(v) == IS_ARRAY) {
 					keys_reset(keys);
 				}
@@ -621,44 +621,44 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 			}
 		} else {
 			ZVAL_COPY_VALUE(rv, v);
-			stash_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
+			nocopy_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
 		}
 	}
-	uint64_t *ctr = hit ? &stash_a->workers[c->slot].hits : &stash_a->workers[c->slot].misses;
+	uint64_t *ctr = hit ? &nocopy_a->workers[c->slot].hits : &nocopy_a->workers[c->slot].misses;
 	__atomic_store_n(ctr, *ctr + 1, __ATOMIC_RELAXED); /* single writer per slot: no RMW needed */
-	stash_borrow_end(c);
+	nocopy_borrow_end(c);
 	return hit;
 }
 
-bool stash_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
+bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
 
-static stash_meta meta_of(const stash_entry *e)
+static nocopy_meta meta_of(const nocopy_entry *e)
 {
-	return (stash_meta) {.created = e->created, .expires = e->expires, .size = e->size, .seq = e->seq};
+	return (nocopy_meta) {.created = e->created, .expires = e->expires, .size = e->size, .seq = e->seq};
 }
 
-bool stash_info(zend_string *key, stash_meta *m)
+bool nocopy_info(zend_string *key, nocopy_meta *m)
 {
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c);
-	stash_entry *e = stash_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	nocopy_ctx *c = &NOCOPY_G(ctx);
+	nocopy_borrow_begin(c);
+	nocopy_entry *e = nocopy_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
 	if (e && m) {
 		*m = meta_of(e);
 	}
-	stash_borrow_end(c);
+	nocopy_borrow_end(c);
 	return e != NULL;
 }
 
-void stash_scan(stash_scan_fn fn, void *arg)
+void nocopy_scan(nocopy_scan_fn fn, void *arg)
 {
-	stash_ctx *c = &STASH_G(ctx);
-	stash_borrow_begin(c); /* pins, not the lock: fn may allocate */
-	stash_entry *e;
-	for (uint32_t sh = 0, i = 0; (e = stash_scan_next(c, &sh, &i));) {
-		stash_meta m = meta_of(e);
+	nocopy_ctx *c = &NOCOPY_G(ctx);
+	nocopy_borrow_begin(c); /* pins, not the lock: fn may allocate */
+	nocopy_entry *e;
+	for (uint32_t sh = 0, i = 0; (e = nocopy_scan_next(c, &sh, &i));) {
+		nocopy_meta m = meta_of(e);
 		fn(arg, entry_key(e), &m);
 	}
-	stash_borrow_end(c);
+	nocopy_borrow_end(c);
 }
 
 /* ---- single-flight: a lease per key hash (in the arena's shard) holds who computes it ---- */
@@ -674,23 +674,23 @@ static double now_s(clockid_t clk)
 
 static int lease_take(zend_ulong h)
 {
-	if (STASH_G(nleases) == (int) (sizeof STASH_G(leases) / sizeof STASH_G(leases)[0])) {
-		return STASH_LEASE_FULL; /* nested too deep: compute without one */
+	if (NOCOPY_G(nleases) == (int) (sizeof NOCOPY_G(leases) / sizeof NOCOPY_G(leases)[0])) {
+		return NOCOPY_LEASE_FULL; /* nested too deep: compute without one */
 	}
-	int r = stash_lease_take(h, STASH_G(ctx).slot, time(NULL), LEASE_TTL);
-	if (r == STASH_LEASE_TAKEN) {
-		STASH_G(leases)[STASH_G(nleases)++] = h;
+	int r = nocopy_lease_take(h, NOCOPY_G(ctx).slot, time(NULL), LEASE_TTL);
+	if (r == NOCOPY_LEASE_TAKEN) {
+		NOCOPY_G(leases)[NOCOPY_G(nleases)++] = h;
 	}
 	return r;
 }
 
 static void lease_drop(void)
 {
-	stash_lease_drop(STASH_G(leases)[--STASH_G(nleases)], STASH_G(ctx).slot);
+	nocopy_lease_drop(NOCOPY_G(leases)[--NOCOPY_G(nleases)], NOCOPY_G(ctx).slot);
 }
 
 /* Runs the callback, measures it, stores the result with its compute time. */
-static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const stash_opts *o, zval *rv)
+static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, zval *rv)
 {
 	zval arg;
 	ZVAL_STR(&arg, key);
@@ -702,14 +702,14 @@ static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		return;
 	}
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
-	stash_put p;
-	if (build(&p, key, rv, o) == STASH_OK) {
+	nocopy_put p;
+	if (build(&p, key, rv, o) == NOCOPY_OK) {
 		p.e->user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
 		publish(&p, o->add_only);
 	}
 }
 
-void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const stash_opts *o, double beta, zval *rv)
+void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, double beta, zval *rv)
 {
 	time_t exp;
 	uint32_t delta;
@@ -717,11 +717,11 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 		if (!(beta > 0 && exp && delta)) {
 			return;
 		}
-		double r = ((stash_rand(&STASH_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
+		double r = ((nocopy_rand(&NOCOPY_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
 		if (now_s(CLOCK_REALTIME) - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
-		if (lease_take(zend_string_hash_val(key)) != STASH_LEASE_TAKEN) {
+		if (lease_take(zend_string_hash_val(key)) != NOCOPY_LEASE_TAKEN) {
 			return; /* someone else refreshes: keep serving this value */
 		}
 		zval_ptr_dtor(rv);
@@ -736,8 +736,8 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	bool mine = false;
 	for (;;) {
 		int r = lease_take(h);
-		if (r != STASH_LEASE_HELD) {
-			mine = r == STASH_LEASE_TAKEN; /* MINE: our own callback asks for its key; FULL: compute without */
+		if (r != NOCOPY_LEASE_HELD) {
+			mine = r == NOCOPY_LEASE_TAKEN; /* MINE: our own callback asks for its key; FULL: compute without */
 			break;
 		}
 		if (fetch(key, rv, NULL, NULL)) {
@@ -759,7 +759,7 @@ void stash_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	}
 }
 
-/* ---- stash_* ---- */
+/* ---- nocopy_* ---- */
 
 static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize, zval *return_value)
 {
@@ -767,18 +767,18 @@ static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize,
 		zend_argument_value_error(3, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const stash_opts o = {.ttl = ttl, .objects = serialize ? STASH_SERIALIZE_OBJECTS : STASH_REFUSE_OBJECTS};
-	stash_status st = stash_store(key, val, &o);
+	const nocopy_opts o = {.ttl = ttl, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
+	nocopy_status st = nocopy_store(key, val, &o);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
-	RETURN_BOOL(st == STASH_OK);
+	RETURN_BOOL(st == NOCOPY_OK);
 }
 
-PHP_FUNCTION(stash_put)
+PHP_FUNCTION(nocopy_put)
 {
 	zend_string *key;
 	zval *val;
@@ -796,7 +796,7 @@ PHP_FUNCTION(stash_put)
 	put_impl(key, val, ttl, serialize, return_value);
 }
 
-PHP_FUNCTION(stash_get)
+PHP_FUNCTION(nocopy_get)
 {
 	zend_string *key;
 	zval *hit = NULL;
@@ -807,10 +807,10 @@ PHP_FUNCTION(stash_get)
 		Z_PARAM_ZVAL(hit)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	bool found = stash_fetch(key, return_value);
+	bool found = nocopy_fetch(key, return_value);
 	if (hit) {
 		ZEND_TRY_ASSIGN_REF_BOOL(hit, found);
 	}
@@ -818,19 +818,19 @@ PHP_FUNCTION(stash_get)
 
 #if PHP_VERSION_ID >= 80400
 /* Frameless variants (PHP 8.4+): a call the compiler resolved skips the VM's call frame. */
-ZEND_FRAMELESS_FUNCTION(stash_get, 1)
+ZEND_FRAMELESS_FUNCTION(nocopy_get, 1)
 {
 	zval tmp;
 	zend_string *key;
 	Z_FLF_PARAM_STR(1, key, tmp);
-	if (stash_tracked()) {
-		stash_fetch(key, return_value);
+	if (nocopy_tracked()) {
+		nocopy_fetch(key, return_value);
 	}
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
 
-ZEND_FRAMELESS_FUNCTION(stash_put, 2)
+ZEND_FRAMELESS_FUNCTION(nocopy_put, 2)
 {
 	zval tmp;
 	zend_string *key;
@@ -840,7 +840,7 @@ flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
 
-ZEND_FRAMELESS_FUNCTION(stash_put, 3)
+ZEND_FRAMELESS_FUNCTION(nocopy_put, 3)
 {
 	zval tmp;
 	zend_string *key;
@@ -853,7 +853,7 @@ flf_clean:
 }
 #endif
 
-PHP_FUNCTION(stash_delete)
+PHP_FUNCTION(nocopy_delete)
 {
 	zend_string *key;
 
@@ -861,10 +861,10 @@ PHP_FUNCTION(stash_delete)
 		Z_PARAM_STR(key)
 	ZEND_PARSE_PARAMETERS_END();
 
-	RETURN_BOOL(stash_drop(key));
+	RETURN_BOOL(nocopy_drop(key));
 }
 
-PHP_FUNCTION(stash_remember)
+PHP_FUNCTION(nocopy_remember)
 {
 	zend_string *key;
 	zend_fcall_info fci;
@@ -884,23 +884,23 @@ PHP_FUNCTION(stash_remember)
 		zend_argument_value_error(3, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const stash_opts o = {.ttl = ttl, .objects = STASH_SERIALIZE_OBJECTS};
-	stash_remember(key, &fci, &fcc, &o, beta, return_value);
+	const nocopy_opts o = {.ttl = ttl, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	nocopy_remember(key, &fci, &fcc, &o, beta, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
 }
 
-PHP_FUNCTION(stash_stats)
+PHP_FUNCTION(nocopy_stats)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_stats_t s;
-	stash_stats(&s);
+	nocopy_stats_t s;
+	nocopy_stats(&s);
 	array_init(return_value);
-	add_assoc_long(return_value, "size", stash_a->size);
+	add_assoc_long(return_value, "size", nocopy_a->size);
 	add_assoc_long(return_value, "used", s.used);
 	add_assoc_long(return_value, "segment_size", s.segment_size);
 	add_assoc_long(return_value, "segments", s.segments);
@@ -924,12 +924,12 @@ PHP_FUNCTION(stash_stats)
 /* ---- FrankenPHP worker mode ---- */
 
 /* frankenphp_handle_request() serves many requests inside one worker script, which may keep values across them: copy mode. */
-static ZEND_NAMED_FUNCTION(stash_handle_request)
+static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 {
-	STASH_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
-	stash_ctx *c = &STASH_G(ctx);
+	NOCOPY_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
+	nocopy_ctx *c = &NOCOPY_G(ctx);
 	c->transient = c->slot >= 0;
-	stash_drop_transient(c); /* idle pins: the worker now waits for a request */
+	nocopy_drop_transient(c); /* idle pins: the worker now waits for a request */
 	orig_handle_request(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 
@@ -984,20 +984,20 @@ static ZEND_INI_MH(OnHint)
 
 static ZEND_INI_MH(OnTtl)
 {
-	stash_ini_ttl = zend_ini_parse_quantity_warn(new_value, entry->name);
+	nocopy_ini_ttl = zend_ini_parse_quantity_warn(new_value, entry->name);
 	return SUCCESS;
 }
 
 PHP_INI_BEGIN()
-	PHP_INI_ENTRY("stash.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
-	PHP_INI_ENTRY("stash.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
-	PHP_INI_ENTRY("stash.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
+	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
+	PHP_INI_ENTRY("nocopy.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
+	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 PHP_INI_END()
 
-static const zend_ini_entry_def ini_stash[] = {
-	PHP_INI_ENTRY("stash.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
-	PHP_INI_ENTRY("stash.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
-	PHP_INI_ENTRY("stash.ttl", "0", PHP_INI_SYSTEM, OnTtl)
+static const zend_ini_entry_def ini_nocopy[] = {
+	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
+	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
+	PHP_INI_ENTRY("nocopy.ttl", "0", PHP_INI_SYSTEM, OnTtl)
 	{0}
 };
 
@@ -1023,16 +1023,16 @@ static void ini_put(const char *name, zend_string *value, bool apply)
 	}
 }
 
-/* apc.X with the APCu layer: an alias of stash.X, used only when set and stash.X is not. */
+/* apc.X with the APCu layer: an alias of nocopy.X, used only when set and nocopy.X is not. */
 static ZEND_INI_MH(OnAlias)
 {
 	char canon[32];
-	snprintf(canon, sizeof canon, "stash.%s", ZSTR_VAL(entry->name) + sizeof("apc.") - 1);
+	snprintf(canon, sizeof canon, "nocopy.%s", ZSTR_VAL(entry->name) + sizeof("apc.") - 1);
 	if (stage != ZEND_INI_STAGE_STARTUP || !configured(ZSTR_VAL(entry->name))) {
 		return SUCCESS; /* the default */
 	}
 	if (configured(canon)) {
-		php_error_docref(NULL, E_CORE_WARNING, "stash: %s is ignored, %s is set", ZSTR_VAL(entry->name), canon);
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s is ignored, %s is set", ZSTR_VAL(entry->name), canon);
 	} else {
 		ini_put(canon, new_value, true);
 	}
@@ -1055,60 +1055,60 @@ static void sync_aliases(void)
 	for (int i = 0; i < 3; i++) {
 		char apc[32], canon[32];
 		snprintf(apc, sizeof apc, "apc.%s", names[i]);
-		snprintf(canon, sizeof canon, "stash.%s", names[i]);
+		snprintf(canon, sizeof canon, "nocopy.%s", names[i]);
 		ini_put(apc, zend_ini_str(canon, strlen(canon), false), false);
 	}
 }
 
 static void atfork_child(void)
 {
-	if (stash_a) {
-		stash_after_fork(&STASH_G(ctx));
+	if (nocopy_a) {
+		nocopy_after_fork(&NOCOPY_G(ctx));
 	}
 }
 
-static PHP_GINIT_FUNCTION(stash)
+static PHP_GINIT_FUNCTION(nocopy)
 {
-#if defined(COMPILE_DL_STASH) && defined(ZTS)
+#if defined(COMPILE_DL_NOCOPY) && defined(ZTS)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
-	memset(stash_globals, 0, sizeof(*stash_globals));
-	stash_globals->ctx.slot = -1;
-	stash_globals->keys.slot = pecalloc(STASH_KEYS, sizeof(stash_kslot), 1);
+	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
+	nocopy_globals->ctx.slot = -1;
+	nocopy_globals->keys.slot = pecalloc(NOCOPY_KEYS, sizeof(nocopy_kslot), 1);
 }
 
 /* A thread ending (ZTS) gives its worker slot back. */
-static PHP_GSHUTDOWN_FUNCTION(stash)
+static PHP_GSHUTDOWN_FUNCTION(nocopy)
 {
-	if (stash_a) {
-		stash_release(&stash_globals->ctx);
+	if (nocopy_a) {
+		nocopy_release(&nocopy_globals->ctx);
 	}
-	pefree(stash_globals->keys.slot, 1);
+	pefree(nocopy_globals->keys.slot, 1);
 }
 
-PHP_MINIT_FUNCTION(stash)
+PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
 	if (apcu_compat && zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
-		php_error_docref(NULL, E_CORE_WARNING, "stash: APCu is loaded, running without the apcu_* layer (stash.apcu_compat=0)");
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: APCu is loaded, running without the apcu_* layer (nocopy.apcu_compat=0)");
 		apcu_compat = false;
 	}
-	zend_register_ini_entries(ini_stash, module_number);
+	zend_register_ini_entries(ini_nocopy, module_number);
 	if (apcu_compat) {
 		zend_register_ini_entries(ini_apc, module_number);
 		sync_aliases();
 	}
-	stash_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
+	nocopy_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
 	size_t need;
-	const char *err = stash_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0, &need);
-	const char *p = apcu_compat ? "apc" : "stash";
-	if (err == STASH_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
+	const char *err = nocopy_arena_create(arena_size, ini_hint > 0 ? (uint64_t) ini_hint : 0, &need);
+	const char *p = apcu_compat ? "apc" : "nocopy";
+	if (err == NOCOPY_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
 		zend_error(E_CORE_ERROR, "Unable to allocate %zu bytes of shared memory for cache structures. Either %s.shm_size is too small or %s.entries_hint too large", need, p, p);
 		return FAILURE;
 	}
 	if (err) {
-		zend_error(E_CORE_ERROR, "stash: unable to create the %zu byte cache: %s", arena_size, err);
+		zend_error(E_CORE_ERROR, "nocopy: unable to create the %zu byte cache: %s", arena_size, err);
 		return FAILURE;
 	}
 	pthread_atfork(NULL, NULL, atfork_child);
@@ -1116,10 +1116,10 @@ PHP_MINIT_FUNCTION(stash)
 	zend_function *hr = zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("frankenphp_handle_request"));
 	if (hr && hr->type == ZEND_INTERNAL_FUNCTION) {
 		orig_handle_request = hr->internal_function.handler;
-		hr->internal_function.handler = stash_handle_request;
+		hr->internal_function.handler = nocopy_handle_request;
 	}
 	if (apcu_compat) {
-		stash_apcu_minit(module_number);
+		nocopy_apcu_minit(module_number);
 	}
 #if PHP_VERSION_ID >= 80400
 	/* opcache's file cache stores frameless handler indices: another extension set must not reuse them */
@@ -1127,59 +1127,59 @@ PHP_MINIT_FUNCTION(stash)
 	while (zend_flf_handlers && zend_flf_handlers[n]) {
 		n++;
 	}
-	zend_add_system_entropy("stash", "frameless", &n, sizeof(n));
+	zend_add_system_entropy("nocopy", "frameless", &n, sizeof(n));
 #endif
 	return SUCCESS;
 }
 
-PHP_MSHUTDOWN_FUNCTION(stash)
+PHP_MSHUTDOWN_FUNCTION(nocopy)
 {
-	stash_release(&STASH_G(ctx));
-	stash_arena_destroy();
+	nocopy_release(&NOCOPY_G(ctx));
+	nocopy_arena_destroy();
 	UNREGISTER_INI_ENTRIES();
 	return SUCCESS;
 }
 
-PHP_RINIT_FUNCTION(stash)
+PHP_RINIT_FUNCTION(nocopy)
 {
-#if defined(COMPILE_DL_STASH) && defined(ZTS)
+#if defined(COMPILE_DL_NOCOPY) && defined(ZTS)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
-	if (STASH_G(ctx).slot < 0) {
-		stash_claim(&STASH_G(ctx));
+	if (NOCOPY_G(ctx).slot < 0) {
+		nocopy_claim(&NOCOPY_G(ctx));
 	}
-	STASH_G(zero_copy) = request_scope;
-	STASH_G(local_ok) = local_size > 0;
+	NOCOPY_G(zero_copy) = request_scope;
+	NOCOPY_G(local_ok) = local_size > 0;
 	return SUCCESS;
 }
 
-PHP_RSHUTDOWN_FUNCTION(stash)
+PHP_RSHUTDOWN_FUNCTION(nocopy)
 {
-	STASH_G(zero_copy) = false;
-	STASH_G(local_ok) = false; /* later fetches (session's RSHUTDOWN) copy without keeping */
-	if (STASH_G(local)) {
+	NOCOPY_G(zero_copy) = false;
+	NOCOPY_G(local_ok) = false; /* later fetches (session's RSHUTDOWN) copy without keeping */
+	if (NOCOPY_G(local)) {
 		local_flush();
-		efree(STASH_G(local));
-		STASH_G(local) = NULL;
+		efree(NOCOPY_G(local));
+		NOCOPY_G(local) = NULL;
 	}
 	return SUCCESS;
 }
 
 /* Pins go only after zend_deactivate: built-in modules (session) still read user values in their RSHUTDOWN, which runs after ours. */
-static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(stash)
+static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(nocopy)
 {
-	while (STASH_G(nleases)) {
+	while (NOCOPY_G(nleases)) {
 		lease_drop(); /* a callback bailed out (fatal, timeout) while holding it */
 	}
-	STASH_G(ctx).pin_refs = 0;
-	stash_keep_release(&STASH_G(ctx));
+	NOCOPY_G(ctx).pin_refs = 0;
+	nocopy_keep_release(&NOCOPY_G(ctx));
 	return SUCCESS;
 }
 
-PHP_MINFO_FUNCTION(stash)
+PHP_MINFO_FUNCTION(nocopy)
 {
 	php_info_print_table_start();
-	php_info_print_table_row(2, "stash support", "enabled");
+	php_info_print_table_row(2, "nocopy support", "enabled");
 #ifdef ZTS
 	php_info_print_table_row(2, "thread safety", "enabled");
 #endif
@@ -1187,26 +1187,26 @@ PHP_MINFO_FUNCTION(stash)
 	DISPLAY_INI_ENTRIES();
 }
 
-zend_module_entry stash_module_entry = {
+zend_module_entry nocopy_module_entry = {
 	STANDARD_MODULE_HEADER,
-	"stash",
+	"nocopy",
 	ext_functions,
-	PHP_MINIT(stash),
-	PHP_MSHUTDOWN(stash),
-	PHP_RINIT(stash),
-	PHP_RSHUTDOWN(stash),
-	PHP_MINFO(stash),
-	PHP_STASH_VERSION,
-	PHP_MODULE_GLOBALS(stash),
-	PHP_GINIT(stash),
-	PHP_GSHUTDOWN(stash),
-	ZEND_MODULE_POST_ZEND_DEACTIVATE_N(stash),
+	PHP_MINIT(nocopy),
+	PHP_MSHUTDOWN(nocopy),
+	PHP_RINIT(nocopy),
+	PHP_RSHUTDOWN(nocopy),
+	PHP_MINFO(nocopy),
+	PHP_NOCOPY_VERSION,
+	PHP_MODULE_GLOBALS(nocopy),
+	PHP_GINIT(nocopy),
+	PHP_GSHUTDOWN(nocopy),
+	ZEND_MODULE_POST_ZEND_DEACTIVATE_N(nocopy),
 	STANDARD_MODULE_PROPERTIES_EX
 };
 
-#ifdef COMPILE_DL_STASH
+#ifdef COMPILE_DL_NOCOPY
 # ifdef ZTS
 ZEND_TSRMLS_CACHE_DEFINE()
 # endif
-ZEND_GET_MODULE(stash)
+ZEND_GET_MODULE(nocopy)
 #endif

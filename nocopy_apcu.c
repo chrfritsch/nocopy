@@ -1,14 +1,14 @@
-/* stash: the apcu_* compatibility layer and APCUIterator, on top of stash.c's store/fetch/delete. */
+/* nocopy: the apcu_* compatibility layer and APCUIterator, on top of nocopy.c's store/fetch/delete. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif
 
-#include "stash_php.h"
+#include "nocopy_php.h"
 #include "zend_interfaces.h"
 #include "zend_exceptions.h"
 #include "ext/pcre/php_pcre.h"
-#include "stash_apcu_arginfo.h"
+#include "nocopy_apcu_arginfo.h"
 
 /* ---- snapshots and the iterator ---- */
 
@@ -44,14 +44,14 @@ typedef struct {
 	zend_string *cur_key;
 	zval cur_item;
 	zend_object std;
-} stash_iter;
+} nocopy_iter;
 
 static zend_class_entry *iter_ce;
 static zend_object_handlers iter_handlers;
 
-#define ITER(o) ((stash_iter *) ((char *) (o) - offsetof(stash_iter, std)))
+#define ITER(o) ((nocopy_iter *) ((char *) (o) - offsetof(nocopy_iter, std)))
 
-static void rows_free(stash_iter *it)
+static void rows_free(nocopy_iter *it)
 {
 	for (uint32_t i = 0; i < it->count; i++) {
 		zend_string_release(it->rows[i].key);
@@ -67,7 +67,7 @@ static int row_cmp(const void *a, const void *b)
 	return x < y ? -1 : x > y;
 }
 
-static bool row_matches(stash_iter *it, zend_string *key)
+static bool row_matches(nocopy_iter *it, zend_string *key)
 {
 	if (it->pce) {
 		zval rv;
@@ -89,7 +89,7 @@ typedef struct {
 	uint32_t count, cap;
 } snap;
 
-static void snap_add(void *arg, const zend_string *key, const stash_meta *m)
+static void snap_add(void *arg, const zend_string *key, const nocopy_meta *m)
 {
 	snap *s = arg;
 	if (s->count == s->cap) {
@@ -102,7 +102,7 @@ static void snap_add(void *arg, const zend_string *key, const stash_meta *m)
 }
 
 /* Fresh insertion-ordered snapshot of the live keys that match the iterator's filter. */
-static void iter_snapshot(stash_iter *it)
+static void iter_snapshot(nocopy_iter *it)
 {
 	if (it->rows) {
 		rows_free(it);
@@ -112,7 +112,7 @@ static void iter_snapshot(stash_iter *it)
 		return;
 	}
 	snap sn = {.rows = safe_emalloc(64, sizeof(snap_row), 0), .cap = 64};
-	stash_scan(snap_add, &sn);
+	nocopy_scan(snap_add, &sn);
 	snap_row *rows = sn.rows;
 	uint32_t c = sn.count;
 
@@ -130,7 +130,7 @@ static void iter_snapshot(stash_iter *it)
 }
 
 /* Load the item at/after pos; entries deleted since the snapshot are skipped when a value is wanted. */
-static void iter_load(stash_iter *it)
+static void iter_load(nocopy_iter *it)
 {
 	zval_ptr_dtor(&it->cur_item);
 	ZVAL_UNDEF(&it->cur_item);
@@ -144,7 +144,7 @@ static void iter_load(stash_iter *it)
 		snap_row *r = &it->rows[it->pos];
 		zval value;
 		ZVAL_UNDEF(&value);
-		if ((it->format & APC_ITER_VALUE) && !stash_fetch(r->key, &value)) {
+		if ((it->format & APC_ITER_VALUE) && !nocopy_fetch(r->key, &value)) {
 			it->pos++;
 			continue;
 		}
@@ -171,7 +171,7 @@ static void iter_load(stash_iter *it)
 
 static zend_object *iter_create(zend_class_entry *ce)
 {
-	stash_iter *it = zend_object_alloc(sizeof(stash_iter), ce);
+	nocopy_iter *it = zend_object_alloc(sizeof(nocopy_iter), ce);
 	zend_object_std_init(&it->std, ce);
 	object_properties_init(&it->std, ce);
 	ZVAL_UNDEF(&it->cur_item);
@@ -181,7 +181,7 @@ static zend_object *iter_create(zend_class_entry *ce)
 
 static void iter_free(zend_object *o)
 {
-	stash_iter *it = ITER(o);
+	nocopy_iter *it = ITER(o);
 	if (it->rows) {
 		rows_free(it);
 	}
@@ -196,9 +196,9 @@ static void iter_free(zend_object *o)
 }
 
 /* The iterator for $this, snapshotted on first use. NULL (with an Error thrown) if uninitialized. */
-static stash_iter *iter_this(zval *self)
+static nocopy_iter *iter_this(zval *self)
 {
-	stash_iter *it = ITER(Z_OBJ_P(self));
+	nocopy_iter *it = ITER(Z_OBJ_P(self));
 	if (!it->initialized) {
 		zend_throw_error(NULL, "Trying to use uninitialized APCUIterator");
 		return NULL;
@@ -225,14 +225,14 @@ ZEND_METHOD(APCUIterator, __construct)
 	ZEND_PARSE_PARAMETERS_END();
 	(void) chunk;
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		zend_throw_error(NULL, "APC must be enabled to use APCUIterator");
 		RETURN_THROWS();
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	stash_iter *it = ITER(Z_OBJ_P(ZEND_THIS));
+	nocopy_iter *it = ITER(Z_OBJ_P(ZEND_THIS));
 	if (search && Z_TYPE_P(search) == IS_STRING) {
 		if (Z_STRLEN_P(search)) {
 			it->pce = pcre_get_compiled_regex_cache(Z_STR_P(search));
@@ -262,7 +262,7 @@ ZEND_METHOD(APCUIterator, __construct)
 ZEND_METHOD(APCUIterator, rewind)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = ITER(Z_OBJ_P(ZEND_THIS));
+	nocopy_iter *it = ITER(Z_OBJ_P(ZEND_THIS));
 	if (!it->initialized) {
 		zend_throw_error(NULL, "Trying to use uninitialized APCUIterator");
 		RETURN_THROWS();
@@ -275,7 +275,7 @@ ZEND_METHOD(APCUIterator, rewind)
 ZEND_METHOD(APCUIterator, next)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -288,7 +288,7 @@ ZEND_METHOD(APCUIterator, next)
 ZEND_METHOD(APCUIterator, valid)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -298,7 +298,7 @@ ZEND_METHOD(APCUIterator, valid)
 ZEND_METHOD(APCUIterator, key)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -312,7 +312,7 @@ ZEND_METHOD(APCUIterator, key)
 ZEND_METHOD(APCUIterator, current)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -327,7 +327,7 @@ ZEND_METHOD(APCUIterator, current)
 ZEND_METHOD(APCUIterator, getTotalHits)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -337,7 +337,7 @@ ZEND_METHOD(APCUIterator, getTotalHits)
 ZEND_METHOD(APCUIterator, getTotalSize)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -351,7 +351,7 @@ ZEND_METHOD(APCUIterator, getTotalSize)
 ZEND_METHOD(APCUIterator, getTotalCount)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	stash_iter *it = iter_this(ZEND_THIS);
+	nocopy_iter *it = iter_this(ZEND_THIS);
 	if (!it) {
 		RETURN_THROWS();
 	}
@@ -376,29 +376,29 @@ static void store_impl(zval *key, zval *val, zend_long ttl, bool add_only, zval 
 		zend_argument_value_error(3, "must be greater than or equal to 0");
 		RETURN_THROWS();
 	}
-	const stash_opts o = {.ttl = ttl, .add_only = add_only, .objects = STASH_SERIALIZE_OBJECTS};
+	const nocopy_opts o = {.ttl = ttl, .add_only = add_only, .objects = NOCOPY_SERIALIZE_OBJECTS};
 	if (Z_TYPE_P(key) != IS_ARRAY) {
 		if (!val) {
 			zend_wrong_parameters_count_error(2, 3);
 			RETURN_THROWS();
 		}
-		if (!stash_apc_on) {
+		if (!nocopy_apc_on) {
 			RETURN_FALSE;
 		}
-		if (!stash_tracked()) {
+		if (!nocopy_tracked()) {
 			RETURN_THROWS();
 		}
 		zend_string *ks = key_str(key);
-		stash_status st = stash_store(ks, val, &o);
+		nocopy_status st = nocopy_store(ks, val, &o);
 		zend_string_release(ks);
 		if (EG(exception)) {
 			RETURN_THROWS();
 		}
-		RETURN_BOOL(st == STASH_OK);
+		RETURN_BOOL(st == NOCOPY_OK);
 	}
 
 	/* array form: returns the keys that failed, each mapped to -1 */
-	if (stash_apc_on && !stash_tracked()) {
+	if (nocopy_apc_on && !nocopy_tracked()) {
 		RETURN_THROWS();
 	}
 	array_init(return_value);
@@ -407,7 +407,7 @@ static void store_impl(zval *key, zval *val, zend_long ttl, bool add_only, zval 
 	zval *v;
 	ZEND_HASH_FOREACH_KEY_VAL(Z_ARRVAL_P(key), h, k, v) {
 		zend_string *ks = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
-		bool ok = stash_apc_on && stash_store(ks, v, &o) == STASH_OK;
+		bool ok = nocopy_apc_on && nocopy_store(ks, v, &o) == NOCOPY_OK;
 		if (EG(exception)) {
 			zend_string_release(ks);
 			break;
@@ -453,7 +453,7 @@ flf_clean:;
 PHP_FUNCTION(apcu_enabled)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	RETURN_BOOL(stash_apc_on);
+	RETURN_BOOL(nocopy_apc_on);
 }
 
 static void fetch_impl(zval *key, zval *success, zval *return_value)
@@ -462,14 +462,14 @@ static void fetch_impl(zval *key, zval *success, zval *return_value)
 		ZEND_TRY_ASSIGN_REF_FALSE(success);
 	}
 	if (Z_TYPE_P(key) != IS_ARRAY) {
-		if (!stash_apc_on) {
+		if (!nocopy_apc_on) {
 			RETURN_FALSE;
 		}
-		if (!stash_tracked()) {
+		if (!nocopy_tracked()) {
 			RETURN_THROWS();
 		}
 		zend_string *ks = key_str(key);
-		bool hit = stash_fetch(ks, return_value);
+		bool hit = nocopy_fetch(ks, return_value);
 		zend_string_release(ks);
 		if (!hit) {
 			RETVAL_FALSE;
@@ -480,17 +480,17 @@ static void fetch_impl(zval *key, zval *success, zval *return_value)
 	}
 
 	array_init(return_value);
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		return;
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
 	zval *v;
 	ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(key), v) {
 		ZVAL_DEREF(v);
 		zval t;
-		if (Z_TYPE_P(v) == IS_STRING && stash_fetch(Z_STR_P(v), &t)) {
+		if (Z_TYPE_P(v) == IS_STRING && nocopy_fetch(Z_STR_P(v), &t)) {
 			zend_symtable_update(Z_ARRVAL_P(return_value), Z_STR_P(v), &t);
 		}
 	} ZEND_HASH_FOREACH_END();
@@ -516,15 +516,15 @@ PHP_FUNCTION(apcu_fetch)
 ZEND_FRAMELESS_FUNCTION(apcu_fetch, 1) { fetch_impl(arg1, NULL, return_value); }
 #endif
 
-static bool exists(zend_string *key) { return stash_info(key, NULL); }
+static bool exists(zend_string *key) { return nocopy_info(key, NULL); }
 
 static void exists_impl(zval *key, zval *return_value)
 {
 	if (Z_TYPE_P(key) != IS_ARRAY) {
-		if (!stash_apc_on) {
+		if (!nocopy_apc_on) {
 			RETURN_FALSE;
 		}
-		if (!stash_tracked()) {
+		if (!nocopy_tracked()) {
 			RETURN_THROWS();
 		}
 		zend_string *ks = key_str(key);
@@ -533,10 +533,10 @@ static void exists_impl(zval *key, zval *return_value)
 		RETURN_BOOL(r);
 	}
 	array_init(return_value);
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		return;
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
 	zval *v, yes;
@@ -567,21 +567,21 @@ ZEND_FRAMELESS_FUNCTION(apcu_exists, 1) { exists_impl(arg1, return_value); }
 static void delete_impl(zval *key, zval *return_value)
 {
 	if (Z_TYPE_P(key) == IS_OBJECT && instanceof_function(Z_OBJCE_P(key), iter_ce)) {
-		stash_iter *it = ITER(Z_OBJ_P(key));
+		nocopy_iter *it = ITER(Z_OBJ_P(key));
 		if (!it->initialized) {
 			zend_throw_error(NULL, "Trying to use uninitialized APCUIterator");
 			RETURN_THROWS();
 		}
 		iter_snapshot(it);
 		for (uint32_t i = 0; i < it->count; i++) {
-			stash_drop(it->rows[i].key);
+			nocopy_drop(it->rows[i].key);
 		}
 		rows_free(it);
 		it->built = false;
 		RETURN_TRUE;
 	}
 	if (Z_TYPE_P(key) == IS_STRING) {
-		RETURN_BOOL(stash_apc_on && stash_drop(Z_STR_P(key)));
+		RETURN_BOOL(nocopy_apc_on && nocopy_drop(Z_STR_P(key)));
 	}
 	if (Z_TYPE_P(key) != IS_ARRAY) {
 		php_error_docref(NULL, E_WARNING, APC_WARN_KEYS);
@@ -594,7 +594,7 @@ static void delete_impl(zval *key, zval *return_value)
 		if (Z_TYPE_P(v) != IS_STRING) {
 			php_error_docref(NULL, E_WARNING, APC_WARN_KEYS);
 		}
-		if (Z_TYPE_P(v) != IS_STRING || !stash_apc_on || !stash_drop(Z_STR_P(v))) {
+		if (Z_TYPE_P(v) != IS_STRING || !nocopy_apc_on || !nocopy_drop(Z_STR_P(v))) {
 			Z_TRY_ADDREF_P(v);
 			add_next_index_zval(return_value, v);
 		}
@@ -640,14 +640,14 @@ static void incdec_impl(zend_string *key, zend_long delta, zval *success, zend_l
 	if (success) {
 		ZEND_TRY_ASSIGN_REF_FALSE(success);
 	}
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		RETURN_FALSE;
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
 	zend_long nv;
-	if (!stash_add_long(key, delta, ttl, &nv)) {
+	if (!nocopy_add_long(key, delta, ttl, &nv)) {
 		RETURN_FALSE;
 	}
 	if (success) {
@@ -696,19 +696,19 @@ PHP_FUNCTION(apcu_cas)
 		Z_PARAM_LONG(nw)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		RETURN_FALSE;
 	}
-	RETURN_BOOL(stash_cas_long(key, old, nw));
+	RETURN_BOOL(nocopy_cas_long(key, old, nw));
 }
 
 PHP_FUNCTION(apcu_clear_cache)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		RETURN_TRUE;
 	}
-	stash_clear();
+	nocopy_clear();
 	RETURN_TRUE;
 }
 
@@ -727,14 +727,14 @@ PHP_FUNCTION(apcu_entry)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		RETURN_NULL();
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const stash_opts o = {.ttl = ttl, .add_only = true, .objects = STASH_SERIALIZE_OBJECTS};
-	stash_remember(key, &fci, &fcc, &o, 0, return_value);
+	const nocopy_opts o = {.ttl = ttl, .add_only = true, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	nocopy_remember(key, &fci, &fcc, &o, 0, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}
@@ -748,14 +748,14 @@ PHP_FUNCTION(apcu_key_info)
 		Z_PARAM_STR(key)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		RETURN_NULL();
 	}
-	if (!stash_tracked()) {
+	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	stash_meta m;
-	if (!stash_info(key, &m)) {
+	nocopy_meta m;
+	if (!nocopy_info(key, &m)) {
 		RETURN_NULL();
 	}
 	array_init(return_value);
@@ -773,7 +773,7 @@ typedef struct {
 	zend_long entries;
 } info_list;
 
-static void info_add(void *arg, const zend_string *key, const stash_meta *m)
+static void info_add(void *arg, const zend_string *key, const nocopy_meta *m)
 {
 	info_list *l = arg;
 	l->entries++;
@@ -803,7 +803,7 @@ PHP_FUNCTION(apcu_cache_info)
 		Z_PARAM_BOOL(limited)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		php_error_docref(NULL, E_WARNING, "No APC info available.  Perhaps APC is not enabled? Check apc.enabled in your ini file");
 		RETURN_FALSE;
 	}
@@ -811,12 +811,12 @@ PHP_FUNCTION(apcu_cache_info)
 	zval list;
 	array_init(&list);
 	info_list l = {.list = limited ? NULL : &list};
-	stash_scan(info_add, &l);
-	stash_stats_t st;
-	stash_stats(&st);
+	nocopy_scan(info_add, &l);
+	nocopy_stats_t st;
+	nocopy_stats(&st);
 	array_init(return_value);
 	add_assoc_long(return_value, "num_slots", st.slots);
-	add_assoc_long(return_value, "ttl", stash_ini_ttl);
+	add_assoc_long(return_value, "ttl", nocopy_ini_ttl);
 	add_assoc_long(return_value, "num_hits", st.hits);
 	add_assoc_long(return_value, "num_misses", st.misses);
 	add_assoc_long(return_value, "num_inserts", st.inserts);
@@ -844,13 +844,13 @@ PHP_FUNCTION(apcu_sma_info)
 		Z_PARAM_BOOL(limited)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!stash_apc_on) {
+	if (!nocopy_apc_on) {
 		php_error_docref(NULL, E_WARNING, "No APC SMA info available.  Perhaps APC is disabled via apc.enabled?");
 		RETURN_FALSE;
 	}
 
-	stash_stats_t st;
-	stash_stats(&st);
+	nocopy_stats_t st;
+	nocopy_stats(&st);
 	uint32_t nsh = st.shards;
 
 	/* one APCu "segment" per shard: an entry only fits into free space of its own shard's slice */
@@ -864,8 +864,8 @@ PHP_FUNCTION(apcu_sma_info)
 	zval outer;
 	array_init(&outer);
 	for (uint32_t s = 0; s < nsh; s++) {
-		size_t run_at[STASH_MAX_SEGS], run_len[STASH_MAX_SEGS];
-		uint32_t runs = stash_free_runs(s, run_at, run_len, STASH_MAX_SEGS);
+		size_t run_at[NOCOPY_MAX_SEGS], run_len[NOCOPY_MAX_SEGS];
+		uint32_t runs = nocopy_free_runs(s, run_at, run_len, NOCOPY_MAX_SEGS);
 		zval blocks;
 		array_init(&blocks);
 		for (uint32_t r = 0; r < runs; r++) {
@@ -880,7 +880,7 @@ PHP_FUNCTION(apcu_sma_info)
 	add_assoc_zval(return_value, "block_lists", &outer);
 }
 
-void stash_apcu_minit(int module_number)
+void nocopy_apcu_minit(int module_number)
 {
 	zend_register_functions(NULL, ext_functions, NULL, MODULE_PERSISTENT);
 	REGISTER_LONG_CONSTANT("APC_LIST_ACTIVE", APC_LIST_ACTIVE, CONST_PERSISTENT);
@@ -902,7 +902,7 @@ void stash_apcu_minit(int module_number)
 	iter_ce = register_class_APCUIterator(zend_ce_iterator);
 	iter_ce->create_object = iter_create;
 	memcpy(&iter_handlers, &std_object_handlers, sizeof(zend_object_handlers));
-	iter_handlers.offset = offsetof(stash_iter, std);
+	iter_handlers.offset = offsetof(nocopy_iter, std);
 	iter_handlers.free_obj = iter_free;
 	iter_handlers.clone_obj = NULL;
 }

@@ -1,10 +1,10 @@
 --TEST--
-stash: random puts/deletes of mixed sizes agree with a PHP array model; held values stay intact
+nocopy: random puts/deletes of mixed sizes agree with a PHP array model; held values stay intact
 --EXTENSIONS--
-stash
+nocopy
 --INI--
 apc.shm_size=4M
-stash.request_scope=1
+nocopy.request_scope=1
 --FILE--
 <?php
 mt_srand(42);
@@ -20,26 +20,26 @@ for ($i = 0; $i < 6000; $i++) {
     switch (mt_rand(0, 9)) {
         case 0: case 1: case 2: case 3:
             $v = $gen($i);
-            $e = stash_stats()['expunges'];
-            if (stash_put($k, $v)) { $model[$k] = $v; $at[$k] = $e; } else { $full++; unset($model[$k]); stash_delete($k); }
+            $e = nocopy_stats()['expunges'];
+            if (nocopy_put($k, $v)) { $model[$k] = $v; $at[$k] = $e; } else { $full++; unset($model[$k]); nocopy_delete($k); }
             break;
         case 4: case 5:
-            stash_delete($k); unset($model[$k]);
+            nocopy_delete($k); unset($model[$k]);
             break;
         case 6:
-            if (isset($model[$k])) { $held[$k] = [stash_get($k), $model[$k]]; } // zero-copy value held across later churn
+            if (isset($model[$k])) { $held[$k] = [nocopy_get($k), $model[$k]]; } // zero-copy value held across later churn
             break;
         case 7:
             if ($held && mt_rand(0, 3) === 0) { $held = []; } // pins stay until the request ends
             break;
         default:
-            $got = stash_get($k, $hit);
-            if ($hit ? !isset($model[$k]) || $got !== $model[$k] : isset($model[$k]) && stash_stats()['expunges'] === $at[$k]) $bad++; // a miss must be an eviction
+            $got = nocopy_get($k, $hit);
+            if ($hit ? !isset($model[$k]) || $got !== $model[$k] : isset($model[$k]) && nocopy_stats()['expunges'] === $at[$k]) $bad++; // a miss must be an eviction
     }
 }
 foreach ($held as [$a, $b]) if ($a !== $b) $bad++;       // never overwritten while pinned
-foreach ($model as $k => $v) if (($g = stash_get($k)) !== $v && ($g !== null || stash_stats()['expunges'] === $at[$k])) $bad++;
-$s = stash_stats();
+foreach ($model as $k => $v) if (($g = nocopy_get($k)) !== $v && ($g !== null || nocopy_stats()['expunges'] === $at[$k])) $bad++;
+$s = nocopy_stats();
 var_dump($bad, $s['entries'] <= count($model), $s['used'] <= $s['size']);
 ?>
 --EXPECT--

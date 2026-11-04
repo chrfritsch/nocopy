@@ -1,7 +1,7 @@
 <?php
 // Cache stampede: $w forked workers serve "requests" that each read one hot key with a short TTL and a slow callback.
 // usage: php [-d ...] stampede.php <mode> [workers=8] [secs=10] [ttl=2] [compute_ms=50]
-//   mode: naive (fetch, on miss compute + store), entry (apcu_entry), remember (stash_remember, XFetch)
+//   mode: naive (fetch, on miss compute + store), entry (apcu_entry), remember (nocopy_remember, XFetch)
 // emits JSON lines like run.php: callback runs per expiry, requests/s, slow requests, p99.9 and max latency.
 
 function out(string $name, float $v, string $unit): void {
@@ -23,7 +23,7 @@ $get = match ($mode) {
         return $v;
     },
     'entry' => fn() => apcu_entry('hot', $compute, $ttl),
-    'remember' => fn() => stash_remember('hot', $compute, $ttl),
+    'remember' => fn() => nocopy_remember('hot', $compute, $ttl),
 };
 apcu_delete('hot');
 $dir = sys_get_temp_dir() . '/stampede-' . getmypid();

@@ -1,7 +1,7 @@
-/* stash arena: the shared-memory store without PHP. Used by the extension and by tests/c. */
+/* nocopy arena: the shared-memory store without PHP. Used by the extension and by tests/c. */
 
-#ifndef STASH_ARENA_H
-#define STASH_ARENA_H
+#ifndef NOCOPY_ARENA_H
+#define NOCOPY_ARENA_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -9,17 +9,17 @@
 #include <string.h>
 #include <time.h>
 
-#define STASH_MAX_WORKERS 1024 /* ponytail: more live processes/threads than this cannot claim a slot */
-#define STASH_MAX_SEGS 256
-#define STASH_SEG_WORDS (STASH_MAX_SEGS / 64)
-#define STASH_TTL_BUCKETS 7
-#define STASH_MAX_SHARDS 8
-#define STASH_LEASES 32 /* per shard: concurrent single-flight computes */
-#define STASH_ALIGN(n) (((n) + 7) & ~(size_t) 7)
-#define STASH_INLINE_PUT 2048 /* blocks up to this size are filled under the lock: one lock round trip per write */
+#define NOCOPY_MAX_WORKERS 1024 /* ponytail: more live processes/threads than this cannot claim a slot */
+#define NOCOPY_MAX_SEGS 256
+#define NOCOPY_SEG_WORDS (NOCOPY_MAX_SEGS / 64)
+#define NOCOPY_TTL_BUCKETS 7
+#define NOCOPY_MAX_SHARDS 8
+#define NOCOPY_LEASES 32 /* per shard: concurrent single-flight computes */
+#define NOCOPY_ALIGN(n) (((n) + 7) & ~(size_t) 7)
+#define NOCOPY_INLINE_PUT 2048 /* blocks up to this size are filled under the lock: one lock round trip per write */
 
 /* Block header; the user's payload (and the key bytes, at koff) follow in the same block. */
-typedef struct stash_entry {
+typedef struct nocopy_entry {
 	uint64_t h;       /* key hash */
 	size_t size;      /* whole block */
 	time_t expires;   /* last second it is alive; 0: never */
@@ -28,15 +28,15 @@ typedef struct stash_entry {
 	uint32_t klen;
 	uint8_t koff;     /* key bytes at (char *) e + koff */
 	uint8_t live;     /* published and not yet unlinked */
-	uint8_t hot;      /* reads since written, log2-ish (stash_find); halved when merge moves it */
+	uint8_t hot;      /* reads since written, log2-ish (nocopy_find); halved when merge moves it */
 	uint8_t flags;    /* the user's */
 	uint32_t user;    /* the user's; kept when merge moves the entry */
-} stash_entry;
+} nocopy_entry;
 
-_Static_assert(sizeof(stash_entry) == 48, "stash_entry grew");
+_Static_assert(sizeof(nocopy_entry) == 48, "nocopy_entry grew");
 
-/* low 32 bits: arena offset / 8, high 32: stash_slot_tag(hash) (its low bits are the home slot; probe filter); 0 empty */
-typedef uint64_t stash_slot;
+/* low 32 bits: arena offset / 8, high 32: nocopy_slot_tag(hash) (its low bits are the home slot; probe filter); 0 empty */
+typedef uint64_t nocopy_slot;
 
 enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT };
 
@@ -51,21 +51,21 @@ typedef struct {
 	size_t live;      /* bytes of live entries */
 	time_t max_exp;   /* latest expiry of its entries; 0 in the ttl=0 bucket (never) */
 	uint64_t born;    /* its shard's last seq when taken: merge order */
-} stash_seg;
+} nocopy_seg;
 
 /* Who computes a key hash right now (single-flight); free when owner is 0 or until has passed. */
 typedef struct {
 	uint64_t h, owner;
 	time_t until;
 	int32_t slot;
-} stash_lease;
+} nocopy_lease;
 
 /* A shard owns its lock, a fixed slot table and a fixed slice of segments [lo, hi): writers of one shard never touch another's. */
 typedef struct {
 	uint64_t lock __attribute__((aligned(64))); /* holder's owner id; alone on its line */
-	int32_t cur[STASH_TTL_BUCKETS] __attribute__((aligned(64))); /* open segment per TTL bucket, or -1 */
+	int32_t cur[NOCOPY_TTL_BUCKETS] __attribute__((aligned(64))); /* open segment per TTL bucket, or -1 */
 	uint32_t lo, hi, nfree, ndead;
-	uint32_t idx;       /* own index: sh - shards would divide by sizeof(stash_shard) */
+	uint32_t idx;       /* own index: sh - shards would divide by sizeof(nocopy_shard) */
 	uint64_t last_seq, inserts; /* a global atomic counter here cost 9x at 8 parallel writers */
 	bool hint;          /* a segment died: worth a reclaim pass */
 	time_t exp_idle;    /* second in which a full expiry pass found nothing */
@@ -76,16 +76,16 @@ typedef struct {
 	uint64_t ghost_hits;        /* new keys that were evicted recently: they start hot */
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4) */
 	time_t wip_checked;  /* last look for dead writers' unfinished entries */
-	stash_lease leases[STASH_LEASES];
+	nocopy_lease leases[NOCOPY_LEASES];
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
-} stash_shard;
+} nocopy_shard;
 
 typedef struct {
 	uint64_t owner;   /* owner id of the process (thread) holding the slot, 0 free */
-	uint64_t bits[STASH_SEG_WORDS]; /* segments it pins */
+	uint64_t bits[NOCOPY_SEG_WORDS]; /* segments it pins */
 	uint64_t hits, misses;
 	uint32_t wip;     /* offset/8 of the entry it fills outside the shard lock; 0 none. Changes only under that shard's lock */
-} __attribute__((aligned(64))) stash_worker;
+} __attribute__((aligned(64))) nocopy_worker;
 
 typedef struct {
 	size_t size, header_size;
@@ -94,11 +94,11 @@ typedef struct {
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
-	stash_shard shards[STASH_MAX_SHARDS];
-	stash_worker workers[STASH_MAX_WORKERS];
-	stash_seg segs[STASH_MAX_SEGS];
+	nocopy_shard shards[NOCOPY_MAX_SHARDS];
+	nocopy_worker workers[NOCOPY_MAX_WORKERS];
+	nocopy_seg segs[NOCOPY_MAX_SEGS];
 	char tables[] __attribute__((aligned(64)));
-} stash_arena;
+} nocopy_arena;
 
 /* Per process (NTS) or per thread: what this reader has pinned. */
 typedef struct {
@@ -106,93 +106,93 @@ typedef struct {
 	int pin_refs;     /* calls currently reading the arena */
 	bool transient;   /* mine has bits that are not in keep */
 	uint32_t rng;     /* xorshift state for the read counter */
-	uint32_t unpin_seen; /* stash_a->unpin_gen when the idle pins were last dropped */
+	uint32_t unpin_seen; /* nocopy_a->unpin_gen when the idle pins were last dropped */
 	uint32_t idle;       /* pins taken since then (upper bound) */
-	uint64_t mine[STASH_SEG_WORDS]; /* published as pinned */
-	uint64_t keep[STASH_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
-} stash_ctx;
+	uint64_t mine[NOCOPY_SEG_WORDS]; /* published as pinned */
+	uint64_t keep[NOCOPY_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
+} nocopy_ctx;
 
-typedef enum { PUT_OK, PUT_EXISTS, PUT_FULL } stash_put_result;
+typedef enum { PUT_OK, PUT_EXISTS, PUT_FULL } nocopy_put_result;
 
-/* A write between stash_put_begin() and stash_put_commit(). */
+/* A write between nocopy_put_begin() and nocopy_put_commit(). */
 typedef struct {
-	stash_ctx *c;
-	stash_shard *sh;
-	stash_entry *e;
+	nocopy_ctx *c;
+	nocopy_shard *sh;
+	nocopy_entry *e;
 	bool locked; /* small block: filled under the shard lock */
-} stash_put;
+} nocopy_put;
 
-/* Read-only after stash_arena_create(); valid in forked children (same address). Hidden: no GOT load on the read path. */
+/* Read-only after nocopy_arena_create(); valid in forked children (same address). Hidden: no GOT load on the read path. */
 #pragma GCC visibility push(hidden)
-extern stash_arena *stash_a;
-extern char *stash_seg_base;
-extern unsigned stash_seg_shift;
-extern uint32_t stash_shard_mask, stash_tab_mask;
-extern stash_slot *stash_tabs[STASH_MAX_SHARDS];
-extern uint64_t stash_self; /* this process's owner id */
+extern nocopy_arena *nocopy_a;
+extern char *nocopy_seg_base;
+extern unsigned nocopy_seg_shift;
+extern uint32_t nocopy_shard_mask, nocopy_tab_mask;
+extern nocopy_slot *nocopy_tabs[NOCOPY_MAX_SHARDS];
+extern uint64_t nocopy_self; /* this process's owner id */
 #pragma GCC visibility pop
 
 /* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
-void stash_rebase(stash_entry *e, const stash_entry *from);
+void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
 
 /* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error;
- * STASH_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
-extern const char STASH_TOO_SMALL[];
-const char *stash_arena_create(size_t size, uint64_t hint, size_t *need);
-void stash_arena_destroy(void);
+ * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
+extern const char NOCOPY_TOO_SMALL[];
+const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need);
+void nocopy_arena_destroy(void);
 
-bool stash_claim(stash_ctx *c);   /* false: no free worker slot */
-void stash_release(stash_ctx *c); /* end of this process/thread */
-void stash_after_fork(stash_ctx *c);
-void stash_keep_release(stash_ctx *c);
+bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
+void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
+void nocopy_after_fork(nocopy_ctx *c);
+void nocopy_keep_release(nocopy_ctx *c);
 
 /* ---- writes ---- */
 
 /* Locks h's shard and allocates a size-byte block; NULL (unlocked) if it does not fit. The header is set (flags and user 0):
- * the caller writes the key's klen bytes at koff and its payload, then commits. Blocks over STASH_INLINE_PUT are filled
+ * the caller writes the key's klen bytes at koff and its payload, then commits. Blocks over NOCOPY_INLINE_PUT are filled
  * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires. */
-stash_entry *stash_put_begin(stash_put *p, stash_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl);
+nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl);
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
-stash_put_result stash_put_commit(stash_put *p, bool add_only);
+nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 
-/* ---- read-modify-write: the caller holds stash_lock(stash_shard_of(h)) ---- */
-void stash_lock_wait(stash_shard *sh);
-stash_entry *stash_lookup(stash_shard *sh, uint64_t h, const char *k, uint32_t klen); /* locked; may be expired */
-bool stash_remove(stash_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
-void stash_clear(void);
+/* ---- read-modify-write: the caller holds nocopy_lock(nocopy_shard_of(h)) ---- */
+void nocopy_lock_wait(nocopy_shard *sh);
+nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen); /* locked; may be expired */
+bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
+void nocopy_clear(void);
 
 /* Single-flight per key hash, under the hash's shard lock. A dead or expired holder is taken over. */
-enum { STASH_LEASE_TAKEN, STASH_LEASE_HELD, STASH_LEASE_MINE, STASH_LEASE_FULL };
-int stash_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
-void stash_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it */
+enum { NOCOPY_LEASE_TAKEN, NOCOPY_LEASE_HELD, NOCOPY_LEASE_MINE, NOCOPY_LEASE_FULL };
+int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
+void nocopy_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it */
 
 /* ---- lock-free scan: next pinned unexpired entry at or after (*sh, *i); start at 0, 0. Between borrow_begin/end. ---- */
-stash_entry *stash_scan_next(stash_ctx *c, uint32_t *sh, uint32_t *i);
+nocopy_entry *nocopy_scan_next(nocopy_ctx *c, uint32_t *sh, uint32_t *i);
 
 typedef struct {
 	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases, inserts;
 	uint64_t segment_size;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
 	time_t start_time;
-} stash_stats_t;
-void stash_stats(stash_stats_t *s);
+} nocopy_stats_t;
+void nocopy_stats(nocopy_stats_t *s);
 /* A shard's free (or dead) segments as runs, for apcu_sma_info: up to max (offset from the slice start, bytes) pairs; returns how many. */
-uint32_t stash_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max);
+uint32_t nocopy_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max);
 
 /* ---- inline read path ---- */
 
-static inline const char *stash_key(const stash_entry *e) { return (const char *) e + e->koff; }
-static inline uint32_t stash_seg_of(const void *p) { return (uint32_t) (((const char *) p - stash_seg_base) >> stash_seg_shift); }
+static inline const char *nocopy_key(const nocopy_entry *e) { return (const char *) e + e->koff; }
+static inline uint32_t nocopy_seg_of(const void *p) { return (uint32_t) (((const char *) p - nocopy_seg_base) >> nocopy_seg_shift); }
 /* Fibonacci mix, top bits: the shard */
-static inline uint32_t stash_shard_idx(uint64_t h) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & stash_shard_mask; }
-static inline stash_shard *stash_shard_of(uint64_t h) { return &stash_a->shards[stash_shard_idx(h)]; }
+static inline uint32_t nocopy_shard_idx(uint64_t h) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & nocopy_shard_mask; }
+static inline nocopy_shard *nocopy_shard_of(uint64_t h) { return &nocopy_a->shards[nocopy_shard_idx(h)]; }
 /* Mixed: raw DJB low bits of `prefix.N` keys built probe runs of hundreds. Own multiplier keeps it independent of the shard; tests/018 mirrors it. */
-static inline uint32_t stash_slot_tag(uint64_t h) { return (uint32_t) ((h * 0xC2B2AE3D27D4EB4FULL) >> 32); }
-static inline stash_entry *stash_slot_entry(stash_slot s) { return (stash_entry *) ((char *) stash_a + ((size_t) (uint32_t) s << 3)); }
+static inline uint32_t nocopy_slot_tag(uint64_t h) { return (uint32_t) ((h * 0xC2B2AE3D27D4EB4FULL) >> 32); }
+static inline nocopy_entry *nocopy_slot_entry(nocopy_slot s) { return (nocopy_entry *) ((char *) nocopy_a + ((size_t) (uint32_t) s << 3)); }
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
-static inline bool stash_expired(const stash_entry *e) { return e->expires && e->expires < time(NULL); }
+static inline bool nocopy_expired(const nocopy_entry *e) { return e->expires && e->expires < time(NULL); }
 
-static inline void stash_cpu_relax(void)
+static inline void nocopy_cpu_relax(void)
 {
 #if defined(__x86_64__) || defined(__i386__)
 	__builtin_ia32_pause();
@@ -201,21 +201,21 @@ static inline void stash_cpu_relax(void)
 #endif
 }
 
-static inline void stash_lock(stash_shard *sh)
+static inline void nocopy_lock(nocopy_shard *sh)
 {
 	uint64_t z = 0;
-	if (!__atomic_compare_exchange_n(&sh->lock, &z, stash_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-		stash_lock_wait(sh);
+	if (!__atomic_compare_exchange_n(&sh->lock, &z, nocopy_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+		nocopy_lock_wait(sh);
 	}
 }
 
-static inline void stash_unlock(stash_shard *sh) { __atomic_store_n(&sh->lock, 0, __ATOMIC_RELEASE); }
+static inline void nocopy_unlock(nocopy_shard *sh) { __atomic_store_n(&sh->lock, 0, __ATOMIC_RELEASE); }
 
 /* Publish "I may touch this segment" before dereferencing anything in it.
  * True if the pin is new: the caller must then re-check that what it found is still linked. */
-static inline bool stash_hold(stash_ctx *c, const void *p)
+static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 {
-	uint32_t s = stash_seg_of(p), w = s >> 6;
+	uint32_t s = nocopy_seg_of(p), w = s >> 6;
 	uint64_t b = (uint64_t) 1 << (s & 63);
 	if (c->mine[w] & b) {
 		return false;
@@ -223,27 +223,27 @@ static inline bool stash_hold(stash_ctx *c, const void *p)
 	c->mine[w] |= b;
 	c->transient = true;
 	c->idle++;
-	__atomic_store_n(&stash_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
+	__atomic_store_n(&nocopy_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return true;
 }
 
-/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until stash_keep_release(). */
-static inline void stash_keep(stash_ctx *c, const void *p)
+/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_keep_release(). */
+static inline void nocopy_keep(nocopy_ctx *c, const void *p)
 {
-	uint32_t s = stash_seg_of(p);
+	uint32_t s = nocopy_seg_of(p);
 	c->keep[s >> 6] |= (uint64_t) 1 << (s & 63);
 }
 
-static inline void stash_drop_transient(stash_ctx *c)
+static inline void nocopy_drop_transient(nocopy_ctx *c)
 {
 	if (c->slot < 0 || !c->transient) {
 		return;
 	}
-	for (int w = 0; w < STASH_SEG_WORDS; w++) {
+	for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
 		if (c->mine[w] & ~c->keep[w]) {
 			c->mine[w] &= c->keep[w];
-			__atomic_store_n(&stash_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
+			__atomic_store_n(&nocopy_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
 		}
 	}
 	c->transient = false;
@@ -252,26 +252,26 @@ static inline void stash_drop_transient(stash_ctx *c)
 
 /* Idle pins outlive the call (re-pinning costs a full fence per call); dropped once a writer asks, past nsegs/16, at request end.
  * ponytail: a process idle between calls holds up to nsegs/16 segments; revoking them would need the per-call fence back. */
-static inline void stash_drop_if_asked(stash_ctx *c)
+static inline void nocopy_drop_if_asked(nocopy_ctx *c)
 {
-	uint32_t g = __atomic_load_n(&stash_a->unpin_gen, __ATOMIC_RELAXED);
-	if (c->transient && (g != c->unpin_seen || c->idle > (stash_a->nsegs >> 4))) {
+	uint32_t g = __atomic_load_n(&nocopy_a->unpin_gen, __ATOMIC_RELAXED);
+	if (c->transient && (g != c->unpin_seen || c->idle > (nocopy_a->nsegs >> 4))) {
 		c->unpin_seen = g;
-		stash_drop_transient(c);
+		nocopy_drop_transient(c);
 	}
 }
 
-static inline void stash_borrow_begin(stash_ctx *c) { c->pin_refs++; }
-static inline void stash_borrow_end(stash_ctx *c)
+static inline void nocopy_borrow_begin(nocopy_ctx *c) { c->pin_refs++; }
+static inline void nocopy_borrow_end(nocopy_ctx *c)
 {
 	if (--c->pin_refs == 0) {
-		stash_drop_if_asked(c);
+		nocopy_drop_if_asked(c);
 	}
 }
 
-#define STASH_HOT_MAX 15
+#define NOCOPY_HOT_MAX 15
 
-static inline uint32_t stash_rand(stash_ctx *c)
+static inline uint32_t nocopy_rand(nocopy_ctx *c)
 {
 	uint32_t x = c->rng;
 	x ^= x << 13; x ^= x >> 17; x ^= x << 5;
@@ -279,7 +279,7 @@ static inline uint32_t stash_rand(stash_ctx *c)
 }
 
 /* Equal n bytes; keys up to 16 bytes without a memcmp call (two overlapping loads). */
-static inline __attribute__((always_inline)) bool stash_key_eq(const char *a, const char *b, uint32_t n)
+static inline __attribute__((always_inline)) bool nocopy_key_eq(const char *a, const char *b, uint32_t n)
 {
 	uint64_t x, y, p, q;
 	if (n >= 8 && n <= 16) {
@@ -299,33 +299,33 @@ static inline __attribute__((always_inline)) bool stash_key_eq(const char *a, co
 
 /* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
-static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *c, uint64_t h, const char *k, uint32_t klen)
+static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen)
 {
-	uint32_t si = stash_shard_idx(h); /* not sh - shards: that divides by sizeof(stash_shard) */
-	stash_shard *sh = &stash_a->shards[si];
-	const stash_slot *t = stash_tabs[si];
-	uint32_t m = stash_tab_mask, tag = stash_slot_tag(h);
+	uint32_t si = nocopy_shard_idx(h); /* not sh - shards: that divides by sizeof(nocopy_shard) */
+	nocopy_shard *sh = &nocopy_a->shards[si];
+	const nocopy_slot *t = nocopy_tabs[si];
+	uint32_t m = nocopy_tab_mask, tag = nocopy_slot_tag(h);
 	for (;;) {
 	retry:;
 		uint32_t seq = __atomic_load_n(&sh->mseq, __ATOMIC_ACQUIRE);
 		for (uint32_t n = 0, i = tag & m; n <= m; n++, i = (i + 1) & m) {
-			stash_slot s = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
+			nocopy_slot s = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
 			if (!s) {
 				break;
 			}
 			if ((uint32_t) (s >> 32) != tag) {
 				continue;
 			}
-			stash_entry *e = stash_slot_entry(s);
-			if (stash_hold(c, e) && __atomic_load_n(&t[i], __ATOMIC_ACQUIRE) != s) {
+			nocopy_entry *e = nocopy_slot_entry(s);
+			if (nocopy_hold(c, e) && __atomic_load_n(&t[i], __ATOMIC_ACQUIRE) != s) {
 				goto retry; /* unlinked while we were pinning: the memory may be reused */
 			}
-			if (e->h == h && e->klen == klen && stash_key_eq(stash_key(e), k, klen)) {
-				if (stash_expired(e)) {
+			if (e->h == h && e->klen == klen && nocopy_key_eq(nocopy_key(e), k, klen)) {
+				if (nocopy_expired(e)) {
 					return NULL;
 				}
 				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
-				if (f < STASH_HOT_MAX && (!f || !(stash_rand(c) & ((1u << f) - 1)))) {
+				if (f < NOCOPY_HOT_MAX && (!f || !(nocopy_rand(c) & ((1u << f) - 1)))) {
 					__atomic_store_n(&e->hot, f + 1, __ATOMIC_RELAXED); /* p = 1/2^f: ~log2(reads) writes, the line stays shared */
 				}
 				return e;
@@ -335,7 +335,7 @@ static inline __attribute__((always_inline)) stash_entry *stash_find(stash_ctx *
 		if (!(seq & 1) && __atomic_load_n(&sh->mseq, __ATOMIC_RELAXED) == seq) {
 			return NULL;
 		}
-		stash_cpu_relax();
+		nocopy_cpu_relax();
 	}
 }
 
