@@ -54,7 +54,8 @@ cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/s
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
-echo '<?php $o = new ArrayObject(array_fill(0, 1000, str_repeat("x", 100))); if (function_exists("nocopy_put")) { $u = nocopy_stats()["used"]; nocopy_put("probe" . mt_rand(), $o, 0, true); echo nocopy_stats()["used"] - $u; exit; } apcu_store("probe", $o); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
+# with Valkey the listener drops the writer's own fresh copy: refetch until it stays local
+echo '<?php $o = new ArrayObject(array_fill(0, 1000, str_repeat("x", 100))); if (function_exists("nocopy_put")) { $k = "probe" . mt_rand(); $u = nocopy_stats()["used"]; nocopy_put($k, $o, 0, true); $d = nocopy_stats()["used"] - $u; for ($i = 0; !$d && $i < 200; $i++, usleep(1000)) { $u = nocopy_stats()["used"]; nocopy_get($k); $d = nocopy_stats()["used"] - $u; } echo $d; exit; } apcu_store("probe", $o); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
 NIDS=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 25" | tr '\n' ' ')
 NODE=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 1 offset 40")

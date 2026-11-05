@@ -10,7 +10,8 @@ has never run on GitHub. Linux only (macOS builds; untested there). Pieces: the 
 `apcu/` (PHP polyfill, `chrfritsch/nocopy-apcu`), `symfony/` (bundle, `cache.adapter.nocopy`), `drupal/` (all bins + cache tags).
 
 Last verified (2026-11-05): suite 8.4/8.5/ZTS 8.4, tests/c with TSAN, `stress.sh 5`, `shm-name.sh` (fpm, FrankenPHP, Valkey), FrankenPHP, Symfony 8 smoke.
-Not run since the anonymous arena and the C APCu layer went: Drupal tests (`docker/drupal-test.sh`) and `docker/drupal-bench.sh`.
+Drupal tests in 4 modes pass; `docker/drupal-bench.sh` (one run, noisy host: stock's logged-in `/` 20-25% under its range) matches the README:
+nocopy-all anonymous `/` 12,229 req/s, 7 statements per logged-in request, first request after an fpm restart 146 ms. Committed results not replaced.
 
 ## Run things (Docker; `docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker`)
 
@@ -58,9 +59,8 @@ sometimes saw a truncated `nocopy.c`: rerun.
 
 ## Open (rough priority)
 
-1. Run the Drupal tests and benchmark on the current tree.
-2. Push to GitHub, get CI green; `composer.json` + a GitHub release for PIE; subtree split for `drupal/`, `symfony/`, `apcu/` on Packagist.
-3. Numbers on a real (non-VM) x86_64 box, wrk instead of ab.
-4. Merge keeps read entries up to one segment per 4 merged (test 029): tune if full-cache hit rates need it. When truly full, evacuation copies data about to expire.
-5. A shard without writes expires only under memory pressure; a hot shard cannot borrow from idle ones; RSS drifts to `nocopy.shm_size`.
-6. Valkey: Sentinel, Cluster, TLS over unix sockets, CRL/OCSP, `tls_server_name` override; an optional Valkey module to save round trips.
+1. Push to GitHub, get CI green; `composer.json` + a GitHub release for PIE; subtree split for `drupal/`, `symfony/`, `apcu/` on Packagist.
+2. Numbers on a real (non-VM) x86_64 box, wrk instead of ab.
+3. Merge keeps read entries up to one segment per 4 merged (test 029): tune if full-cache hit rates need it. When truly full, evacuation copies data about to expire.
+4. A shard without writes expires only under memory pressure; a hot shard cannot borrow from idle ones; RSS drifts to `nocopy.shm_size`.
+5. Valkey: Sentinel, Cluster, TLS over unix sockets, CRL/OCSP, `tls_server_name` override; an optional Valkey module to save round trips.
