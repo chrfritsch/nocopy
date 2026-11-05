@@ -203,6 +203,7 @@ static inline __attribute__((always_inline)) void entry_die(nocopy_shard *sh, no
 {
 	uint32_t s = nocopy_seg_of(e);
 	e->live = false;
+	__atomic_sub_fetch(&nocopy_a->segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
 	nocopy_a->segs[s].live -= e->size;
 	sh->live_bytes -= e->size;
 	seg_check(sh, s);
@@ -213,6 +214,7 @@ static inline __attribute__((always_inline)) void entry_birth(nocopy_shard *sh, 
 	uint32_t s = nocopy_seg_of(e);
 	e->live = true;
 	nocopy_a->segs[s].pending--;
+	__atomic_add_fetch(&nocopy_a->segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
 	nocopy_a->segs[s].live += e->size;
 	sh->live_bytes += e->size;
 }
@@ -266,6 +268,7 @@ static uint32_t take_run(nocopy_shard *sh, uint32_t k, uint32_t spare, uint8_t s
 			}
 			nocopy_a->segs[got].run = k;
 			nocopy_a->segs[got].born = sh->last_seq;
+			__atomic_store_n(&nocopy_a->segs[got].reads, 0, __ATOMIC_RELAXED);
 			seg_set(got, state);
 			sh->nfree -= k;
 			return got;

@@ -3,6 +3,7 @@
 #include "nocopy_arena_int.h"
 
 #define MERGE_N 4 /* segments merged into at most one segment's worth of survivors */
+#define PICK_N 32 /* eviction chooses among this many oldest segments */
 
 /* The entries of segment s. A walk may run past unlinks that make s DEAD: only reclaim() frees it, under this lock. */
 #define SEG_FOREACH(s, e) \
@@ -103,9 +104,9 @@ static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 	return nv >= 2 ? nv : 0;
 }
 
-/* Eviction victims, oldest first: the MERGE_N oldest sealed segments, or the oldest big entry's run alone if it is older.
+/* The K oldest sealed segments, oldest first, or the oldest big entry's run alone if it is older.
  * A run that was read since is sent to the back once instead (*spared, no victims). */
-static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared)
+static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared, uint32_t K)
 {
 	uint32_t nv = 0, run = UINT32_MAX;
 	*spared = false;
@@ -120,10 +121,10 @@ static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared)
 			}
 			continue;
 		}
-		if (nv == MERGE_N && g->born >= nocopy_a->segs[v[MERGE_N - 1]].born) {
+		if (nv == K && g->born >= nocopy_a->segs[v[K - 1]].born) {
 			continue;
 		}
-		uint32_t k = nv < MERGE_N ? nv++ : MERGE_N - 1; /* keep v sorted by born */
+		uint32_t k = nv < K ? nv++ : K - 1; /* keep v sorted by born */
 		for (; k > 0 && nocopy_a->segs[v[k - 1]].born > g->born; k--) {
 			v[k] = v[k - 1];
 		}
@@ -142,6 +143,27 @@ static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared)
 	}
 	v[0] = run;
 	return 1;
+}
+
+/* Eviction victims: of the PICK_N oldest, the oldest (so every segment is merged in time) and the MERGE_N - 1 least read. */
+static uint32_t pick_victims(const nocopy_shard *sh, uint32_t *v, bool *spared)
+{
+	uint32_t c[PICK_N];
+	uint32_t nc = pick_oldest(sh, c, spared, PICK_N);
+	for (uint32_t n = 1; n < MERGE_N && n < nc; n++) {
+		uint32_t b = n;
+		for (uint32_t i = n + 1; i < nc; i++) {
+			if (__atomic_load_n(&nocopy_a->segs[c[i]].reads, __ATOMIC_RELAXED) < __atomic_load_n(&nocopy_a->segs[c[b]].reads, __ATOMIC_RELAXED)) {
+				b = i;
+			}
+		}
+		uint32_t t = c[n];
+		c[n] = c[b];
+		c[b] = t;
+	}
+	nc = nc < MERGE_N ? nc : MERGE_N;
+	memcpy(v, c, nc * sizeof *c);
+	return nc;
 }
 
 /* Lossy merge ranking: levels >= the returned cut all fit the budget; level cut - 1 gets *spare (first come). */
@@ -242,7 +264,7 @@ bool nocopy_merge(nocopy_shard *sh, bool evict_only)
 	bool lossy = !nv;
 	if (lossy) {
 		bool spared;
-		nv = pick_oldest(sh, v, &spared);
+		nv = pick_victims(sh, v, &spared);
 		if (spared) {
 			return true;
 		}

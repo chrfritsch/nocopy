@@ -47,6 +47,7 @@ typedef struct {
 	uint32_t run;     /* head of a run: number of segments */
 	uint32_t pending; /* allocated, not yet published */
 	uint32_t gen;     /* bumped on every free: lets an expiry cursor notice reuse */
+	int32_t reads;    /* estimated reads of its live entries (sum of 2^hot - 1); readers add racily */
 	size_t used;      /* bytes appended */
 	size_t live;      /* bytes of live entries */
 	time_t max_exp;   /* latest expiry of its entries; 0 in the ttl=0 bucket (never) */
@@ -339,6 +340,7 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ct
 				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 				if (f < NOCOPY_HOT_MAX && (!f || !(nocopy_rand(c) & ((1u << f) - 1)))) {
 					__atomic_store_n(&e->hot, f + 1, __ATOMIC_RELAXED); /* p = 1/2^f: ~log2(reads) writes, the line stays shared */
+					__atomic_add_fetch(&nocopy_a->segs[nocopy_seg_of(e)].reads, 1 << f, __ATOMIC_RELAXED);
 				}
 				return e;
 			}
