@@ -671,31 +671,6 @@ void nocopy_clear(void)
 	}
 }
 
-/* ---- scans ---- */
-
-nocopy_entry *nocopy_scan_next(nocopy_ctx *c, uint32_t *sh, uint32_t *i)
-{
-	for (; *sh < nocopy_a->nshards; (*sh)++, *i = 0) {
-		const nocopy_slot *t = nocopy_tabs[*sh];
-		while (*i <= nocopy_tab_mask) {
-			const nocopy_slot *p = &t[(*i)++];
-			nocopy_slot s = __atomic_load_n(p, __ATOMIC_ACQUIRE);
-			if (!s) {
-				continue;
-			}
-			nocopy_entry *e = nocopy_slot_entry(s);
-			if (nocopy_hold(c, e) && __atomic_load_n(p, __ATOMIC_ACQUIRE) != s) {
-				(*i)--; /* re-read this slot */
-				continue;
-			}
-			if (!nocopy_expired(e)) {
-				return e;
-			}
-		}
-	}
-	return NULL;
-}
-
 /* ---- stats ---- */
 
 void nocopy_stats(nocopy_stats_t *st)
@@ -738,24 +713,6 @@ void nocopy_stats(nocopy_stats_t *st)
 	st->slots = (uint64_t) nocopy_a->nshards * (nocopy_tab_mask + 1);
 	st->expunges = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
 	st->lock_steals = __atomic_load_n(&nocopy_a->lock_steals, __ATOMIC_RELAXED);
-}
-
-uint32_t nocopy_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max)
-{
-	const nocopy_shard *sh = &nocopy_a->shards[shard];
-	uint32_t runs = 0;
-	for (uint32_t i = sh->lo, start = 0, n = 0; i <= sh->hi && runs < max; i++) { /* adjacent free segments form one block */
-		uint8_t st = i < sh->hi ? __atomic_load_n(&nocopy_a->segs[i].state, __ATOMIC_RELAXED) : SEG_OPEN;
-		bool free_seg = st == SEG_FREE || st == SEG_DEAD;
-		if (free_seg && !n++) {
-			start = i;
-		} else if (!free_seg && n) {
-			off[runs] = (size_t) (start - sh->lo) << nocopy_seg_shift;
-			len[runs++] = (size_t) n << nocopy_seg_shift;
-			n = 0;
-		}
-	}
-	return runs;
 }
 
 /* ---- setup ---- */

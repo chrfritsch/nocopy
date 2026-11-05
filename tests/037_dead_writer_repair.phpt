@@ -5,10 +5,10 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t037
-apc.enable_cli=1
-apc.shm_size=16M
+nocopy.shm_size=16M
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 $small = str_repeat("x", 1500);   // filled under the shard lock
 $big = str_repeat("y", 100000);   // a run of segments, filled outside the lock
 for ($round = 0; $round < 40; $round++) {

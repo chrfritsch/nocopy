@@ -4,7 +4,7 @@ nocopy: a full cache evicts its oldest entries but keeps the ones read since the
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t022
-apc.shm_size=8M
+nocopy.shm_size=8M
 --FILE--
 <?php
 nocopy_put('hot', str_repeat('h', 500));

@@ -1,5 +1,5 @@
 <?php
-// php -d extension=nocopy.so -d zend.assertions=1 tests/smoke.php <dir with vendor/autoload.php>  (also with nocopy.apcu_compat=1)
+// php -d extension=nocopy.so -d zend.assertions=1 tests/smoke.php <dir with vendor/autoload.php>
 
 use Chrfritsch\NocopyBundle\NocopyBundle;
 use Symfony\Bundle\FrameworkBundle\FrameworkBundle;

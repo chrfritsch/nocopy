@@ -2,7 +2,6 @@
 
 /**
  * @generate-class-entries
- * @generate-legacy-arginfo 80300
  */
 
 /**
@@ -16,6 +15,18 @@ function nocopy_put(string $key, mixed $value, int $ttl = 0, bool $serialize = f
  * @frameless-function {"arity": 1}
  */
 function nocopy_get(string $key, mixed &$hit = null): mixed {}
+
+/** Stores only if the key is missing. */
+function nocopy_add(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
+
+/** Adds $step (negative: subtracts) to an integer in place; a missing key starts at $step. false: not an integer, or no room. */
+function nocopy_inc(string $key, int $step = 1, int $ttl = 0): int|false {}
+
+/** Replaces the integer $old with $new atomically. */
+function nocopy_cas(string $key, int $old, int $new): bool {}
+
+/** Removes every entry (with nocopy.valkey: every key under the prefix too). */
+function nocopy_clear(): bool {}
 
 function nocopy_delete(string $key): bool {}
 

@@ -5,7 +5,7 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t018
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 // Home slot of a key in this 16k-slot table: mirrors nocopy_slot_tag() (bits below 2^46 suffice).

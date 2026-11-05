@@ -5,4 +5,4 @@
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=64M"
 for m in naive entry; do echo "== APCu $m"; php $C -d extension=$APCU /src/bench/stampede.php $m "$@"; done
-for m in naive entry remember; do echo "== nocopy $m"; rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.apcu_compat=1 /src/bench/stampede.php $m "$@"; done
+for m in naive entry remember; do echo "== nocopy $m"; rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.shm_size=64M /src/bench/stampede.php $m "$@"; done

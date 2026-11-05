@@ -6,11 +6,11 @@ nocopy
 <?php require __DIR__ . '/valkey_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t051
-apc.enable_cli=1
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t051:
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/valkey.inc';
 apcu_clear_cache();
 nocopy_put('k', ['v' => 1]);

@@ -5,11 +5,11 @@ nocopy
 --SKIPIF--
 <?php if (!is_dir('/dev/shm')) die('skip needs /dev/shm'); ?>
 --INI--
-apc.enable_cli=1
 nocopy.request_scope=1
 nocopy.shm_name=/nocopy-t057
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 function other(string $code, string $name = '/nocopy-t057'): string
 {
     return (string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))

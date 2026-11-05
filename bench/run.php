@@ -1,4 +1,21 @@
 <?php
+// Under nocopy this file runs again with its apcu_* calls rewritten to nocopy_*: the apcu polyfill would add a PHP call to every op.
+if (extension_loaded('nocopy') && !defined('NATIVE')) {
+    define('NATIVE', true);
+    $src = file_get_contents(__FILE__);
+    eval("namespace Native;" . strtr(substr($src, strpos($src, "\n// usage:")), [
+        'apcu_store(\'obj\', $o)' => 'nocopy_put(\'obj\', $o, 0, true)',
+        'apcu_store(\'w_obj\', $o)' => 'nocopy_put(\'w_obj\', $o, 0, true)',
+        'apcu_fetch($k)' => 'nocopy_get_multiple($k)',
+        'apcu_exists(\'int\')' => 'nocopy_get(\'int\', $hit)',
+        'apcu_entry(\'int\', $f)' => 'nocopy_remember(\'int\', $f, 0, 0.0)',
+        'apcu_enabled()' => "(nocopy_shared_with() !== 'none')",
+        'apc.shm_size' => 'nocopy.shm_size',
+        'apcu_store(' => 'nocopy_put(', 'apcu_fetch(' => 'nocopy_get(', 'apcu_add(' => 'nocopy_add(',
+        'apcu_inc(' => 'nocopy_inc(', 'apcu_delete(' => 'nocopy_delete(',
+    ]));
+    exit;
+}
 // usage: php [-d ...] run.php <group>   groups: read, write, parallel, mixed, contend, ttl
 // emits one JSON line per measurement: {"name":..., "v":..., "unit":...}
 

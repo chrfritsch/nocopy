@@ -4,7 +4,7 @@ nocopy: the slot table is fixed; when entries outnumber it the oldest are evicte
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t017
-apc.shm_size=8M
+nocopy.shm_size=8M
 --FILE--
 <?php
 $n = 40000; // ~96 bytes each: fits the memory, not the 32k slots (24k usable)

@@ -4,7 +4,7 @@ nocopy: when the read entries of a merge do not all fit, the most-read ones surv
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t029
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 $v = str_repeat('x', 500);

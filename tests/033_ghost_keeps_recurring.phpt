@@ -4,7 +4,7 @@ nocopy: keys that come back after an eviction start hot (ghost), so keys reused 
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t033
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 $v = str_repeat('x', 500);

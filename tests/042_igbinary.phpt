@@ -5,7 +5,6 @@ nocopy
 igbinary
 --INI--
 nocopy.shm_name=/nocopy-t042
-apc.enable_cli=1
 nocopy.serializer=igbinary
 --FILE--
 <?php
@@ -20,12 +19,13 @@ $r = nocopy_get('k');
 var_dump($r['p']->self === $r['p'], $r['s']->x, $r['arr'] === [1, 'two', 3.0]);
 $r['ref'][] = 4;
 var_dump(count($r['arr']));
-apcu_store('o', new ArrayObject([1, 2]));
-var_dump(apcu_fetch('o')->count());
-var_dump(apcu_inc('o'));
+nocopy_put('o', new ArrayObject([1, 2]), 0, true);
+var_dump(nocopy_get('o')->count());
+var_dump(nocopy_inc('o'));
 $o = new ArrayObject(array_fill(0, 1000, str_repeat('x', 100)));
-apcu_store('dedup', $o);
-foreach (new APCUIterator('/^dedup$/') as $e) var_dump($e['mem_size'] < 20000); // igbinary dedups strings, serialize() would need ~110 KB
+$used = nocopy_stats()['used'];
+nocopy_put('dedup', $o, 0, true);
+var_dump(nocopy_stats()['used'] - $used < 20000); // igbinary dedups strings, serialize() would need ~110 KB
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t042*')); ?>

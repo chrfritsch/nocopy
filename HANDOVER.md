@@ -11,7 +11,7 @@ php-src for weak spots (opcache-style immutable arrays make zero-copy reads poss
 
 ## State (2026-11-05)
 
-Works, not released. Git repo, MIT license (2026-11-04). CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
+Works, not released. Git repo, MIT license (2026-11-04). CI: `.github/workflows/ci.yml` (PHP 8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 Renamed stash -> nocopy (2026-11-04): extension, `nocopy_*` functions, `nocopy.*` INI, `NOCOPY_*` macros, files, Symfony bundle (`Chrfritsch\NocopyBundle`, `cache.adapter.nocopy`), Docker images `nocopy-linux`/`nocopy-zts`. The `apcu_*` layer is unchanged. Packagist, PECL and nocopy.dev were free; the GitHub user `nocopy` is taken.
 
 ### Valkey tier (2026-11-04)
@@ -21,7 +21,7 @@ Bench (one run, `bench/results-drupal/valkey`): vs drupal/redis+phpredis 2x logg
 
 ### Performance pass (2026-11-04)
 Callgrind per op first (fetch int zero-copy: ~390 instructions, ~110 of them the VM's internal call frame), then `docker/ab.sh 3 "read write parallel"` vs ddf5da4 (Linux Docker arm64, load ~1.6):
-- Frameless handlers (PHP 8.4+, `@frameless-function` in the stubs): `apcu_fetch`/`apcu_exists`/`apcu_delete`/`nocopy_get` arity 1, `apcu_store` 1-3, `nocopy_put` 2-3. `apcu_store` needs arity 1: a 1-arg call would pick arity 2 and `$value` has no default (ZEND_UNREACHABLE). gen_stub's legacy output leaves the `#else` (8.3) branch empty: the ZEND_FE lines there are added by hand after regenerating. MINIT adds the handler count to opcache's system id (file cache stores handler indices). Test 040.
+- Frameless handlers (`@frameless-function` in the stub): `nocopy_get` arity 1, `nocopy_put` 2-3 (the `apcu_*` ones left with the C layer). MINIT adds the handler count to opcache's system id (file cache stores handler indices). Test 040.
 - Arena globals `visibility hidden` (no GOT load) and `nocopy_find` takes the shard index directly (`sh - shards` divided by 1280).
 - Idle pins (see ARCHITECTURE "Pins"): copy mode no longer re-pins (seq_cst store + fence) on every call.
 - Result, copy / zero-copy ns: fetch int 15.5 -> 12.5 / 13.8 -> 12.2, string 100B 21.6 -> 17.4 / 13.4 -> 12.3, 100k distinct keys 44.2 -> 22.8, 10 keys array form 250 -> 145, miss 10.6 -> 9.5, exists 13.7 -> 10.9 / 11.7 -> 10.9; parallel fetch int x8 +16% / +25%. Stores, inc, big array copies within +-2.5% (layout).
@@ -265,6 +265,14 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   `nocopy_shared_with()` = `process`. Every test has its own name (`/nocopy-tNNN`, removed in `--CLEAN--`), run-tests itself gets `/nocopy-runner`
   (its --EXTENSIONS-- probe sees no test INI); tests/c open a named arena and unlink it at once. Benches/CI scripts set a name and remove it per run.
   Price: in Docker every arena counts against `/dev/shm` (64M default), benches with 512M need `--shm-size=1g`; a CLI without the name warns at startup.
+- PHP 8.4+ only, APCu layer moved to PHP (2026-11-05, "fresh start" #3 and #4). `nocopy_apcu.c` (905 lines), its stub/arginfo, the `apc.*` aliases,
+  `nocopy.apcu_compat`, `nocopy_scan`/`nocopy_info`/`nocopy_free_runs` and the 8.3 arginfo branch are gone; `#error` below 8.4. New native functions the polyfill needs:
+  `nocopy_add`, `nocopy_inc` (negative step = dec), `nocopy_cas`, `nocopy_clear`. `apcu/apcu.php` (`chrfritsch/nocopy-apcu`) defines `apcu_*` when nocopy is loaded and
+  APCu is not. The extension still registers `apc.enabled`/`apc.enable_cli` when APCu is absent (user's choice): Symfony's `ApcuAdapter::isSupported()` and Composer's
+  APCu prefix check them. Not covered: `APCUIterator`, `apcu_key_info`, `APC_*`, other `apc.*`; cache_info/sma_info are totals. APCu's suite on the polyfill (Linux 8.5,
+  each test starting from `nocopy_clear()`): 37 pass, 19 skip, 22 fail = those gaps + messages naming `nocopy_*`. Tests: 013/024/027/038/044/044b/064 removed (layer-only),
+  008/009/010/031/037/045/050/051/053/055/057/061 run on the polyfill, 035/040/042/058 rewritten to `nocopy_*`. `bench/run.php` re-runs itself with `apcu_*` rewritten to
+  `nocopy_*` (no PHP wrapper in the numbers: fetch int 11.7 ns zero-copy); `bench/symfony.php` uses the bundle's NocopyAdapter under nocopy.
   Drupal bench, nocopy-valkey, 16 workers (Docker, one run before, two after): anonymous / 12,586 vs 12,920 / 12,588 req/s, logged-in / 1,235 vs 1,358 / 1,273,
   logged-in node 1,101 vs 1,210 / 972, editor-loop readers 765 vs 812 / 751, first request after fpm restart 166 vs 188 / 184 ms: within run-to-run noise.
   The gain is structural: 16 tracking connections and 16 copies of every push per server became 1. The bench's serializer probe now refetches (own write dropped).

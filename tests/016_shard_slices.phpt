@@ -4,7 +4,7 @@ nocopy: shards own fixed slices; an entry must fit in its shard's slice, and get
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t016
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 $s = nocopy_stats();

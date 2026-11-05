@@ -4,7 +4,7 @@ nocopy: random puts/deletes of mixed sizes agree with a PHP array model; held va
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t011
-apc.shm_size=4M
+nocopy.shm_size=4M
 nocopy.request_scope=1
 --FILE--
 <?php

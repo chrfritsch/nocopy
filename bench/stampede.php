@@ -8,6 +8,8 @@ function out(string $name, float $v, string $unit): void {
     echo json_encode(['name' => $name, 'v' => round($v, 3), 'unit' => $unit]), "\n";
 }
 
+if (extension_loaded('nocopy')) require __DIR__ . '/../apcu/apcu.php'; // naive and entry go through apcu_*
+
 [, $mode, $w, $secs, $ttl, $ms] = $argv + [1 => 'naive', 8, 10, 2, 50];
 $w = (int) $w; $secs = (float) $secs; $ttl = (int) $ttl; $ms = (int) $ms;
 $runs = tempnam(sys_get_temp_dir(), 'stampede');

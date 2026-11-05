@@ -4,7 +4,7 @@ nocopy: nocopy_stats() counts entries evicted by merge and entries dropped by th
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t028
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 for ($i = 0; $i < 100; $i++) nocopy_put("t$i", 1, 1);

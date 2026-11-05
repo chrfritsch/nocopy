@@ -4,7 +4,7 @@ nocopy: a cache full of entries without TTL evicts its oldest segments instead o
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t019
-apc.shm_size=8M
+nocopy.shm_size=8M
 --FILE--
 <?php
 $v = str_repeat("x", 500);

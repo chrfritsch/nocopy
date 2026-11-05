@@ -4,7 +4,7 @@ nocopy: nocopy_remember's compute time survives a merge moving the entry (XFetch
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t036
-apc.shm_size=2M
+nocopy.shm_size=2M
 --FILE--
 <?php
 nocopy_remember('k', function () { usleep(20000); return range(1, 50); }, 1000, 0);

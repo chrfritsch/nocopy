@@ -4,7 +4,7 @@ nocopy: replaced entries are compacted away when the arena is under pressure
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t003
-apc.shm_size=2M
+nocopy.shm_size=2M
 --FILE--
 <?php
 $big = range(1, 1000);

@@ -5,12 +5,12 @@ nocopy
 --SKIPIF--
 <?php require __DIR__ . '/valkey_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
 --INI--
-apc.enable_cli=1
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t061:
 nocopy.shm_name=/nocopy-t061
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/valkey.inc';
 function run(string $code): string
 {

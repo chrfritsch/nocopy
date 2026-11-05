@@ -183,9 +183,6 @@ enum { NOCOPY_LEASE_TAKEN, NOCOPY_LEASE_HELD, NOCOPY_LEASE_MINE, NOCOPY_LEASE_FU
 int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
 void nocopy_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it */
 
-/* ---- lock-free scan: next pinned unexpired entry at or after (*sh, *i); start at 0, 0. Between borrow_begin/end. ---- */
-nocopy_entry *nocopy_scan_next(nocopy_ctx *c, uint32_t *sh, uint32_t *i);
-
 typedef struct {
 	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases, inserts;
 	uint64_t segment_size;
@@ -193,8 +190,6 @@ typedef struct {
 	time_t start_time;
 } nocopy_stats_t;
 void nocopy_stats(nocopy_stats_t *s);
-/* A shard's free (or dead) segments as runs, for apcu_sma_info: up to max (offset from the slice start, bytes) pairs; returns how many. */
-uint32_t nocopy_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max);
 
 /* ---- inline read path ---- */
 

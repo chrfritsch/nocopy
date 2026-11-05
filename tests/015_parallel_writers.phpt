@@ -5,7 +5,7 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t015
-apc.shm_size=16M
+nocopy.shm_size=16M
 --FILE--
 <?php
 $pids = [];

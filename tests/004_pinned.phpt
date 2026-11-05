@@ -5,7 +5,7 @@ nocopy
 --INI--
 nocopy.shm_name=/nocopy-t004
 nocopy.request_scope=1
-apc.shm_size=2M
+nocopy.shm_size=2M
 --FILE--
 <?php
 $orig = array_map(fn($i) => "orig-$i", range(1, 500));

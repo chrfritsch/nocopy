@@ -4,7 +4,7 @@ nocopy: equal array keys are stored once per value and copied out once; relocati
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t034
-apc.shm_size=2M
+nocopy.shm_size=2M
 nocopy.request_scope=0
 --FILE--
 <?php

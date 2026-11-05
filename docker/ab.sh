@@ -12,7 +12,7 @@ C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=512M -d apc.entries
 for rep in $(seq "$reps"); do
   order="a b"; [ $((rep % 2)) -eq 0 ] && order="b a"
   for g in $groups; do for t in $order; do for m in 0 1; do
-    rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build-$t/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.apcu_compat=1 -d nocopy.request_scope=$m /src/bench/run.php $g >> $R/$t$m.jsonl 2>/dev/null
+    rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build-$t/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.shm_size=512M -d nocopy.entries_hint=200000 -d nocopy.request_scope=$m /src/bench/run.php $g >> $R/$t$m.jsonl 2>/dev/null
   done; done; done
 done
 php -n -r '

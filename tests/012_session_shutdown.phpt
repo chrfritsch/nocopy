@@ -5,7 +5,7 @@ nocopy
 session
 --INI--
 nocopy.shm_name=/nocopy-t012
-apc.shm_size=4M
+nocopy.shm_size=4M
 nocopy.request_scope=1
 session.use_cookies=0
 session.cache_limiter=

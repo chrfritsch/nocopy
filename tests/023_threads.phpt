@@ -5,7 +5,7 @@ nocopy
 parallel
 --INI--
 nocopy.shm_name=/nocopy-t023
-apc.shm_size=64M
+nocopy.shm_size=64M
 nocopy.request_scope=0
 --FILE--
 <?php

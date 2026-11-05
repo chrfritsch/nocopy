@@ -1,9 +1,10 @@
 <?php
-// Benchmarks Symfony Cache's ApcuAdapter (the real consumer of apcu_*).
+// Benchmarks Symfony Cache: ApcuAdapter under APCu, the bundle's NocopyAdapter under nocopy.
 // usage: SF_AUTOLOAD=/path/to/symfony-cache/vendor/autoload.php php [-d ...] symfony.php <group>   groups: read, write, parallel
 
 require getenv('SF_AUTOLOAD') ?: exit("set SF_AUTOLOAD\n");
 use Symfony\Component\Cache\Adapter\ApcuAdapter;
+use Chrfritsch\NocopyBundle\NocopyAdapter;
 
 function out(string $name, float $v, string $unit): void { echo json_encode(['name' => $name, 'v' => round($v, 3), 'unit' => $unit]), "\n"; }
 
@@ -26,9 +27,11 @@ function rows(int $n): array {
 
 class Node { public $name = 'n'; public $meta = ['a' => 1, 'b' => [1, 2, 3]]; public ?Node $next = null; }
 
-if (!apcu_enabled() || ini_get('apc.shm_size') !== '512M') { fwrite(STDERR, "bench misconfigured\n"); exit(1); }
+$nocopy = extension_loaded('nocopy');
+if ($nocopy ? nocopy_shared_with() === 'none' || ini_get('nocopy.shm_size') !== '512M' : !apcu_enabled() || ini_get('apc.shm_size') !== '512M') { fwrite(STDERR, "bench misconfigured\n"); exit(1); }
 $group = $argv[1] ?? 'read';
-$cache = new ApcuAdapter('bench', 0);
+if ($nocopy) require __DIR__ . '/../symfony/src/NocopyAdapter.php';
+$cache = $nocopy ? new NocopyAdapter('bench', 0) : new ApcuAdapter('bench', 0);
 
 if ($group === 'read') {
     $obj = new Node; $obj->next = new Node;

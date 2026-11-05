@@ -4,7 +4,7 @@ nocopy: expired entries go away segment by segment without memory pressure, and 
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t014
-apc.shm_size=4M
+nocopy.shm_size=4M
 --FILE--
 <?php
 for ($i = 0; $i < 400; $i++) { // short-lived entries interleaved with permanent ones

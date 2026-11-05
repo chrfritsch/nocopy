@@ -20,8 +20,8 @@ run_cfg() { name=$1; shift
 }
 { # Symfony's default pool serializes values itself (DefaultMarshaller): the extension only sees strings
   RAW= run_cfg "apcu / default pool" -d extension=$APCU_SO -d apc.serializer=default
-  RAW= run_cfg "nocopy / default pool" -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d nocopy.request_scope=1
+  RAW= run_cfg "nocopy / default pool" -d extension=$NOCOPY_SO -d nocopy.shm_size=256M -d nocopy.entries_hint=20000 -d nocopy.request_scope=1
   # a pool without the marshaller: PHP values reach the extension
   RAW=1 run_cfg "apcu / raw pool" -d extension=$APCU_SO -d apc.serializer=default
-  RAW=1 run_cfg "nocopy copy / raw pool" -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d nocopy.request_scope=0
-  RAW=1 run_cfg "nocopy zero / raw pool" -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d nocopy.request_scope=1; } | tee ${OUT:-/dev/null}
+  RAW=1 run_cfg "nocopy copy / raw pool" -d extension=$NOCOPY_SO -d nocopy.shm_size=256M -d nocopy.entries_hint=20000 -d nocopy.request_scope=0
+  RAW=1 run_cfg "nocopy zero / raw pool" -d extension=$NOCOPY_SO -d nocopy.shm_size=256M -d nocopy.entries_hint=20000 -d nocopy.request_scope=1; } | tee ${OUT:-/dev/null}

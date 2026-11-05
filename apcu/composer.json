@@ -1,0 +1,13 @@
+{
+    "name": "chrfritsch/nocopy-apcu",
+    "description": "apcu_* functions on top of the nocopy extension, for code that cannot switch to nocopy_* yet",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.4",
+        "ext-nocopy": "*"
+    },
+    "autoload": {
+        "files": ["apcu.php"]
+    }
+}

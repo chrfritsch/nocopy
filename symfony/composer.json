@@ -4,7 +4,7 @@
     "license": "MIT",
     "description": "Symfony cache adapter for the nocopy extension: cache.adapter.nocopy, zero-copy fetches",
     "require": {
-        "php": ">=8.3",
+        "php": ">=8.4",
         "ext-nocopy": "*",
         "symfony/framework-bundle": "^6.4 || ^7.0 || ^8.0"
     },

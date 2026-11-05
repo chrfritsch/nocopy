@@ -6,7 +6,6 @@ nocopy
 <?php require __DIR__ . '/valkey_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t056
-apc.enable_cli=1
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t056:
 --FILE--

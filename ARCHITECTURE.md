@@ -1,8 +1,8 @@
 Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
-  `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, scans, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
-- `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`info`/`scan`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
-- `nocopy_apcu.c`: `apcu_*` and `APCUIterator`, only through `nocopy_php.h` (no locks, no arena fields); registered only with `nocopy.apcu_compat=1`.
+  `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
+- `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
+- `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
@@ -41,13 +41,13 @@ and takes the lock over with a CAS (`lock_steals` in `nocopy_stats()`), then run
 An odd `mseq` (a delete died mid-shift: every miss in the shard would retry forever) is made even and the key it left in two slots loses its second one; each segment's `live` comes from the entries slots reach (an entry unlinked halfway stops counting),
 `pending` from the worker slots' `wip` records (an abandoned allocation stops holding its segment), states from the runs (a run taken or freed halfway, an open segment never installed). O(slots + entries) under the lock, only after a steal.
 A writer that dies filling a big entry outside the lock holds no lock: before unlocking it records the entry in its worker slot (`nocopy_wip`, `wip` changes only under that entry's shard lock), and the entry is aborted when the slot is claimed again,
-by `apcu_clear_cache`, or when an allocation fails (`wip_reap`, at most once a second per shard). Tests: `tests/c/repair.c` (each half-done state, deterministic), 037 (40 kill -9s of a writer mid inline/big put/delete).
+by `nocopy_clear`, or when an allocation fails (`wip_reap`, at most once a second per shard). Tests: `tests/c/repair.c` (each half-done state, deterministic), 037 (40 kill -9s of a writer mid inline/big put/delete).
 Robust pthread mutexes would let the kernel report a dead holder, but measured on Linux they are 15% slower uncontended and 2-8x slower with 2-16 contending processes (futex sleeps, also with a trylock spin in front). Not used.
 
 ## Slot tables: fixed, backward-shift deletes
 
-Sized once: ~2 slots per `apc.entries_hint` and at least one per 256 bytes of arena (3% of it), split evenly over the shards. A shard holds at most 3/4 of its slots (`cap`);
-an insert into a full table evicts (merge, below) like a full memory does. So a cache of very small entries evicts before its memory is full: raise `apc.entries_hint` for that.
+Sized once: ~2 slots per `nocopy.entries_hint` and at least one per 256 bytes of arena (3% of it), split evenly over the shards. A shard holds at most 3/4 of its slots (`cap`);
+an insert into a full table evicts (merge, below) like a full memory does. So a cache of very small entries evicts before its memory is full: raise `nocopy.entries_hint` for that.
 Deletes use backward shift (linear probing without tombstones): later entries of the probe run move back into the hole, so probe runs never fill up with tombstones.
 A reader that probes past a key while a delete moves it back would miss it: deletes that move anything bump the shard's `mseq` (odd while moving, its own cache line),
 and `nocopy_find` reads `mseq` before probing and treats a miss as real only if it is unchanged and even (seqlock); hits need no check (pin + slot re-check below).
@@ -96,26 +96,22 @@ the worker switches to copy mode at its first handled request, also with `nocopy
 - zero-copy (`zero_copy`, set in RINIT from `request_scope`): returns the arena pointer; the segment stays pinned until the request ends.
 - copy: `copy_out` = `zend_array_dup` (one memcpy of an immutable array) + `unshare_contents` (repoint arena strings/keys). The same key table maps a deduped arena key to its first private copy, which later rows share (refcounted).
   Kept copies (`nocopy_local`, `nocopy.local_size`): a 4096-slot direct-mapped table in request memory, by entry address, holds `{entry, seq, size, copy}`. A fetch whose entry has the same address and `seq` returns the kept copy (refcount + 1; COW protects it); otherwise it copies, and keeps the copy only if the slot's `seen` is this entry (second sighting, TinyLFU's doorkeeper), else just records it in `seen`: keeping every copy made fetches of 100k distinct strings 37 -> 64 ns (freeing cold evictees).
-  `(address, seq)` is one version: segments belong to one shard for life and `seq` only grows per shard, so a reused address has a larger `seq`; a merge move changes the address (one re-copy). Integers changed in place (`apcu_inc`) are never kept. Over budget the table is flushed; freed in RSHUTDOWN (later fetches copy without keeping).
+  `(address, seq)` is one version: segments belong to one shard for life and `seq` only grows per shard, so a reused address has a larger `seq`; a merge move changes the address (one re-copy). Integers changed in place (`nocopy_inc`) are never kept. Over budget the table is flushed; freed in RSHUTDOWN (later fetches copy without keeping).
 - serialized entries (objects, shared refs): `cache_unserialize` with a private unserialize state.
 
-## Single-flight and early refresh (`nocopy_remember`, `apcu_entry`)
+## Single-flight and early refresh (`nocopy_remember`)
 
 A lease is not a cache entry: each shard has 32 fixed `nocopy_lease` slots `{key hash, owner id, worker slot, until}` in the header, read and written under that shard's lock (the key's own shard).
 `nocopy_lease_take` returns TAKEN, HELD, MINE (recursion: our own callback asks for its key) or FULL (32 concurrent computes in the shard: compute without one). An expired lease (30 s) is free;
 a holder found dead (`owner_dead`, checked outside the lock since it reads /proc) is replaced on a second pass only if it still holds, and `nocopy_lease_drop` clears a lease only if this worker slot still holds it, so nobody drops a lease another worker retook.
 Leases are keyed by the 64-bit hash: two keys with the same hash share one (one waits for the other, then computes). Waiters poll (50 us doubling to 5 ms) for the value. Held leases are listed in module globals and dropped in post-deactivate if a callback bailed out.
-`nocopy_stats()['leases']` counts the held ones; `APCUIterator`, `apcu_cache_info` and `apcu_clear_cache` never see them.
+`nocopy_stats()['leases']` counts the held ones; `entries` and `nocopy_clear` never see them.
 The callback's run time (ms) is kept in the header's `user` field (the arena copies it when merge moves the entry, test 036). XFetch on a hit: refresh when `now - delta * beta * ln(rand) >= expires`; the refresher needs the lease, the rest return the current value.
 
-## APCu layer
+## Counters and INI
 
-`nocopy.apcu_compat` (default 0, opt-in; forced to 0 when APCu is loaded) decides in MINIT: `nocopy_apcu_minit()` registers the `apcu_*` functions (own stub, `nocopy_apcu_arginfo.h`), `APCUIterator`, the constants, `apc.enabled`/`apc.enable_cli` and the aliases `apc.shm_size`/`apc.entries_hint`/`apc.ttl`; with 0 none of that.
-The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*` entry only when it is configured and the `nocopy.*` name is not (`OnAlias`), then shows the value in effect (`sync_aliases`). Both go through `ini_put()`, never `zend_alter_ini_entry`: that one records the entry in `EG(modified_ini_directives)`, emalloc'ed memory that `php_module_startup` frees at its end, and the next `ini_set()` of a new directive wrote into it (segfault in Symfony's boot).
-
-`apcu_*` functions are thin wrappers over the store API in `nocopy_php.h`; `APCUIterator` and `apcu_cache_info` use `nocopy_scan` (lock-free over the slot tables, `nocopy_scan_next`: may skip or repeat entries a concurrent write moves).
-`apcu_sma_info` reports one segment per shard (its slice and that slice's free runs): an entry only fits into its own shard's free space.
-`apcu_inc/dec/cas` go through `nocopy_add_long`/`nocopy_cas_long`: the integer is modified in place under the shard lock with relaxed atomics (readers copy that word). `apcu_clear_cache` takes all shard locks in index order.
+`nocopy_inc`/`nocopy_cas` go through `nocopy_add_long`/`nocopy_cas_long`: the integer is modified in place under the shard lock with relaxed atomics (readers copy that word). `nocopy_clear` takes all shard locks in index order.
+INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, never `zend_alter_ini_entry`: that one records the entry in `EG(modified_ini_directives)`, emalloc'ed memory that `php_module_startup` frees at its end, and the next `ini_set()` of a new directive wrote into it (segfault in Symfony's boot).
 
 ## Valkey tier (`nocopy_valkey.c`)
 
@@ -139,7 +135,7 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 ## Invariants worth remembering
 
 - Never allocate (emalloc, zvals) while holding a shard lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker. `nocopy_rebase` runs under the lock: it only rewrites pointers.
-- Never take a second shard lock while holding one, except `apcu_clear_cache` (all, in index order).
+- Never take a second shard lock while holding one, except `nocopy_clear` (all, in index order).
 - Arena strings are `IS_STR_INTERNED` but never `IS_STR_PERMANENT`: that flag promises process lifetime and PCRE then keeps the pointer as a cache key.
 - Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `nocopy_hold` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
@@ -150,5 +146,5 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
 - `seg_carve()` sets an entry's size before `used` covers it, so `shard_repair` can always walk a segment. Entry sizes are multiples of 8 (slots hold offset/8).
 - The slot table never holds more than `cap` (3/4) entries: probes and backward shifts rely on an empty slot ending every run.
-- Tests that must see pressure use a small `apc.shm_size` (2M-4M, one shard). 015 (16M, 2 shards, 8 processes) and 018 (deletes shifting keys under readers) are the concurrency tests:
+- Tests that must see pressure use a small `nocopy.shm_size` (2M-4M, one shard). 015 (16M, 2 shards, 8 processes) and 018 (deletes shifting keys under readers) are the concurrency tests:
   run `docker/stress.sh` after touching locking, reclamation or the slot table; a single pass catches races only sometimes. 018 fails reliably if `nocopy_find` stops retrying misses.

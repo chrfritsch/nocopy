@@ -5,9 +5,9 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t031
-apc.enable_cli=1
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 foreach (['remember' => fn($cb) => nocopy_remember('k1', $cb, 60), 'apcu_entry' => fn($cb) => apcu_entry('k2', $cb, 60)] as $name => $get) {
     apcu_store('calls', 0);
     $pids = [];

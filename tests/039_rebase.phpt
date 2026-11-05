@@ -4,7 +4,7 @@ nocopy: a merge moves values by copying their bytes and repointing them: packed,
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t039
-apc.shm_size=4M
+nocopy.shm_size=4M
 nocopy.request_scope=0
 --FILE--
 <?php

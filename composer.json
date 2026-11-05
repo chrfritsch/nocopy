@@ -2,9 +2,9 @@
     "name": "chrfritsch/nocopy",
     "type": "php-ext",
     "license": "MIT",
-    "description": "Zero-copy shared-memory cache for PHP, drop-in for APCu (apcu_* API, APCUIterator, apc.* INI)",
+    "description": "Zero-copy shared-memory cache for PHP",
     "require": {
-        "php": ">=8.3"
+        "php": ">=8.4"
     },
     "php-ext": {
         "extension-name": "nocopy",

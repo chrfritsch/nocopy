@@ -4,9 +4,9 @@ nocopy_get_multiple / nocopy_put_multiple, and the apcu_fetch / apcu_store array
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t045
-apc.enable_cli=1
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 var_dump(nocopy_put_multiple(['a' => [1], 'b' => 'x', 7 => 2.5], 100));
 var_dump(nocopy_get_multiple(['a', 'missing', 'b', '7', 5]));
 try {

@@ -1,17 +1,19 @@
-/* nocopy: zero-copy shared-memory store with an apcu_* compatibility layer. This file: values in and out of the arena, nocopy_*, the module. */
+/* nocopy: zero-copy shared-memory store. This file: values in and out of the arena, nocopy_*, the module. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif
 
 #include "nocopy_php.h"
+#if PHP_VERSION_ID < 80400
+# error "nocopy needs PHP 8.4 or later"
+#endif
 #include "nocopy_arena.h"
 #include "ext/standard/info.h"
 #include "ext/standard/php_var.h"
 #include "ext/standard/basic_functions.h"
 #include "zend_smart_str.h"
 #include "SAPI.h"
-#include "zend_interfaces.h"
 #include "zend_system_id.h"
 #include "zend_extensions.h"
 #include "nocopy_arginfo.h"
@@ -37,8 +39,7 @@ zend_long nocopy_ini_ttl;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_a NULL: unavailable) */
-static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat;
-bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
+static bool request_scope;
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
 typedef int (*igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
 static bool use_igbinary; /* nocopy.serializer=igbinary, and igbinary resolved */
@@ -519,7 +520,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 			return NOCOPY_REFUSED;
 		}
 		if (st == SIZE_RESOURCE) {
-			php_error_docref(NULL, E_WARNING, "Cannot store resources in apcu cache");
+			php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
 			return NOCOPY_REFUSED;
 		}
 		if (!serialize_value(val, &ser, &igb)) {
@@ -1040,59 +1041,6 @@ bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed
 	return all;
 }
 
-static nocopy_meta meta_of(const nocopy_entry *e)
-{
-	return (nocopy_meta) {.created = e->created, .expires = e->expires, .size = e->size, .seq = e->seq};
-}
-
-static bool local_info(zend_string *key, nocopy_meta *m)
-{
-	nocopy_ctx *c = &NOCOPY_G(ctx);
-	nocopy_borrow_begin(c);
-	nocopy_entry *e = nocopy_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	if (e && m) {
-		*m = meta_of(e);
-	}
-	nocopy_borrow_end(c);
-	return e != NULL;
-}
-
-bool nocopy_info(zend_string *key, nocopy_meta *m)
-{
-	if (!detour) {
-		return local_info(key, m);
-	}
-	if (!nocopy_a || !nocopy_vk_ready()) {
-		return false;
-	}
-	if (!local_info(key, m)) {
-		zval t;
-		if (!fetch(key, &t, NULL, NULL)) {
-			return false;
-		}
-		zval_ptr_dtor(&t);
-		if (!local_info(key, m) && m) {
-			*m = (nocopy_meta) {.created = time(NULL)}; /* in Valkey, not kept here */
-		}
-	}
-	return true;
-}
-
-void nocopy_scan(nocopy_scan_fn fn, void *arg)
-{
-	if (!nocopy_a || (nocopy_vk_on && !nocopy_vk_ready())) {
-		return;
-	}
-	nocopy_ctx *c = &NOCOPY_G(ctx);
-	nocopy_borrow_begin(c); /* pins, not the lock: fn may allocate */
-	nocopy_entry *e;
-	for (uint32_t sh = 0, i = 0; (e = nocopy_scan_next(c, &sh, &i));) {
-		nocopy_meta m = meta_of(e);
-		fn(arg, entry_key(e), &m);
-	}
-	nocopy_borrow_end(c);
-}
-
 /* ---- single-flight: a lease per key hash (in the arena's shard) holds who computes it ---- */
 
 #define LEASE_TTL 30 /* s: a live holder stuck longer than this stops blocking the others */
@@ -1206,7 +1154,7 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 
 /* ---- nocopy_* ---- */
 
-static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize, zval *return_value)
+static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize, bool add_only, zval *return_value)
 {
 	if (ttl < 0) {
 		zend_argument_value_error(3, "must be greater than or equal to 0");
@@ -1215,7 +1163,7 @@ static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize,
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const nocopy_opts o = {.ttl = ttl, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
+	const nocopy_opts o = {.ttl = ttl, .add_only = add_only, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
 	nocopy_status st = nocopy_store(key, val, &o);
 	if (EG(exception)) {
 		RETURN_THROWS();
@@ -1238,7 +1186,70 @@ PHP_FUNCTION(nocopy_put)
 		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
-	put_impl(key, val, ttl, serialize, return_value);
+	put_impl(key, val, ttl, serialize, false, return_value);
+}
+
+PHP_FUNCTION(nocopy_add)
+{
+	zend_string *key;
+	zval *val;
+	zend_long ttl = 0;
+	bool serialize = false;
+
+	ZEND_PARSE_PARAMETERS_START(2, 4)
+		Z_PARAM_STR(key)
+		Z_PARAM_ZVAL(val)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(ttl)
+		Z_PARAM_BOOL(serialize)
+	ZEND_PARSE_PARAMETERS_END();
+
+	put_impl(key, val, ttl, serialize, true, return_value);
+}
+
+PHP_FUNCTION(nocopy_inc)
+{
+	zend_string *key;
+	zend_long step = 1, ttl = 0, nv;
+
+	ZEND_PARSE_PARAMETERS_START(1, 3)
+		Z_PARAM_STR(key)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(step)
+		Z_PARAM_LONG(ttl)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!nocopy_tracked()) {
+		RETURN_THROWS();
+	}
+	if (!nocopy_add_long(key, step, ttl, &nv)) {
+		RETURN_FALSE;
+	}
+	RETURN_LONG(nv);
+}
+
+PHP_FUNCTION(nocopy_cas)
+{
+	zend_string *key;
+	zend_long old, nw;
+
+	ZEND_PARSE_PARAMETERS_START(3, 3)
+		Z_PARAM_STR(key)
+		Z_PARAM_LONG(old)
+		Z_PARAM_LONG(nw)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!nocopy_tracked()) {
+		RETURN_THROWS();
+	}
+	RETURN_BOOL(nocopy_cas_long(key, old, nw));
+}
+
+PHP_FUNCTION(nocopy_clear)
+{
+	ZEND_PARSE_PARAMETERS_NONE();
+	nocopy_clear_all();
+	RETURN_TRUE;
 }
 
 PHP_FUNCTION(nocopy_get)
@@ -1261,7 +1272,6 @@ PHP_FUNCTION(nocopy_get)
 	}
 }
 
-#if PHP_VERSION_ID >= 80400
 /* Frameless variants (PHP 8.4+): a call the compiler resolved skips the VM's call frame. */
 ZEND_FRAMELESS_FUNCTION(nocopy_get, 1)
 {
@@ -1280,7 +1290,7 @@ ZEND_FRAMELESS_FUNCTION(nocopy_put, 2)
 	zval tmp;
 	zend_string *key;
 	Z_FLF_PARAM_STR(1, key, tmp);
-	put_impl(key, arg2, 0, false, return_value);
+	put_impl(key, arg2, 0, false, false, return_value);
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
@@ -1292,11 +1302,10 @@ ZEND_FRAMELESS_FUNCTION(nocopy_put, 3)
 	zend_long ttl;
 	Z_FLF_PARAM_STR(1, key, tmp);
 	Z_FLF_PARAM_LONG(3, ttl);
-	put_impl(key, arg2, ttl, false, return_value);
+	put_impl(key, arg2, ttl, false, false, return_value);
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
-#endif
 
 PHP_FUNCTION(nocopy_delete)
 {
@@ -1516,20 +1525,6 @@ static ZEND_INI_MH(OnShmName)
 	return SUCCESS;
 }
 
-static ZEND_INI_MH(OnBool)
-{
-	bool v = zend_ini_parse_bool(new_value);
-	const char *name = strchr(ZSTR_VAL(entry->name), '.') + 1;
-	if (strcmp(name, "enabled") == 0) {
-		ini_enabled = v;
-	} else if (strcmp(name, "enable_cli") == 0) {
-		ini_enable_cli = v;
-	} else if (strcmp(name, "apcu_compat") == 0) {
-		apcu_compat = v;
-	}
-	return SUCCESS;
-}
-
 /* "auto" (default): zero-copy for the whole request only under SAPIs whose requests are short. */
 static ZEND_INI_MH(OnRequestScope)
 {
@@ -1580,7 +1575,10 @@ static ZEND_INI_MH(OnTtl)
 
 PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
-	PHP_INI_ENTRY("nocopy.apcu_compat", "0", PHP_INI_SYSTEM, OnBool)
+	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
+	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
+	PHP_INI_ENTRY("nocopy.ttl", "0", PHP_INI_SYSTEM, OnTtl)
+	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
@@ -1592,21 +1590,12 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, nocopy_vk_on_verify)
 PHP_INI_END()
 
-static const zend_ini_entry_def ini_nocopy[] = {
-	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
-	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
-	PHP_INI_ENTRY("nocopy.ttl", "0", PHP_INI_SYSTEM, OnTtl)
-	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
+/* Read by apcu_* callers (Symfony's ApcuAdapter, Composer) before they use the apcu polyfill; nocopy itself ignores them. */
+static const zend_ini_entry_def ini_apc[] = {
+	PHP_INI_ENTRY("apc.enabled", "1", PHP_INI_SYSTEM, NULL)
+	PHP_INI_ENTRY("apc.enable_cli", "0", PHP_INI_SYSTEM, NULL)
 	{0}
 };
-
-static bool configured(const char *name)
-{
-	zend_string *n = zend_string_init(name, strlen(name), 0);
-	bool set = zend_get_configuration_directive(n) != NULL;
-	zend_string_release(n);
-	return set;
-}
 
 /* MINIT only: set an entry's value (and apply it) without zend_alter_ini_entry's runtime bookkeeping, which a request then undoes. */
 static void ini_put(const char *name, zend_string *value, bool apply)
@@ -1619,44 +1608,6 @@ static void ini_put(const char *name, zend_string *value, bool apply)
 	e->value = zend_string_copy(value);
 	if (old) {
 		zend_string_release_ex(old, 1);
-	}
-}
-
-/* apc.X with the APCu layer: an alias of nocopy.X, used only when set and nocopy.X is not. */
-static ZEND_INI_MH(OnAlias)
-{
-	char canon[32];
-	snprintf(canon, sizeof canon, "nocopy.%s", ZSTR_VAL(entry->name) + sizeof("apc.") - 1);
-	if (stage != ZEND_INI_STAGE_STARTUP || !configured(ZSTR_VAL(entry->name))) {
-		return SUCCESS; /* the default */
-	}
-	if (configured(canon)) {
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s is ignored, %s is set", ZSTR_VAL(entry->name), canon);
-	} else {
-		ini_put(canon, new_value, true);
-	}
-	return SUCCESS;
-}
-
-static const zend_ini_entry_def ini_apc[] = {
-	PHP_INI_ENTRY("apc.enabled", "1", PHP_INI_SYSTEM, OnBool)
-	PHP_INI_ENTRY("apc.enable_cli", "0", PHP_INI_SYSTEM, OnBool)
-	PHP_INI_ENTRY("apc.shm_size", "32M", PHP_INI_SYSTEM, OnAlias)
-	PHP_INI_ENTRY("apc.entries_hint", "4096", PHP_INI_SYSTEM, OnAlias)
-	PHP_INI_ENTRY("apc.ttl", "0", PHP_INI_SYSTEM, OnAlias)
-	PHP_INI_ENTRY("apc.serializer", "php", PHP_INI_SYSTEM, OnAlias)
-	{0}
-};
-
-/* ini_get() of an alias shows what is in effect. */
-static void sync_aliases(void)
-{
-	static const char *const names[] = {"shm_size", "entries_hint", "ttl", "serializer"};
-	for (int i = 0; i < 4; i++) {
-		char apc[32], canon[32];
-		snprintf(apc, sizeof apc, "apc.%s", names[i]);
-		snprintf(canon, sizeof canon, "nocopy.%s", names[i]);
-		ini_put(apc, zend_ini_str(canon, strlen(canon), false), false);
 	}
 }
 
@@ -1710,19 +1661,10 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
-	if (apcu_compat && zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.apcu_compat=1, but APCu is loaded: running without the apcu_* layer");
-		apcu_compat = false;
-	}
-	zend_register_ini_entries(ini_nocopy, module_number);
-	if (apcu_compat) {
+	if (!zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
 		zend_register_ini_entries(ini_apc, module_number);
 	}
 	resolve_serializer();
-	if (apcu_compat) {
-		sync_aliases();
-	}
-	nocopy_apc_on = ini_enabled && (ini_enable_cli || strcmp(sapi_module.name, "cli") != 0);
 
 	size_t need;
 	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
@@ -1741,9 +1683,8 @@ PHP_MINIT_FUNCTION(nocopy)
 		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
 		err = NULL;
 	}
-	const char *p = apcu_compat ? "apc" : "nocopy";
-	if (err == NOCOPY_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
-		zend_error(E_CORE_ERROR, "Unable to allocate %zu bytes of shared memory for cache structures. Either %s.shm_size is too small or %s.entries_hint too large", need, p, p);
+	if (err == NOCOPY_TOO_SMALL) {
+		zend_error(E_CORE_ERROR, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
 		return FAILURE;
 	}
 	if (nocopy_a) {
@@ -1758,17 +1699,12 @@ PHP_MINIT_FUNCTION(nocopy)
 		orig_handle_request = hr->internal_function.handler;
 		hr->internal_function.handler = nocopy_handle_request;
 	}
-	if (apcu_compat) {
-		nocopy_apcu_minit(module_number);
-	}
-#if PHP_VERSION_ID >= 80400
 	/* opcache's file cache stores frameless handler indices: another extension set must not reuse them */
 	size_t n = 0; /* zend_flf_count is not exported */
 	while (zend_flf_handlers && zend_flf_handlers[n]) {
 		n++;
 	}
 	zend_add_system_entropy("nocopy", "frameless", &n, sizeof(n));
-#endif
 	return SUCCESS;
 }
 

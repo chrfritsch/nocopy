@@ -1,4 +1,4 @@
-/* The PHP store on top of the arena: nocopy.c implements it, nocopy_apcu.c (apcu_*, APCUIterator) uses only this. */
+/* The PHP store on top of the arena, implemented in nocopy.c. */
 
 #ifndef NOCOPY_PHP_H
 #define NOCOPY_PHP_H
@@ -78,16 +78,6 @@ typedef enum {
 	NOCOPY_REFUSED, /* the value: warned, or an exception is pending */
 } nocopy_status;
 
-typedef struct {
-	time_t created, expires; /* expires 0: never */
-	size_t size;             /* bytes in the arena */
-	uint64_t seq;            /* insertion order */
-} nocopy_meta;
-
-/* key is borrowed from the arena: copy it to keep it. Must not call back into nocopy. */
-typedef void (*nocopy_scan_fn)(void *arg, const zend_string *key, const nocopy_meta *m);
-
-extern bool nocopy_apc_on;
 extern zend_long nocopy_ini_ttl;
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
@@ -98,19 +88,14 @@ bool nocopy_fetch(zend_string *key, zval *rv);
 void nocopy_fetch_multi(HashTable *keys, HashTable *out);
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
 bool nocopy_drop(zend_string *key);
-bool nocopy_info(zend_string *key, nocopy_meta *m); /* m may be NULL: exists */
-/* Every live entry, lock-free: may skip or repeat one a concurrent write moves. fn may allocate. */
-void nocopy_scan(nocopy_scan_fn fn, void *arg);
 /* Integers in place under the shard lock. add: creates it as delta (ttl) if missing; false if it is not an integer or there is no room. */
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
 /* Fetch, or run fci once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
 void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, double beta, zval *rv);
 
-void nocopy_clear_all(void); /* apcu_clear_cache: Valkey's keys under the prefix too */
+void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too */
 bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */
-
-void nocopy_apcu_minit(int module_number);
 
 /* ---- Valkey tier (nocopy_valkey.c): nocopy.valkey set. Commands take keys without the prefix; -1: unreachable or failed. ---- */
 extern bool nocopy_vk_on;
@@ -137,6 +122,6 @@ int nocopy_vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 int nocopy_vk_unlink(const char *k, size_t kl); /* 1: it existed */
 int nocopy_vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out); /* 0: not an integer */
 int nocopy_vk_cas(const char *k, size_t kl, int64_t old, int64_t nw);
-int nocopy_vk_clear(void); /* apcu_* functions, APCUIterator, APC_* constants */
+int nocopy_vk_clear(void);
 
 #endif

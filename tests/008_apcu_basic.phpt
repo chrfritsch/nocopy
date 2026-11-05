@@ -3,10 +3,11 @@ apcu_*: store/add/fetch/exists/delete, array forms, success flag
 --EXTENSIONS--
 nocopy
 --INI--
-nocopy.shm_name=/nocopy-t008
 apc.enable_cli=1
+nocopy.shm_name=/nocopy-t008
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 var_dump(apcu_enabled());
 var_dump(apcu_store('a', 1), apcu_fetch('a', $ok), $ok);
 var_dump(apcu_fetch('nope', $ok), $ok);

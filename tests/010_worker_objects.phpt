@@ -4,10 +4,10 @@ apcu_*: worker mode copies on fetch and tolerates re-entrant unserialize
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t010
-apc.enable_cli=1
 nocopy.request_scope=0
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 class Reentrant {
     public $v = 'x';
     public function __wakeup() { apcu_fetch('side'); apcu_store('side2', 1); }

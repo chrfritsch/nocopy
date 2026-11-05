@@ -7,6 +7,7 @@ nocopy.shm_name=/nocopy-t053
 nocopy.valkey=127.0.0.1:1
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 var_dump(nocopy_put('a', 1), nocopy_get('a', $hit), $hit, nocopy_delete('a'), apcu_inc('n'));
 ?>
 --CLEAN--

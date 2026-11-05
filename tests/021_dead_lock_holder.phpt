@@ -5,7 +5,7 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t021
-apc.shm_size=16M
+nocopy.shm_size=16M
 --FILE--
 <?php
 $v = str_repeat("x", 1500); // inline put: the copy runs under the shard lock

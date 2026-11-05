@@ -5,9 +5,9 @@ nocopy
 pcntl
 --INI--
 nocopy.shm_name=/nocopy-t009
-apc.enable_cli=1
 --FILE--
 <?php
+require __DIR__ . '/../apcu/apcu.php';
 class P { public $a = 1; public $list = []; public ?P $child = null; }
 $p = new P; $p->list = [1, 'two']; $p->child = new P;
 apcu_store('obj', $p);
@@ -33,7 +33,7 @@ $i = apcu_cache_info();
 var_dump(isset($i['num_hits'], $i['num_misses'], $i['cache_list'], $i['num_slots']), $i['num_entries'] > 0);
 var_dump(array_key_exists('cache_list', apcu_cache_info(true)));
 $m = apcu_sma_info();
-var_dump($m['num_seg'] === nocopy_stats()['shards'], $m['avail_mem'] > 0);
+var_dump($m['num_seg'] === 1, $m['avail_mem'] > 0);
 
 echo "-- atomic across workers\n";
 apcu_store('ctr', 0);
