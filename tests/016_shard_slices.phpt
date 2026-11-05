@@ -3,6 +3,7 @@ nocopy: shards own fixed slices; an entry must fit in its shard's slice, and get
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t016
 apc.shm_size=4M
 --FILE--
 <?php
@@ -14,6 +15,8 @@ var_dump(nocopy_put('big', str_repeat('b', 3000000))); // most of the slice: nee
 var_dump(strlen(nocopy_get('big')));
 var_dump(nocopy_put('huge', str_repeat('h', 5000000))); // more than the slice
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t016*')); ?>
 --EXPECT--
 int(1)
 bool(true)

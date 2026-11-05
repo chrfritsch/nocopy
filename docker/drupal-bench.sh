@@ -2,7 +2,7 @@
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, five cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm --shm-size=1g -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
 # Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"
-#   (--shm-size: nocopy-all keeps its 256M arena in /dev/shm)
+#   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
 CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"}
 B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
@@ -93,10 +93,12 @@ for cfg in $CONFIGS; do
 extension=igbinary
 apc.serializer=igbinary"; SET=stock ;;
     nocopy-fast) EXT="extension=/build/modules/nocopy.so
+nocopy.shm_name=/nocopy-bench
 nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fast ;;
     nocopy-fast-routes) EXT="extension=/build/modules/nocopy.so
+nocopy.shm_name=/nocopy-bench
 nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fastroutes ;;
@@ -111,6 +113,7 @@ extension=redis"; SET=redis ;;
 nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary
+nocopy.shm_name=/nocopy-bench
 nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   esac
   echo "== $cfg"

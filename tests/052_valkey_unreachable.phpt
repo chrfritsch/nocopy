@@ -5,6 +5,7 @@ nocopy
 --SKIPIF--
 <?php require __DIR__ . '/valkey_skip.inc'; ?>
 --INI--
+nocopy.shm_name=/nocopy-t052
 apc.enable_cli=1
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t052:
@@ -19,6 +20,8 @@ var_dump(nocopy_get('other'));         // the round trip finds the connection go
 sleep(2);                              // past the jittered retry pause
 var_dump(nocopy_get('k'));             // reconnected: local copies cleared, Valkey's value
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t052*')); ?>
 --EXPECT--
 NULL
 int(2)

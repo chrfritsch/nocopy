@@ -3,6 +3,7 @@ nocopy: keys that come back after an eviction start hot (ghost), so keys reused 
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t033
 apc.shm_size=4M
 --FILE--
 <?php
@@ -18,6 +19,8 @@ for ($cycle = 0; $cycle < 12; $cycle++) {
 }
 var_dump($hits / $n > 0.3, nocopy_stats()['ghost_hits'] > 1000); // without the ghost: 0 hits
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t033*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

@@ -25,7 +25,7 @@ echo other('var_dump(nocopy_shared_with(), nocopy_stats()["shm_name"]);', "''");
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t057*')); ?>
---EXPECT--
+--EXPECTF--
 {"s":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","e":[],"n":[[],{"a":[]}],"i":7} [1]
 array(2) {
   [0]=>
@@ -36,5 +36,6 @@ array(2) {
 }
 NULL
 1 1 host
-string(7) "process"
+%AWarning: PHP Startup: nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+string(4) "none"
 NULL

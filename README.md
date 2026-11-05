@@ -83,15 +83,15 @@ Requires PHP 8.3+ with `phpize` (e.g. the `php-dev` package), a C compiler, and 
 ```sh
 git clone <this repository> nocopy && cd nocopy
 phpize && ./configure && make
-php -d extension=$PWD/modules/nocopy.so -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
+php -d extension=$PWD/modules/nocopy.so -d nocopy.shm_name=/nocopy-try -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
 ```
 
 To enable it for your server, load it in `php.ini` (or a `conf.d` file):
 
 ```ini
 extension=/path/to/nocopy/modules/nocopy.so
+nocopy.shm_name=/nocopy       ; required: one cache for php-fpm and the CLI, kept over restarts
 nocopy.shm_size=128M
-;nocopy.shm_name=/nocopy      ; one cache for php-fpm and the CLI, kept over restarts
 ```
 
 Coming from APCu with code you cannot change yet: see [APCu layer](#apcu-layer).
@@ -113,7 +113,7 @@ nocopy_put_multiple(['a' => 1, 'b' => 2], ttl: 60);
 $report = nocopy_remember('report', fn (string $key) => buildReport(), ttl: 60);
 
 print_r(nocopy_stats());                         // hits, misses, evicted, expired, expunges, used, …
-echo nocopy_shared_with();                       // who sees these writes: process, host, valkey or none
+echo nocopy_shared_with();                       // who sees these writes: host, valkey or none
 ```
 
 `nocopy_remember($key, $callback, $ttl = 0, $beta = 1.0)`: on a miss, the first worker takes a lease and runs the callback.
@@ -166,7 +166,7 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | Setting | Default | Meaning |
 |---|---|---|
 | `nocopy.shm_size` | `32M` | Arena size. Alias (APCu layer): `apc.shm_size` |
-| `nocopy.shm_name` | (off) | Name of a POSIX shared-memory object, e.g. `/nocopy`: the CLI (Drush, cron), other fpm pools and restarted servers attach to the same cache ([below](#shared-by-name)). A process that cannot attach has no cache. Off: shared by php-fpm's or the server's own workers only, gone when it stops |
+| `nocopy.shm_name` | (none, required) | Name of the POSIX shared-memory object that holds the cache, e.g. `/nocopy`: php-fpm, the CLI (Drush, cron) and restarted servers attach to the same one ([below](#shared-by-name)). Not set, or a process that cannot attach: no cache (startup warning) |
 | `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias (APCu layer): `apc.ttl` |
 | `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias (APCu layer): `apc.entries_hint` |
 | `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
@@ -186,12 +186,12 @@ FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_
 
 ### Shared by name
 
-By default the cache is created when the server starts and shared only by its own workers: the CLI gets a private one,
-and a restart or `reload` starts cold. With `nocopy.shm_name=/nocopy` the first process creates `/dev/shm/nocopy.<build id>`
+The cache always lives in a named shared-memory object: with `nocopy.shm_name=/nocopy` the first process creates `/dev/shm/nocopy.<build id>`
 and every later one attaches to it at the same address, so a CLI script and php-fpm (or FrankenPHP) share one cache, both ways, and it survives restarts.
+Two sites that must not see each other's keys need different names.
 Readers attached this way still get zero-copy values (fpm, FrankenPHP classic mode); the CLI uses copy mode as before.
 
-- **All or nothing.** A process that cannot attach (another user's, `/dev/shm` full) logs a startup warning and has no cache: fetches miss,
+- **All or nothing.** A process without `nocopy.shm_name`, or one that cannot attach (another user's, `/dev/shm` full), logs a startup warning and has no cache: fetches miss,
   writes return `false`, as with Valkey down. Never a private cache instead: its writes and deletes would not reach the others.
   Errors in the values themselves (an object without `$serialize`) still throw.
 - **One user.** The object is created with mode `0600`, so every process must run as the user that created it: the one that starts php-fpm
@@ -202,7 +202,7 @@ Readers attached this way still get zero-copy values (fpm, FrankenPHP classic mo
 - **Memory is reserved up front.** The creator reserves the whole `nocopy.shm_size` in `/dev/shm`, so it counts as shared memory from the start
   and can never run out under a reader. In Docker, raise `--shm-size` (64M by default). Later processes get the creator's size.
 - One PID namespace: a dead lock holder is detected by its pid, so not across containers.
-- `nocopy_shared_with()` tells a process where its writes go: `process` (its own memory and its forks'), `host` (this name), `valkey`, or `none`.
+- `nocopy_shared_with()` tells a process where its writes go: `host` (this name), `valkey`, or `none`.
   `nocopy_stats()['shm_name']` is the object's name. The CLI attaches whatever `apc.enable_cli` says (that only switches the `apcu_*` functions).
 - Linux (CI: `docker/shm-name.sh` with php-fpm and FrankenPHP); macOS untested.
 
@@ -232,9 +232,9 @@ mode of that run because Valkey replaced the journal query that every request pa
 
 - The listener is started by the first process that needs it (and again by the next one if it dies: no heartbeat for 1 s). It pings
   Valkey every second; when its connection is lost or silent, nothing local is served until it is back, and it clears the local cache on
-  every (re)connect, since it cannot know what it missed. With `nocopy.shm_name` it outlives the servers: the local cache stays in sync and
-  warm across php-fpm or FrankenPHP restarts, and it exits when the segment is removed (`rm /dev/shm/<name>.*`). Without, it exits with the
-  last process of the server.
+  every (re)connect, since it cannot know what it missed. It outlives the servers: the local cache stays in sync and
+  warm across php-fpm or FrankenPHP restarts, and it exits when the segment is removed (`rm /dev/shm/<name>.*`). `nocopy.shm_name` is still
+  required: it holds the local copies.
 - Valkey unreachable: nocopy serves no local data (it could be stale), fetches miss and writes return `false`, with one warning per attempt,
   retried every 0.5-1.5 s (jittered) per worker. A connection found closed at the start of a request is reopened at once. Each connection
   subscribes to one idle channel, so Valkey's `timeout` does not close it, and uses TCP keepalive (60 s) against load balancers that drop idle
@@ -262,7 +262,7 @@ flowchart LR
     end
 ```
 
-- **Arena:** one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created at startup, so every forked worker sees it at the same address.
+- **Arena:** one POSIX shared-memory object (`nocopy.shm_name`), mapped at the same address in every process that attaches.
 - **Segments:** writes append to 64 KB–2 MB segments, bucketed by TTL. Expired entries are swept a few at a time on each write.
 - **Pins:** each worker marks the segments it holds values from. A segment is reused only when no worker pins it, so zero-copy values stay valid until the request ends.
 - **Merge:** when a shard is full, sparse segments are compacted. Failing that, the oldest are merged: recently read entries move forward and the rest are evicted, a few hundred at a time.

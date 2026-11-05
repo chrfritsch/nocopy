@@ -3,6 +3,7 @@ nocopy: nocopy.* sizing INI is canonical; apc.* are aliases with the APCu layer 
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t038
 apc.enable_cli=1
 nocopy.shm_size=8M
 apc.shm_size=4M
@@ -15,6 +16,8 @@ var_dump(ini_get('nocopy.ttl'), ini_get('apc.ttl'), ini_get('apc.entries_hint'))
 apcu_store('k', 1); // apc.ttl=7 through the alias
 var_dump(apcu_key_info('k')['ttl']);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t038*')); ?>
 --EXPECTF--
 %AWarning: %snocopy: apc.shm_size is ignored, nocopy.shm_size is set%A
 int(8388608)

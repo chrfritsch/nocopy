@@ -3,6 +3,7 @@ nocopy: leases live outside the cache: invisible to iterators and counts, untouc
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t035
 apc.enable_cli=1
 --FILE--
 <?php
@@ -18,6 +19,8 @@ var_dump($seen, nocopy_stats()['leases']);
 try { apcu_entry('c', function () { throw new Exception('x'); }); } catch (Exception) {}
 var_dump(nocopy_stats()['leases'], apcu_entry('c', fn() => 'ok'));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t035*')); ?>
 --EXPECT--
 array(7) {
   [0]=>

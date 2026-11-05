@@ -4,6 +4,7 @@ nocopy: 8 processes writing, deleting and reading their own keys under memory pr
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t015
 apc.shm_size=16M
 --FILE--
 <?php
@@ -38,6 +39,8 @@ foreach ($pids as $p) { pcntl_waitpid($p, $st); $failed += !pcntl_wifexited($st)
 $s = nocopy_stats();
 var_dump($failed, $s['used'] <= $s['size']);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t015*')); ?>
 --EXPECT--
 int(0)
 bool(true)

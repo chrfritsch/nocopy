@@ -4,6 +4,8 @@ nocopy.shm_name: 24 processes starting at once, over an arena its creator left u
 nocopy
 --SKIPIF--
 <?php if (!is_dir('/dev/shm')) die('skip needs /dev/shm'); ?>
+--INI--
+nocopy.shm_name=/nocopy-t060-parent
 --FILE--
 <?php
 $cmd = fn (string $code) => escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))

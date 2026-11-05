@@ -5,6 +5,7 @@ nocopy
 --SKIPIF--
 <?php require __DIR__ . '/valkey_skip.inc'; ?>
 --INI--
+nocopy.shm_name=/nocopy-t055
 apc.enable_cli=1
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t055:
@@ -35,6 +36,8 @@ var_dump(nocopy_get_multiple(['r2']));
 
 var_dump(apcu_store(['s1' => 1, 's2' => 2]), vk('GET', 't055:s2'), apcu_fetch(['s1', 's2']));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t055*')); ?>
 --EXPECT--
 bool(true)
 int(0)

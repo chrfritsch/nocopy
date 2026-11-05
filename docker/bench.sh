@@ -1,6 +1,6 @@
 #!/bin/sh
 # Inside the image: build, then bench/run.php groups x3 for APCu and nocopy; prints medians (APCu default serializer, nocopy copy, nocopy zero-copy).
-#   docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/bench.sh
+#   docker run --rm --shm-size=1g -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/bench.sh
 /src/docker/test.sh >/dev/null 2>&1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 R=/tmp/res; mkdir -p $R
@@ -8,8 +8,8 @@ C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=512M -d apc.entries
 for rep in 1 2 3; do
   for g in read write parallel mixed contend ttl; do
     php $C -d extension=$APCU /src/bench/run.php $g >> $R/apcu.jsonl 2>/dev/null
-    php $C -d extension=/build/modules/nocopy.so -d nocopy.apcu_compat=1 -d nocopy.request_scope=0 /src/bench/run.php $g >> $R/copy.jsonl 2>/dev/null
-    php $C -d extension=/build/modules/nocopy.so -d nocopy.apcu_compat=1 -d nocopy.request_scope=1 /src/bench/run.php $g >> $R/zero.jsonl 2>/dev/null
+    rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.apcu_compat=1 -d nocopy.request_scope=0 /src/bench/run.php $g >> $R/copy.jsonl 2>/dev/null
+    rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.apcu_compat=1 -d nocopy.request_scope=1 /src/bench/run.php $g >> $R/zero.jsonl 2>/dev/null
   done
 done
 php -n -r '

@@ -2,6 +2,8 @@
 nocopy: nocopy_remember() computes once, releases its lease on exceptions and recursion, refreshes early only by XFetch
 --EXTENSIONS--
 nocopy
+--INI--
+nocopy.shm_name=/nocopy-t030
 --FILE--
 <?php
 $n = 0;
@@ -21,6 +23,8 @@ nocopy_remember('e', $slow, 100);
 var_dump(nocopy_remember('e', $slow, 100), nocopy_remember('e', $slow, 100, 0.0)); // 20 ms vs 100 s left: never early
 var_dump(nocopy_remember('e', $slow, 100, 1e9), nocopy_get('e')); // a huge beta always refreshes
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t030*')); ?>
 --EXPECT--
 string(2) "a1"
 string(2) "a1"

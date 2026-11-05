@@ -776,21 +776,13 @@ static bool vk_connect(nocopy_vk *v)
 #define BEAT_MS 100   /* the listener's heartbeat */
 #define STALE_MS 1000 /* no heartbeat for this long: the listener is gone, the next worker starts one */
 
-/* Anonymous arena: every process using it holds the write end (fork), so the listener sees EOF once the last one is gone.
- * A named arena's listener lives as long as the name refers to its object. */
-static int life[2] = {-1, -1};
-
-void nocopy_vk_minit(bool named)
+void nocopy_vk_minit(void)
 {
 #ifdef HAVE_NOCOPY_TLS
 	if (nocopy_vk_on && vk_tls) {
 		tls_init();
 	}
 #endif
-	if (nocopy_vk_on && !named && pipe(life) == 0) {
-		fcntl(life[0], F_SETFD, FD_CLOEXEC);
-		fcntl(life[1], F_SETFD, FD_CLOEXEC);
-	}
 }
 
 /* Reads and applies what arrived. -1: the connection is gone or out of step, 0: nothing came, 1: something did. */
@@ -820,12 +812,12 @@ static ZEND_NORETURN void vk_listen(void)
 	nocopy_arena *a = nocopy_a;
 	uint32_t me = (uint32_t) getpid();
 	nocopy_vk v = {.fd = -1};
-	struct pollfd p[2] = {{.fd = -1, .events = POLLIN}, {.fd = life[0], .events = POLLIN}};
+	struct pollfd p = {.fd = -1, .events = POLLIN};
 	int64_t ping_at = 0, heard_by = 0;
 	for (;;) {
 		int64_t now = now_ms();
 		if (__atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) != me || !nocopy_arena_current()) {
-			_exit(0); /* replaced, or the named arena is gone */
+			_exit(0); /* replaced, or the arena is gone */
 		}
 		__atomic_store_n(&a->vk_beat, now, __ATOMIC_RELEASE);
 		vk_reply r;
@@ -840,21 +832,20 @@ static ZEND_NORETURN void vk_listen(void)
 				ping_at = now + 1000, heard_by = 0;
 			}
 		}
-		p[0].fd = v.fd;
+		p.fd = v.fd;
 		int wait = BEAT_MS;
 #ifdef HAVE_NOCOPY_TLS
 		if (v.ssl && SSL_pending((SSL *) v.ssl) > 0) {
 			wait = 0; /* decrypted already, the socket may stay quiet */
 		}
 #endif
-		int ready = poll(p, 2, wait);
-		if (ready > 0 && p[1].revents) {
-			_exit(0); /* the anonymous arena's last user is gone */
+		if (poll(&p, 1, wait) <= 0) {
+			p.revents = 0;
 		}
 		if (v.fd < 0) {
 			continue;
 		}
-		int got = p[0].revents || !wait ? vk_listen_read(&v) : 0;
+		int got = p.revents || !wait ? vk_listen_read(&v) : 0;
 		bool ok = got >= 0;
 		now = now_ms();
 		if (got > 0) {
@@ -890,16 +881,14 @@ static void close_inherited(void)
 		struct dirent *e;
 		while ((e = readdir(d))) {
 			int fd = atoi(e->d_name);
-			if (fd > 2 && fd != dirfd(d) && fd != life[0]) {
+			if (fd > 2 && fd != dirfd(d)) {
 				close(fd);
 			}
 		}
 		closedir(d);
 	} else {
 		for (int fd = 3; fd < 4096; fd++) {
-			if (fd != life[0]) {
-				close(fd);
-			}
+			close(fd);
 		}
 	}
 	int null = open("/dev/null", O_RDWR);

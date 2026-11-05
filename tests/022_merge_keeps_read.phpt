@@ -3,6 +3,7 @@ nocopy: a full cache evicts its oldest entries but keeps the ones read since the
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t022
 apc.shm_size=8M
 --FILE--
 <?php
@@ -17,6 +18,8 @@ for ($i = 0; $i < 100000; $i++) { // ~60M through 8M
 $s = nocopy_stats();
 var_dump($s['expunges'] > 50, $hot, nocopy_get('cold'), nocopy_get("k99999") === $v);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t022*')); ?>
 --EXPECT--
 bool(true)
 int(1000)

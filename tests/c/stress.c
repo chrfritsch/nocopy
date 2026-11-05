@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #define KEYS 600     /* per thread */
@@ -183,7 +184,11 @@ int main(int argc, char **argv)
 			b[i] ^= 1;
 		}
 	}
-	const char *err = nocopy_arena_create(mb << 20, 0, &(size_t){0});
+	char base[32];
+	nocopy_named nm;
+	snprintf(base, sizeof base, "/nocopy-stress-%d", (int) getpid());
+	const char *err = nocopy_arena_open(base, mb << 20, 0, 1, &(size_t){0}, &nm);
+	shm_unlink(nm.name); /* this run's only: the mapping stays */
 	if (err) {
 		fprintf(stderr, "%s\n", err);
 		return 2;

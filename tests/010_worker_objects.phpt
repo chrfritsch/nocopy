@@ -3,6 +3,7 @@ apcu_*: worker mode copies on fetch and tolerates re-entrant unserialize
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t010
 apc.enable_cli=1
 nocopy.request_scope=0
 --FILE--
@@ -21,6 +22,8 @@ for ($i = 0; $i < 100; $i++) apcu_store('churn', range(1, 1000));
 $s = nocopy_stats();
 var_dump($s['pinned_segments'], $s['used'] < 200000);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t010*')); ?>
 --EXPECT--
 bool(false)
 int(0)

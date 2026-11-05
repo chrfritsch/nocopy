@@ -3,6 +3,7 @@ nocopy: a value fetched in this request survives replacement for the rest of the
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t004
 nocopy.request_scope=1
 apc.shm_size=2M
 --FILE--
@@ -16,6 +17,8 @@ for ($i = 0; $i < 200; $i++) {       // far more than the arena holds: segments 
 var_dump($held === $orig);                  // the pinned segment was never reused
 var_dump(nocopy_stats()['pinned_segments']); // ...and exactly that one is held back
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t004*')); ?>
 --EXPECT--
 bool(true)
 int(1)

@@ -4,6 +4,7 @@ nocopy: readers never miss keys that a concurrent delete shifts back in the slot
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t018
 apc.shm_size=4M
 --FILE--
 <?php
@@ -45,6 +46,8 @@ foreach ($pids as $p) { pcntl_waitpid($p, $st); $failed += !pcntl_wifexited($st)
 $s = nocopy_stats();
 var_dump($failed, $s['entries'], $s['expunges']);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t018*')); ?>
 --EXPECT--
 int(0)
 int(3508)

@@ -3,6 +3,8 @@ nocopy: forked workers share one arena, concurrent writers do not lose keys
 --EXTENSIONS--
 nocopy
 pcntl
+--INI--
+nocopy.shm_name=/nocopy-t002
 --FILE--
 <?php
 $pids = [];
@@ -21,5 +23,7 @@ foreach (range(0, 3) as $w) for ($i = 0; $i < 500; $i++) {
 }
 var_dump($missing);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t002*')); ?>
 --EXPECT--
 int(0)

@@ -6,8 +6,8 @@ W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}; PORT=8099
 COMMON="-d apc.enable_cli=1 -d apc.shm_size=256M -d apc.entries_hint=20000 -d memory_limit=1G -d zend_extension=opcache -d opcache.enable_cli=1 -d opcache.validate_timestamps=0"
 URLS=(hello 'products?page=3' product/77 validate)
 run_cfg() { name=$1; shift
-  rm -rf $APP/var/cache/*
-  (cd $APP/public && PHP_CLI_SERVER_WORKERS=$W $PHP -n "$@" ${=COMMON} -S 127.0.0.1:$PORT index.php >/dev/null 2>&1 &)
+  rm -rf $APP/var/cache/* /dev/shm/nocopy-bench.*
+  (cd $APP/public && PHP_CLI_SERVER_WORKERS=$W $PHP -n "$@" -d nocopy.shm_name=/nocopy-bench ${=COMMON} -S 127.0.0.1:$PORT index.php >/dev/null 2>&1 &)
   sleep 2
   for u in $URLS; do curl -s -o /dev/null "127.0.0.1:$PORT/$u"; done   # build container + fill caches
   ab -q -n 2000 -c $C "127.0.0.1:$PORT/products?page=3" >/dev/null 2>&1   # warm opcache in every worker

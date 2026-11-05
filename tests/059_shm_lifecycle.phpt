@@ -4,6 +4,8 @@ nocopy.shm_name lifecycle: another build's unused arena is removed, one in use i
 nocopy
 --SKIPIF--
 <?php if (!is_dir('/dev/shm')) die('skip needs /dev/shm'); ?>
+--INI--
+nocopy.shm_name=/nocopy-t059-parent
 --FILE--
 <?php
 function child(string $base, string $code): string

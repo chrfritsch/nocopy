@@ -16,7 +16,7 @@ rc=0
 valkey-cli ping >/dev/null 2>&1 || valkey-server --daemonize yes --save '' --appendonly no >/dev/null
 rm -f /dev/shm/nocopy-drupal-test.*
 for mode in "nocopy.shm_name=/nocopy-drupal-test" "nocopy.shm_name=/nocopy-drupal-test nocopy.request_scope=1" "nocopy.valkey=127.0.0.1:6379" ""; do
-  echo "== mode: ${mode:-process only} $EXTRA"
+  echo "== mode: ${mode:-no shared cache} $EXTRA"
   only=; [ -z "$mode" ] && only="--filter NocopySharedTest"
   printf '%s\n' "extension=/build/modules/nocopy.so" "extension=igbinary" "nocopy.serializer=igbinary" "memory_limit=1G" $mode $EXTRA > /usr/local/etc/php/conf.d/zz-nocopy.ini
   rm -f /tmp/t.sqlite*

@@ -4,6 +4,7 @@ nocopy: writers killed mid-write leave nothing behind: no stuck segments, no liv
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t037
 apc.enable_cli=1
 apc.shm_size=16M
 --FILE--
@@ -33,6 +34,8 @@ $ok = $s["segments"] - $s["free_segments"] - $s["dead_segments"] <= $open;
 var_dump($s["used"], $s["entries"], $ok);
 if (!$ok) print_r($s);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t037*')); ?>
 --EXPECT--
 int(0)
 int(0)

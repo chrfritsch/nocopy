@@ -3,6 +3,7 @@ nocopy: nocopy_stats() counts entries evicted by merge and entries dropped by th
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t028
 apc.shm_size=4M
 --FILE--
 <?php
@@ -13,6 +14,8 @@ for ($i = 0; $i < 30000; $i++) nocopy_put("k$i", $v); // ~18M through 4M
 $s = nocopy_stats();
 var_dump($s['expired'], $s['evicted'] > 20000, $s['evicted'] + $s['expired'] + $s['entries']); // every store accounted for
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t028*')); ?>
 --EXPECT--
 int(100)
 bool(true)

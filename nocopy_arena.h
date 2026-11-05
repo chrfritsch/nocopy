@@ -144,10 +144,7 @@ extern uint64_t nocopy_self; /* this process's owner id */
 /* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
 void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
 
-/* Maps size bytes (rounded to the arena layout), shared with forks. hint: entries the slot tables should hold. NULL, or an error;
- * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
-extern const char NOCOPY_TOO_SMALL[];
-const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need);
+extern const char NOCOPY_TOO_SMALL[]; /* size cannot hold the slot tables (*need bytes) plus a few segments */
 
 typedef struct {
 	char name[64];  /* the POSIX shm object: base.<abi> */
@@ -155,7 +152,7 @@ typedef struct {
 } nocopy_named;
 
 /* Creates or attaches to the arena any process opening base with the same abi (the user's layout id) shares, at the same address.
- * An attacher gets the creator's size. Unused arenas of other builds under base are removed. NULL, or an error (then no arena). */
+ * hint: entries the slot tables should hold. An attacher gets the creator's size. Unused arenas of other builds under base are removed. NULL, or an error (then no arena). */
 const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint64_t abi, size_t *need, nocopy_named *out);
 void nocopy_arena_unhold(void);  /* the Valkey listener maps the arena without counting as its user */
 bool nocopy_arena_current(void); /* false: the named arena's name was removed or names another object now */

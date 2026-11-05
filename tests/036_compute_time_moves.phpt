@@ -3,6 +3,7 @@ nocopy: nocopy_remember's compute time survives a merge moving the entry (XFetch
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t036
 apc.shm_size=2M
 --FILE--
 <?php
@@ -21,6 +22,8 @@ $ran = false;
 nocopy_remember('k', function () use (&$ran) { $ran = true; return 2; }, 1000, 1e9); // the fresh value's compute time is ~0 ms
 var_dump($ran);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t036*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

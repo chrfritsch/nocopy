@@ -3,6 +3,7 @@ nocopy_get_multiple / nocopy_put_multiple, and the apcu_fetch / apcu_store array
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t045
 apc.enable_cli=1
 --FILE--
 <?php
@@ -17,6 +18,8 @@ var_dump(nocopy_get('p'), nocopy_get('q', $hit), $hit);
 var_dump(nocopy_put_multiple(['o' => new ArrayObject([1])], 0, true), nocopy_get('o') instanceof ArrayObject);
 var_dump(apcu_store(['c' => 1, 'd' => 2]), apcu_fetch(['c', 'd', 'nope']));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t045*')); ?>
 --EXPECT--
 bool(true)
 array(3) {

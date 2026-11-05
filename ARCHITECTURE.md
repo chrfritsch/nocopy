@@ -3,12 +3,11 @@ Layers, each using only the one below it:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, scans, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
 - `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`info`/`scan`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
 - `nocopy_apcu.c`: `apcu_*` and `APCUIterator`, only through `nocopy_php.h` (no locks, no arena fields); registered only with `nocopy.apcu_compat=1`.
-- No arena (`nocopy.shm_name` not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
+- No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
-Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so forked workers share it at the same address (pointers are valid everywhere); threads (ZTS) share it anyway.
-With `nocopy.shm_name` it is a POSIX shm object that unrelated processes attach to (`nocopy_arena_open`, `nocopy_arena.c`):
+Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
 - Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
 - Liveness: every process that maps it holds a shared `flock` on its object for life (fd kept open, inherited by forks, closed on exec). `LOCK_EX|LOCK_NB` succeeds only on an object no process maps.
 - Create: `O_EXCL`, then `LOCK_SH` and a check that the name still refers to this object (`hold`: same `st_dev`/`st_ino`; someone may have removed it as unused in between),
@@ -16,7 +15,7 @@ With `nocopy.shm_name` it is a POSIX shm object that unrelated processes attach 
 - Attach: map the header anywhere, wait up to 2 s for `magic`; while it is missing and the object is unused, its creator died: `remove_unused` unlinks it (under `LOCK_EX`, only if the name still refers to it) and we start over. Then check `abi`, `hold`, map at `base`.
   Test 060: 24 processes starting at once over an unfinished object all end in one arena; without the re-check in `hold`, most end up in orphans.
 - `collect` (Linux, `/dev/shm`): other builds' objects under the same base are removed when unused; the first one in use is reported (MINIT warns: those processes do not share this cache).
-- Any failure leaves `nocopy_a` NULL: the process has no cache (below), never an anonymous one, whose writes the others would not see.
+- No name, or any failure, leaves `nocopy_a` NULL: the process has no cache (below), never a private one, whose writes the others would not see.
 
 ## Layout
 
@@ -131,8 +130,7 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
   Header: `vk_beat` (monotonic ms, every poll round), `vk_pid`, `vk_live` (connected). Every (re)connect bumps `inval_gen` and clears the arena: what it missed is unknown.
 - `nocopy_vk_ready()` once per request (`synced`, reset in RINIT and per FrankenPHP request): command connection up, and the listener live (`vk_live` and a beat under 1 s old).
   No beat for 1 s: the first worker to swap `vk_beat` (CAS) spawns a new listener; workers wait up to the timeout for `vk_live`. A listener whose `vk_pid` is not its own exits. While not ready nothing local is served.
-- Lifetime: anonymous arena, a pipe from MINIT whose write end every process of the arena holds (fork, CLOEXEC): EOF when the last is gone. Named arena: the listener drops its shared flock (so the segment can still be collected)
-  and exits when `/dev/shm/<name>` no longer is its object (`nocopy_arena_current`, `stat`: fpm workers run as another user than the segment's owner).
+- Lifetime: the listener drops its shared flock (so the segment can still be collected) and exits when `/dev/shm/<name>` no longer is its object (`nocopy_arena_current`, `stat`: fpm workers run as another user than the segment's owner).
 - Push `invalidate [keys]`: `inval_gen++` (seq_cst) first, then `nocopy_drop_local` per key; a null list (FLUSHALL) clears the arena.
 - Fill guard: `vk_fetch` reads `inval_gen` before its `GET` and drops the copy it just stored if the counter moved. The listener bumps before it drops, so either the filler sees the bump or the drop comes after the store.
 - Writes: local first, then `SET` (an invalidation from elsewhere can only remove our copy, never be overtaken by it). `add`: `SET NX` first, local after. The listener gets our own write pushed too and drops the fresh copy: one refetch per write per server.

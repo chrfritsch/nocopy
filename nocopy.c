@@ -34,9 +34,9 @@ ZEND_DECLARE_MODULE_GLOBALS(nocopy)
 static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long nocopy_ini_ttl;
-static char *shm_name; /* nocopy.shm_name: attachable by any process, not only forks */
+static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
-static char shm_attached[64]; /* the object mapped; empty: an anonymous arena, or none (nocopy_a NULL: unavailable) */
+static char shm_attached[64]; /* the object mapped; empty: none (nocopy_a NULL: unavailable) */
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat;
 bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
@@ -1385,7 +1385,7 @@ PHP_FUNCTION(nocopy_remember)
 PHP_FUNCTION(nocopy_shared_with)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	RETURN_STRING(!nocopy_a ? "none" : nocopy_vk_on ? "valkey" : shm_attached[0] ? "host" : "process");
+	RETURN_STRING(!nocopy_a ? "none" : nocopy_vk_on ? "valkey" : "host");
 }
 
 PHP_FUNCTION(nocopy_stats)
@@ -1727,34 +1727,28 @@ PHP_MINIT_FUNCTION(nocopy)
 	size_t need;
 	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
 	const char *err;
-	if (shm_name) {
-		nocopy_named named;
-		err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named);
-		if (!err) {
-			memcpy(shm_attached, named.name, sizeof shm_attached);
-			if (named.other[0]) {
-				php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
-			}
-		} else if (err != NOCOPY_TOO_SMALL) {
-			/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
-			php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
-			err = NULL;
+	nocopy_named named;
+	if (!shm_name) {
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
+		err = NULL;
+	} else if (!(err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named))) {
+		memcpy(shm_attached, named.name, sizeof shm_attached);
+		if (named.other[0]) {
+			php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
 		}
-	} else {
-		err = nocopy_arena_create(arena_size, hint, &need);
+	} else if (err != NOCOPY_TOO_SMALL) {
+		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
+		err = NULL;
 	}
 	const char *p = apcu_compat ? "apc" : "nocopy";
 	if (err == NOCOPY_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
 		zend_error(E_CORE_ERROR, "Unable to allocate %zu bytes of shared memory for cache structures. Either %s.shm_size is too small or %s.entries_hint too large", need, p, p);
 		return FAILURE;
 	}
-	if (err) {
-		zend_error(E_CORE_ERROR, "nocopy: unable to create the %zu byte cache: %s", arena_size, err);
-		return FAILURE;
-	}
 	if (nocopy_a) {
 		arena_empty_init();
-		nocopy_vk_minit(shm_attached[0]);
+		nocopy_vk_minit();
 	}
 	detour = nocopy_vk_on || !nocopy_a;
 	pthread_atfork(NULL, NULL, atfork_child);

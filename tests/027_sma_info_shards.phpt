@@ -3,6 +3,7 @@ nocopy: apcu_sma_info() reports one segment per shard, with that slice's free bl
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t027
 apc.enable_cli=1
 apc.shm_size=32M
 --FILE--
@@ -23,6 +24,8 @@ foreach ($m['block_lists'] as $blocks) {
 }
 var_dump($full, $partial, $m['avail_mem'] < $m['num_seg'] * $m['seg_size'], array_keys(apcu_sma_info(true)));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t027*')); ?>
 --EXPECT--
 int(4)
 bool(true)

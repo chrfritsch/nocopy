@@ -8,6 +8,8 @@ require __DIR__ . '/valkey_skip.inc';
 if (!is_executable('/usr/bin/openssl') || !($vs = trim((string) shell_exec('command -v valkey-server || command -v redis-server')))) die('skip needs openssl and valkey-server');
 if (str_contains((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d nocopy.valkey=tls://localhost:1 -r "nocopy_get(1);" 2>&1'), 'no TLS')) die('skip built without OpenSSL');
 ?>
+--INI--
+nocopy.shm_name=/nocopy-t063
 --FILE--
 <?php
 $d = sys_get_temp_dir() . '/nocopy-t063';
@@ -28,7 +30,8 @@ usleep(300000);
 function child(string $url, array $ini, string $code): string
 {
     $ini += ['nocopy.valkey_tls_ca_file' => "$GLOBALS[d]/ca.crt", 'nocopy.valkey_tls_cert_file' => "$GLOBALS[d]/client.crt", 'nocopy.valkey_tls_key_file' => "$GLOBALS[d]/client.key"];
-    $args = '';
+    static $n = 0;
+    $args = ' -d nocopy.shm_name=/nocopy-t063-' . ++$n; // one arena per child: its listener keeps that child's settings
     foreach ($ini + ['nocopy.valkey' => $url, 'nocopy.valkey_prefix' => 't063:'] as $k => $v) {
         $args .= ' -d ' . escapeshellarg("$k=$v");
     }
@@ -55,6 +58,7 @@ usleep(200000);
 array_map('unlink', glob("$d/*"));
 @rmdir($d);
 ?>
+<?php array_map('unlink', glob('/dev/shm/nocopy-t063*')); ?>
 --EXPECTF--
 verified, client cert:
 int(7)

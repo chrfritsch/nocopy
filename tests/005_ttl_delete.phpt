@@ -2,6 +2,8 @@
 nocopy: TTL expiry and delete keep probe chains intact
 --EXTENSIONS--
 nocopy
+--INI--
+nocopy.shm_name=/nocopy-t005
 --FILE--
 <?php
 nocopy_put('short', 'x', 1);
@@ -26,6 +28,8 @@ for ($i = 0; $i < 3000; $i++) {
 var_dump($bad, nocopy_delete('nope'));
 try { nocopy_put('t', 1, -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t005*')); ?>
 --EXPECT--
 string(1) "x"
 NULL

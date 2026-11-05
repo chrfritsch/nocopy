@@ -4,6 +4,7 @@ nocopy: a worker that dies mid-request does not pin memory forever
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t006
 apc.shm_size=4M
 nocopy.request_scope=1
 --FILE--
@@ -22,5 +23,7 @@ for ($i = 0; $i < 400; $i++) {               // needs the dead child's pins gone
 }
 var_dump($ok);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t006*')); ?>
 --EXPECT--
 int(400)

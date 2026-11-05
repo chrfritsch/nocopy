@@ -4,6 +4,7 @@ nocopy: concurrent misses run the callback once (nocopy_remember, apcu_entry); a
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t031
 apc.enable_cli=1
 --FILE--
 <?php
@@ -31,6 +32,8 @@ $t = microtime(true);
 var_dump(nocopy_remember('d', fn() => 'mine'), microtime(true) - $t < 2);
 pcntl_waitpid($p, $st);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t031*')); ?>
 --EXPECT--
 remember: 8 ok, 1 call
 apcu_entry: 8 ok, 1 call

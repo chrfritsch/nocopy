@@ -3,6 +3,7 @@ nocopy: values round-trip and arrays come back immutable
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t001
 nocopy.request_scope=1
 --FILE--
 <?php
@@ -24,6 +25,8 @@ $a = nocopy_get('k'); $a['a'] = 99;
 var_dump(nocopy_get('k')['a']);
 try { nocopy_put('o', new stdClass); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t001*')); ?>
 --EXPECTF--
 bool(true)
 bool(true)

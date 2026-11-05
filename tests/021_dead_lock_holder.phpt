@@ -4,6 +4,7 @@ nocopy: a writer killed inside a lock does not deadlock the others (even while i
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t021
 apc.shm_size=16M
 --FILE--
 <?php
@@ -22,6 +23,8 @@ for ($round = 0; $round < 30; $round++) {
 }
 var_dump(nocopy_get("b1999") === $v, nocopy_stats()['lock_steals'] > 0);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t021*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

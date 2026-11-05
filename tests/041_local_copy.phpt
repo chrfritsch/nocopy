@@ -3,6 +3,7 @@ nocopy: copy mode keeps private copies for the request; modifying, overwriting o
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t041
 nocopy.request_scope=0
 nocopy.local_size=64K
 --FILE--
@@ -32,6 +33,8 @@ $bad = 0;
 for ($r = 0; $r < 3; $r++) for ($i = 0; $i < 300; $i++) $bad += nocopy_get("k$i") !== array_fill(0, 20, $i);
 var_dump($bad);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t041*')); ?>
 --EXPECT--
 bool(true)
 array(3) {

@@ -3,6 +3,7 @@ nocopy: frameless calls (PHP 8.4+) behave like the framed ones: errors name the 
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t040
 apc.enable_cli=1
 --FILE--
 <?php
@@ -20,6 +21,8 @@ try { nocopy_get(1); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nocopy_put('x', 1, '5'); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nocopy_put('x', new \stdClass); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t040*')); ?>
 --EXPECT--
 array(0) {
 }

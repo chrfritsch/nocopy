@@ -3,6 +3,7 @@ nocopy: random puts/deletes of mixed sizes agree with a PHP array model; held va
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t011
 apc.shm_size=4M
 nocopy.request_scope=1
 --FILE--
@@ -42,6 +43,8 @@ foreach ($model as $k => $v) if (($g = nocopy_get($k)) !== $v && ($g !== null ||
 $s = nocopy_stats();
 var_dump($bad, $s['entries'] <= count($model), $s['used'] <= $s['size']);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t011*')); ?>
 --EXPECT--
 int(0)
 bool(true)

@@ -12,10 +12,6 @@
 #include <sys/file.h>
 #include <unistd.h>
 
-#ifndef MAP_ANONYMOUS
-# define MAP_ANONYMOUS MAP_ANON
-#endif
-
 nocopy_arena *nocopy_a;
 char *nocopy_seg_base;
 unsigned nocopy_seg_shift;
@@ -842,22 +838,6 @@ static void init(nocopy_arena *p, const layout *l)
 		}
 	}
 	p->start_time = time(NULL);
-}
-
-const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need)
-{
-	layout l;
-	const char *err = plan(&l, size, hint, need);
-	if (err) {
-		return err;
-	}
-	void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (p == MAP_FAILED) {
-		return "mmap failed";
-	}
-	init(p, &l); /* zero-filled by the kernel */
-	adopt(p);
-	return NULL;
 }
 
 /* ---- named arenas ---- */

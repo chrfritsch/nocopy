@@ -4,6 +4,7 @@ nocopy: zero-copy values in $_SESSION stay pinned while the session is written a
 nocopy
 session
 --INI--
+nocopy.shm_name=/nocopy-t012
 apc.shm_size=4M
 nocopy.request_scope=1
 session.use_cookies=0
@@ -35,6 +36,8 @@ $_SESSION['a'] = new Evil;
 $_SESSION['b'] = nocopy_get('big');
 echo "done\n";
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t012*')); ?>
 --EXPECT--
 done
 intact

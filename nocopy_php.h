@@ -125,7 +125,7 @@ void nocopy_vk_mshutdown(void);
 bool nocopy_vk_ready(void); /* connected and this request's pushes applied; false: serve no local data */
 void nocopy_vk_new_request(void);
 void nocopy_vk_close(nocopy_vk *v);
-void nocopy_vk_minit(bool named); /* after the arena: the anonymous arena's lifeline for its listener */
+void nocopy_vk_minit(void); /* after the arena */
 uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
 int nocopy_vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals); /* one round trip; vals[i]: a copy, NULL if missing */
 typedef struct {

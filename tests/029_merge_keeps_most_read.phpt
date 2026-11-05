@@ -3,6 +3,7 @@ nocopy: when the read entries of a merge do not all fit, the most-read ones surv
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t029
 apc.shm_size=4M
 --FILE--
 <?php
@@ -18,6 +19,8 @@ $f = 0;
 for ($i = 150; $i < 6000; $i += 300) $f += nocopy_get("f$i") === $v;
 var_dump(nocopy_stats()['evicted'] > 1000, $f); // the single read bit kept 11 of 20
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t029*')); ?>
 --EXPECT--
 bool(true)
 int(20)

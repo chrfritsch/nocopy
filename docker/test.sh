@@ -10,7 +10,7 @@ cp -r /src/tests /build/tests
 command -v valkey-server >/dev/null && ! valkey-cli ping >/dev/null 2>&1 && valkey-server --daemonize yes --save '' --appendonly no >/dev/null
 export NOCOPY_SO=/build/modules/nocopy.so
 TEST_PHP_EXECUTABLE=$(command -v php) NO_INTERACTION=1 php /usr/local/lib/php/build/run-tests.php \
-  -n -d extension=/build/modules/nocopy.so -d nocopy.apcu_compat=1 -q "${@:-/build/tests}" 2>&1 | grep -E "^(FAIL|SKIP|BORK)|Tests (passed|failed|skipped)" || true
+  -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-runner -d nocopy.apcu_compat=1 -q "${@:-/build/tests}" 2>&1 | grep -E "^(FAIL|SKIP|BORK)|Tests (passed|failed|skipped)" || true
 bad=0
 for f in /build/tests/*.diff; do [ -f "$f" ] && { echo "== $f"; head -20 "$f"; bad=1; }; done
 exit $bad

@@ -4,7 +4,7 @@
 set -e
 /src/docker/test.sh >/dev/null 2>&1 || { /src/docker/test.sh; exit 1; }
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
-run() { echo "== $*"; php -n "$@" -d extension=/build/modules/nocopy.so -d zend.assertions=1 /src/symfony/tests/smoke.php /sf; }
+run() { echo "== $*"; rm -f /dev/shm/nocopy-sf.*; php -n "$@" -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-sf -d zend.assertions=1 /src/symfony/tests/smoke.php /sf; }
 run -d nocopy.apcu_compat=1 -d apc.enable_cli=1
 run
 run -d extension="$APCU"

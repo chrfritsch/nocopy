@@ -4,6 +4,7 @@ nocopy.serializer=igbinary: objects, __serialize, cycles and references round-tr
 nocopy
 igbinary
 --INI--
+nocopy.shm_name=/nocopy-t042
 apc.enable_cli=1
 nocopy.serializer=igbinary
 --FILE--
@@ -26,6 +27,8 @@ $o = new ArrayObject(array_fill(0, 1000, str_repeat('x', 100)));
 apcu_store('dedup', $o);
 foreach (new APCUIterator('/^dedup$/') as $e) var_dump($e['mem_size'] < 20000); // igbinary dedups strings, serialize() would need ~110 KB
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t042*')); ?>
 --EXPECT--
 string(8) "igbinary"
 bool(true)

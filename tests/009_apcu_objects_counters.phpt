@@ -4,6 +4,7 @@ apcu_*: objects via serialization, inc/dec/cas, entry, cache_info, atomic counte
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t009
 apc.enable_cli=1
 --FILE--
 <?php
@@ -45,6 +46,8 @@ foreach (range(1, 4) as $w) {
 foreach ($pids as $p2) pcntl_waitpid($p2, $st);
 var_dump(apcu_fetch('ctr'));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t009*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

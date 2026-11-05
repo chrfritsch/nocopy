@@ -4,6 +4,7 @@
 #include "../../nocopy_arena_int.h"
 #include <assert.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -67,7 +68,12 @@ static bool found(nocopy_ctx *c, const char *k)
 
 int main(void)
 {
-	assert(!nocopy_arena_create(4 << 20, N, &(size_t){0}));
+	char base[32];
+	nocopy_named nm;
+	snprintf(base, sizeof base, "/nocopy-repair-%d", (int) getpid());
+	const char *err = nocopy_arena_open(base, 4 << 20, N, 1, &(size_t){0}, &nm);
+	shm_unlink(nm.name); /* this run's only: the mapping stays */
+	assert(!err);
 	nocopy_ctx c = {.slot = -1};
 	assert(nocopy_claim(&c));
 	nocopy_shard *sh = &nocopy_a->shards[0];

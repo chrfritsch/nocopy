@@ -3,6 +3,7 @@ apcu_*: store/add/fetch/exists/delete, array forms, success flag
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t008
 apc.enable_cli=1
 --FILE--
 <?php
@@ -29,6 +30,8 @@ try { apcu_store('k', 1, -5); } catch (ValueError $e) { echo $e->getMessage(), "
 echo "-- clear\n";
 var_dump(apcu_clear_cache(), apcu_fetch('a', $ok), $ok);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t008*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

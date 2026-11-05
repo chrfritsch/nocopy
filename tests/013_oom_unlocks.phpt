@@ -4,6 +4,7 @@ nocopy: a process running out of memory in apcu_cache_info() does not leave the 
 nocopy
 pcntl
 --INI--
+nocopy.shm_name=/nocopy-t013
 apc.enable_cli=1
 apc.shm_size=32M
 --FILE--
@@ -20,6 +21,8 @@ pcntl_alarm(5); // a stuck lock spins forever: die instead
 var_dump(apcu_store('after', 1));
 var_dump(count(apcu_cache_info()['cache_list']));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t013*')); ?>
 --EXPECTF--
 %Abool(true)
 int(60001)

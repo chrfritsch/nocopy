@@ -3,6 +3,7 @@ nocopy: the slot table is fixed; when entries outnumber it the oldest are evicte
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t017
 apc.shm_size=8M
 --FILE--
 <?php
@@ -13,6 +14,8 @@ for ($i = $n - 1000; $i < $n; $i++) $recent += nocopy_get("k$i") === $i;
 $s = nocopy_stats();
 var_dump($s['slots'], $s['entries'] < $n, $s['expunges'] > 0, $recent, nocopy_get('k0'));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t017*')); ?>
 --EXPECT--
 int(32768)
 bool(true)

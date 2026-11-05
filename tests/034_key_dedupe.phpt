@@ -3,6 +3,7 @@ nocopy: equal array keys are stored once per value and copied out once; relocati
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t034
 apc.shm_size=2M
 nocopy.request_scope=0
 --FILE--
@@ -33,6 +34,8 @@ for ($i = 0; $i < 3000; $i++) { // churn: merges move 'm' (read often) forward
 }
 var_dump(nocopy_get('m') === $small, nocopy_stats()['evacuated_bytes'] > 0);
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t034*')); ?>
 --EXPECT--
 bool(true)
 bool(true)

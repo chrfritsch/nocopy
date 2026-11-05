@@ -3,6 +3,7 @@ nocopy: worker mode (request_scope=0) fetches private copies and holds no pins
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t007
 nocopy.request_scope=0
 --FILE--
 <?php
@@ -17,6 +18,8 @@ $s = nocopy_stats();
 var_dump($s['used'] < 300000, $s['pinned_segments'], $held === $orig);
 var_dump(function_exists('nocopy_scope'), function_exists('nocopy_checkpoint'));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t007*')); ?>
 --EXPECT--
 bool(false)
 bool(true)

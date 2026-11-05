@@ -10,7 +10,7 @@ All cache bins and tag checksums live in shared memory, so cache reads and tag c
 The nocopy extension must be loaded in php-fpm and in the CLI, both with the same shared cache in php.ini:
 
 ```ini
-nocopy.shm_name=/nocopy        ; one server: Drush and cron attach to php-fpm's memory
+nocopy.shm_name=/nocopy        ; required: Drush and cron attach to php-fpm's memory
 ;nocopy.valkey=host:6379       ; several servers: Valkey is the shared cache, each server keeps local copies
 ```
 
@@ -55,7 +55,7 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 Each process checks on its first cache access that it shares the cache with the rest of the site (`nocopy_shared_with()` is `host` or
 `valkey`) and throws otherwise, naming the cause, instead of serving what other processes already changed. php-fpm and the CLI usually
 read different php.ini files, so set it in both. Run Drush and cron as the user that starts php-fpm (the shared memory object is readable
-by its creator only). Writes and invalidations by Drush and cron then reach web requests directly, and with `nocopy.shm_name` the cache
+by its creator only). Writes and invalidations by Drush and cron then reach web requests directly, and the cache
 survives php-fpm restarts.
 
 **Several web servers** (`nocopy.valkey`): all bins and tag checksums are shared through Valkey, each server keeps zero-copy local copies.
@@ -65,8 +65,8 @@ deleted (as in core), so without a limit Valkey only grows.
 
 **Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
-It uses `cache.backend.nocopy_fast`, which needs no shared cache (chainedfast already checks the database on every request) and falls back to
-the database alone where the extension is not loaded, like core's APCu fast layer. Works on several web servers.
+It uses `cache.backend.nocopy_fast`, which needs no Valkey (chainedfast already checks the database on every request) and falls back to
+the database alone where the extension is not loaded or `nocopy.shm_name` is not set, like core's APCu fast layer. Works on several web servers.
 
 **Upgrading from a version with the journal:** `drush updb` drops the `nocopy_journal` table; `$settings['nocopy_shared']` is no longer read.
 

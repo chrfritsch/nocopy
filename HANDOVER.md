@@ -260,6 +260,11 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   kill -9 sees the missed change, churn 0 misses). Suite 8.3/8.4/8.5/ZTS 8.4 (+ Valkey tests on ZTS with redis-server)/amd64, tests/c TSAN, stress 15, Drupal 4 modes: clean.
   Ceiling: the writer's own server refetches its write once (the listener cannot tell own writes from others). With php-fpm as PID 1 a listener that exits is reaped by
   fpm, which logs "unknown child" (only after kill or segment removal).
+- Anonymous arena dropped (2026-11-05, "fresh start" #3). `nocopy.shm_name` is required; unset = no cache + startup warning (user's choice over a
+  default name: a default would silently share one cache between two sites of the same user). Gone: `nocopy_arena_create`, the listener's lifeline pipe,
+  `nocopy_shared_with()` = `process`. Every test has its own name (`/nocopy-tNNN`, removed in `--CLEAN--`), run-tests itself gets `/nocopy-runner`
+  (its --EXTENSIONS-- probe sees no test INI); tests/c open a named arena and unlink it at once. Benches/CI scripts set a name and remove it per run.
+  Price: in Docker every arena counts against `/dev/shm` (64M default), benches with 512M need `--shm-size=1g`; a CLI without the name warns at startup.
   Drupal bench, nocopy-valkey, 16 workers (Docker, one run before, two after): anonymous / 12,586 vs 12,920 / 12,588 req/s, logged-in / 1,235 vs 1,358 / 1,273,
   logged-in node 1,101 vs 1,210 / 972, editor-loop readers 765 vs 812 / 751, first request after fpm restart 166 vs 188 / 184 ms: within run-to-run noise.
   The gain is structural: 16 tracking connections and 16 copies of every push per server became 1. The bench's serializer probe now refetches (own write dropped).

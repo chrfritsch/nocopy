@@ -29,9 +29,8 @@ function nocopy_put_multiple(array $values, int $ttl = 0, bool $serialize = fals
 function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
 
 /**
- * Who sees this process's writes: "process" (its own memory, shared with the processes forked from the same parent, such as
- * php-fpm's workers), "host" (every process on this machine that attached to nocopy.shm_name), "valkey" (every process on the
- * same nocopy.valkey and prefix), "none" (nocopy.shm_name could not be attached: nothing is kept or served).
+ * Who sees this process's writes: "host" (every process on this machine that attached to nocopy.shm_name), "valkey" (every process on the
+ * same nocopy.valkey and prefix), "none" (nocopy.shm_name not set or not attached: nothing is kept or served).
  */
 function nocopy_shared_with(): string {}
 

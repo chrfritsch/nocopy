@@ -3,6 +3,7 @@ nocopy: expired entries go away segment by segment without memory pressure, and 
 --EXTENSIONS--
 nocopy
 --INI--
+nocopy.shm_name=/nocopy-t014
 apc.shm_size=4M
 --FILE--
 <?php
@@ -20,6 +21,8 @@ var_dump($after['used'] < $before['used'] * 0.55);
 var_dump($inuse($after) <= intdiv($inuse($before), 2) + 2);
 var_dump(nocopy_get('perm399') === str_repeat('p', 1000), nocopy_get('tmp0'));
 ?>
+--CLEAN--
+<?php array_map('unlink', glob('/dev/shm/nocopy-t014*')); ?>
 --EXPECT--
 int(464)
 bool(true)
