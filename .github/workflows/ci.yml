@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build --build-arg PHP=${{ matrix.php }} -t nocopy-linux docker
       - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh
+      # single host: the core without nocopy_valkey.c
+      - run: docker run --rm -e NOCOPY_CONFIGURE=--disable-nocopy-valkey -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh
       # release build, loop: races show up only sometimes (see ARCHITECTURE.md invariants)
       - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30
       # the arena alone, from threads: plain and ThreadSanitizer

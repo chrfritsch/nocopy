@@ -2,6 +2,7 @@ Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
 - `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
+- `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_build`/`publish`/`fetch_local`/`serialize`/`unserialize`).
 - `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
@@ -115,8 +116,8 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 
 ## Valkey tier (`nocopy_valkey.c`)
 
-`nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` routes `nocopy_store`/`fetch`/`drop`/`info`/`add_long`/`cas_long`,
-`compute` and `nocopy_clear_all` through it (`vk_*`); `nocopy_valkey.c` owns the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
+`nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` hands `nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`, the multi variants,
+`compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy.c`); `nocopy_valkey.c` owns the routing, the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
 - TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): one `SSL_CTX` from MINIT, shared by forks and threads; our own BIO (`send(MSG_NOSIGNAL)`: OpenSSL's socket BIO would SIGPIPE the worker);
   `io_read`/`io_write` map WANT_READ/WANT_WRITE to the poll event; a forked child `SSL_free`s its copy without close_notify; the listener polls with 0 ms while `SSL_pending`. Errors leave nothing in OpenSSL's per-thread queue (PHP's openssl functions read it).
 - A command connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).

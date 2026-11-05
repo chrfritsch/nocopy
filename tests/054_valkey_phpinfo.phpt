@@ -2,6 +2,8 @@
 nocopy.valkey: phpinfo() does not show the password
 --EXTENSIONS--
 nocopy
+--SKIPIF--
+<?php if (ini_get('nocopy.valkey') === false) die('skip built without the Valkey tier'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t054
 nocopy.valkey=tcp://app:secret@127.0.0.1:1

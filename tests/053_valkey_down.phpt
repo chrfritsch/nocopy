@@ -2,6 +2,8 @@
 nocopy.valkey: no server means misses and failed writes, with one warning per second
 --EXTENSIONS--
 nocopy
+--SKIPIF--
+<?php if (ini_get('nocopy.valkey') === false) die('skip built without the Valkey tier'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t053
 nocopy.valkey=127.0.0.1:1

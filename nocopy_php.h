@@ -34,7 +34,7 @@ typedef struct {
 	zval v;
 } nocopy_local;
 
-/* Valkey connection of this worker (nocopy_valkey.c). */
+/* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
 typedef struct {
 	int fd;          /* -1: not connected */
 	void *ssl;       /* SSL *, with TLS */
@@ -96,7 +96,19 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too */
 bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */
 
-/* ---- Valkey tier (nocopy_valkey.c): nocopy.valkey set. Commands take keys without the prefix; -1: unreachable or failed. ---- */
+/* ---- the local store's pieces, for the Valkey tier ---- */
+#define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
+#define ENTRY_IGBINARY 2   /* with ENTRY_SERIALIZED: written by igbinary */
+/* Sizes and fills the value's entry. NOCOPY_OK: p holds it, ready for nocopy_publish(). p NULL (no arena): only the checks. */
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o);
+nocopy_status nocopy_publish(nocopy_put *p, bool add_only);
+bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
+bool nocopy_serialize(zval *val, zval *out, bool *igb);
+bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags);
+void nocopy_mark_failed(HashTable *failed, zend_string *key);
+
+/* ---- Valkey tier (nocopy_valkey.c): with nocopy.valkey set, the cache of record behind the arena. Store ops need an arena. ---- */
+#ifdef HAVE_NOCOPY_VALKEY
 extern bool nocopy_vk_on;
 ZEND_INI_MH(nocopy_vk_on_url);
 ZEND_INI_DISP(nocopy_vk_display);
@@ -105,22 +117,35 @@ ZEND_INI_MH(nocopy_vk_on_verify);
 extern char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
 ZEND_INI_MH(nocopy_vk_on_prefix);
 ZEND_INI_MH(nocopy_vk_on_timeout);
+void nocopy_vk_minit(void); /* after the arena */
 void nocopy_vk_mshutdown(void);
-bool nocopy_vk_ready(void); /* connected and this request's pushes applied; false: serve no local data */
 void nocopy_vk_new_request(void);
 void nocopy_vk_close(nocopy_vk *v);
-void nocopy_vk_minit(void); /* after the arena */
 uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
-int nocopy_vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals); /* one round trip; vals[i]: a copy, NULL if missing */
-typedef struct {
-	const char *k, *v;
-	size_t kl, vl;
-} nocopy_vk_kv;
-int nocopy_vk_mset(uint32_t n, const nocopy_vk_kv *kv, int64_t pxat, int8_t *res); /* pipelined SETs; res[i] 1 stored, -1 failed */
-int nocopy_vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx); /* 0: nx and it exists */
-int nocopy_vk_unlink(const char *k, size_t kl); /* 1: it existed */
-int nocopy_vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out); /* 0: not an integer */
-int nocopy_vk_cas(const char *k, size_t kl, int64_t old, int64_t nw);
-int nocopy_vk_clear(void);
+nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
+bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
+void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out);
+bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
+bool nocopy_vk_drop(zend_string *key);
+bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
+bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw);
+void nocopy_vk_clear(void); /* Valkey's keys under the prefix */
+#else
+/* --disable-nocopy-valkey: never on, so the store ops below are never reached */
+#define nocopy_vk_on false
+static inline void nocopy_vk_minit(void) {}
+static inline void nocopy_vk_mshutdown(void) {}
+static inline void nocopy_vk_new_request(void) {}
+static inline void nocopy_vk_close(nocopy_vk *v) { (void) v; }
+static inline uint32_t nocopy_vk_listener(void) { return 0; }
+static inline nocopy_status nocopy_vk_store(zend_string *k, zval *v, const nocopy_opts *o, uint32_t u) { (void) k, (void) v, (void) o, (void) u; return NOCOPY_NO_ROOM; }
+static inline bool nocopy_vk_fetch(zend_string *k, zval *rv, time_t *e, uint32_t *d) { (void) k, (void) e, (void) d; ZVAL_NULL(rv); return false; }
+static inline void nocopy_vk_fetch_multi(HashTable *k, HashTable *o) { (void) k, (void) o; }
+static inline bool nocopy_vk_store_multi(HashTable *v, const nocopy_opts *o, HashTable *f) { (void) v, (void) o, (void) f; return false; }
+static inline bool nocopy_vk_drop(zend_string *k) { (void) k; return false; }
+static inline bool nocopy_vk_add_long(zend_string *k, zend_long d, zend_long t, zend_long *o) { (void) k, (void) d, (void) t; *o = 0; return false; }
+static inline bool nocopy_vk_cas_long(zend_string *k, zend_long o, zend_long n) { (void) k, (void) o, (void) n; return false; }
+static inline void nocopy_vk_clear(void) {}
+#endif
 
 #endif

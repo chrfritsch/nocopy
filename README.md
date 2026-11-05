@@ -86,6 +86,8 @@ phpize && ./configure && make
 php -d extension=$PWD/modules/nocopy.so -d nocopy.shm_name=/nocopy-try -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
 ```
 
+`./configure --disable-nocopy-valkey` builds the single-host cache only: no Valkey tier, no OpenSSL, no `nocopy.valkey*` settings.
+
 To enable it for your server, load it in `php.ini` (or a `conf.d` file):
 
 ```ini
@@ -243,7 +245,7 @@ mode of that run because Valkey replaced the journal query that every request pa
   TLS 1.2+, the server certificate verified against the system store or `nocopy.valkey_tls_ca_file`, with SNI and the host name (or IP)
   checked; client certificates for mutual TLS. The files are read once at startup (by php-fpm's master, so the key may be readable by root
   only); an unreadable one is a startup warning and every connection fails with it. Built when OpenSSL (1.1.1+, headers and pkg-config)
-  is found; a build without it says so on connect. An optional nocopy module for Valkey is planned to save round trips.
+  is found; a build without it says so on connect. A build with `--disable-nocopy-valkey` has no Valkey tier at all. An optional nocopy module for Valkey is planned to save round trips.
 - Local only: `nocopy_stats()` and the single flight of `nocopy_remember` (per server).
 - Valkey evicts by its own `maxmemory-policy`; an evicted key is a miss everywhere. The Drupal module is built for `volatile-lfu` ([details](drupal/README.md)).
 - Values are stored with `nocopy.serializer` (integers as plain numbers), so all servers need the same serializer.

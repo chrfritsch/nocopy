@@ -47,6 +47,7 @@ sometimes saw a truncated `nocopy.c`: rerun.
   the writer's own server refetches its write once (the listener cannot tell own writes apart).
 - No per-entry hit counters (a shared write per read). Slot tables fixed, not growable (no stall; price: tiny entries evict by count, raise `nocopy.entries_hint`).
 - No `nocopy.ttl` default: it expired Drupal's cache tag tokens. Callers pass `$ttl`.
+- Valkey tier behind `nocopy_vk_*`, compiled out with `--disable-nocopy-valkey` (CI runs the suite both ways): the core builds and ships without it; default stays on.
 - Code comments: one short line (user preference).
 
 ## Measured and rejected

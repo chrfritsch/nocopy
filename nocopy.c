@@ -52,8 +52,6 @@ typedef struct {
 	zval val;
 } php_entry;
 
-#define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
-#define ENTRY_IGBINARY 2   /* with ENTRY_SERIALIZED: written by igbinary */
 /* nocopy_entry.user: nocopy_remember's compute time, ms (XFetch) */
 
 #define KEY_OFF (SALIGN(sizeof(php_entry)) + _ZSTR_HEADER_SIZE) /* the key string comes first after the zval */
@@ -469,7 +467,7 @@ static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 
 /* ---- writes ---- */
 
-static bool serialize_value(zval *val, zval *out, bool *igb)
+bool nocopy_serialize(zval *val, zval *out, bool *igb)
 {
 	*igb = use_igbinary;
 	if (use_igbinary) {
@@ -497,9 +495,9 @@ static bool serialize_value(zval *val, zval *out, bool *igb)
 	return true;
 }
 
-/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for publish().
+/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for nocopy_publish().
  * p NULL (no arena): only the checks, so a value a store would refuse is refused alike; then NOCOPY_NO_ROOM. */
-static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o)
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
 	if (Z_TYPE_P(val) == IS_ARRAY) {
@@ -522,7 +520,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 			php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
 			return NOCOPY_REFUSED;
 		}
-		if (!serialize_value(val, &ser, &igb)) {
+		if (!nocopy_serialize(val, &ser, &igb)) {
 			return NOCOPY_REFUSED;
 		}
 		val = &ser;
@@ -543,7 +541,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 	return e ? NOCOPY_OK : NOCOPY_NO_ROOM;
 }
 
-static nocopy_status publish(nocopy_put *p, bool add_only)
+nocopy_status nocopy_publish(nocopy_put *p, bool add_only)
 {
 	switch (nocopy_put_commit(p, add_only)) {
 		case PUT_OK: return NOCOPY_OK;
@@ -552,16 +550,14 @@ static nocopy_status publish(nocopy_put *p, bool add_only)
 	}
 }
 
-static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
-
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
 	if (UNEXPECTED(detour)) {
-		return nocopy_a ? vk_store(key, val, o, 0) : build(NULL, key, val, o);
+		return nocopy_a ? nocopy_vk_store(key, val, o, 0) : nocopy_build(NULL, key, val, o);
 	}
 	nocopy_put p;
-	nocopy_status s = build(&p, key, val, o);
-	return s == NOCOPY_OK ? publish(&p, o->add_only) : s;
+	nocopy_status s = nocopy_build(&p, key, val, o);
+	return s == NOCOPY_OK ? nocopy_publish(&p, o->add_only) : s;
 }
 
 static zend_always_inline bool drop_local(const char *k, size_t len)
@@ -579,22 +575,10 @@ bool nocopy_drop_local(const char *k, size_t len)
 	return nocopy_a && drop_local(k, len);
 }
 
-/* After a change in Valkey: a sibling's fill that read the old value sees the guard move and drops its copy. */
-static void vk_forget(zend_string *key)
-{
-	__atomic_add_fetch(&nocopy_a->inval_gen, 1, __ATOMIC_SEQ_CST);
-	nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-}
-
 bool nocopy_drop(zend_string *key)
 {
 	if (UNEXPECTED(detour)) {
-		if (!nocopy_a) {
-			return false;
-		}
-		int r = nocopy_vk_ready() ? nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
-		vk_forget(key);
-		return r == 1;
+		return nocopy_a && nocopy_vk_drop(key);
 	}
 	return drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 }
@@ -604,7 +588,7 @@ void nocopy_clear_all(void)
 	if (UNEXPECTED(!nocopy_a)) {
 		return;
 	}
-	if (nocopy_vk_on && nocopy_vk_ready()) {
+	if (nocopy_vk_on) {
 		nocopy_vk_clear();
 	}
 	nocopy_clear();
@@ -613,15 +597,8 @@ void nocopy_clear_all(void)
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	if (UNEXPECTED(detour)) {
-		int64_t v = 0;
-		if (!nocopy_a) {
-			*out = 0;
-			return false;
-		}
-		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) ttl * 1000, &v) : -1;
-		vk_forget(key); /* the next read fetches it */
-		*out = (zend_long) v;
-		return r == 1;
+		*out = 0;
+		return nocopy_a && nocopy_vk_add_long(key, delta, ttl, out);
 	}
 	zend_ulong h = zend_string_hash_val(key);
 	nocopy_shard *sh = nocopy_shard_of(h);
@@ -653,12 +630,7 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
 	if (UNEXPECTED(detour)) {
-		if (!nocopy_a) {
-			return false;
-		}
-		int r = nocopy_vk_ready() ? nocopy_vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
-		vk_forget(key);
-		return r == 1;
+		return nocopy_a && nocopy_vk_cas_long(key, old, nw);
 	}
 	zend_ulong h = zend_string_hash_val(key);
 	nocopy_shard *sh = nocopy_shard_of(h);
@@ -677,7 +649,7 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 
 /* Unserialize with a fresh state: php_unserialize_with_options() would share the outer
  * unserialize()'s reference table when called re-entrantly (e.g. from Serializable::unserialize). */
-static bool cache_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
+bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 {
 	bool ok;
 	if (flags & ENTRY_IGBINARY) {
@@ -718,7 +690,7 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 			*delta = e->user;
 		}
 		if (e->flags & ENTRY_SERIALIZED) {
-			hit = cache_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+			hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
 		} else if (copy) {
 			nocopy_local *l = local_slot(e, v);
 			if (l && l->e == e && l->seq == e->seq) {
@@ -746,206 +718,40 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	return hit;
 }
 
-/* ---- Valkey tier: the cache of record behind the local arena ---- */
-
-#define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
-
-static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
-{
-	if (Z_TYPE_P(val) == IS_LONG) {
-		return zend_long_to_str(Z_LVAL_P(val));
-	}
-	zval ser;
-	bool igb;
-	if (!serialize_value(val, &ser, &igb)) {
-		return NULL;
-	}
-	zend_string *s = zend_string_alloc(VK_HDR + Z_STRLEN(ser), 0);
-	char *b = ZSTR_VAL(s);
-	int64_t x = expires;
-	b[0] = 0;
-	b[1] = igb ? ENTRY_IGBINARY : 0;
-	memcpy(b + 2, &x, 8);
-	memcpy(b + 10, &user, 4);
-	memcpy(b + VK_HDR, Z_STRVAL(ser), Z_STRLEN(ser) + 1);
-	zval_ptr_dtor(&ser);
-	return s;
-}
-
-/* raw: a private copy, so unserialize may run user code that calls Valkey again */
-static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_t *user)
-{
-	const char *b = ZSTR_VAL(raw);
-	size_t n = ZSTR_LEN(raw);
-	*expires = 0;
-	*user = 0;
-	if (n && b[0] != 0) {
-		zend_long l;
-		if (is_numeric_string(b, n, &l, NULL, false) != IS_LONG) {
-			return false; /* not written by nocopy */
-		}
-		ZVAL_LONG(rv, l);
-		return true;
-	}
-	if (n < VK_HDR) {
-		return false;
-	}
-	int64_t x;
-	memcpy(&x, b + 2, 8);
-	memcpy(user, b + 10, 4);
-	*expires = (time_t) x;
-	if (x && x < time(NULL)) {
-		return false;
-	}
-	return cache_unserialize(rv, b + VK_HDR, n - VK_HDR, ENTRY_SERIALIZED | (uint8_t) b[1]);
-}
-
-/* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
-static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *exp, uint32_t *delta)
-{
-	time_t expires;
-	uint32_t user;
-	if (!vk_decode(raw, rv, &expires, &user)) {
-		return false;
-	}
-	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - time(NULL)) : 0, .objects = NOCOPY_SERIALIZE_OBJECTS};
-	nocopy_put p;
-	if (build(&p, key, rv, &o) == NOCOPY_OK) {
-		p.e->user = user;
-		publish(&p, true);
-	}
-	if (exp) {
-		*exp = expires;
-		*delta = user;
-	}
-	return true;
-}
-
-/* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
-static zend_never_inline bool vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
-{
-	if (!nocopy_a || !nocopy_vk_ready()) { /* no arena: nothing to serve, with or without Valkey */
-		ZVAL_NULL(rv);
-		return false; /* no invalidations: local data may be stale */
-	}
-	if (local_fetch(key, rv, exp, delta)) {
-		return true;
-	}
-	uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
-	zend_string *raw = NULL;
-	if (nocopy_vk_mget(1, &key, &raw) != 1 || !raw) {
-		return false;
-	}
-	bool ok = vk_fill(key, raw, rv, exp, delta);
-	zend_string_release(raw);
-	if (ok && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-	}
-	return ok;
-}
+bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { return local_fetch(key, rv, exp, delta); }
 
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	if (UNEXPECTED(detour)) {
-		return vk_fetch(key, rv, exp, delta);
+		if (!nocopy_a) {
+			ZVAL_NULL(rv);
+			return false;
+		}
+		return nocopy_vk_fetch(key, rv, exp, delta);
 	}
 	return local_fetch(key, rv, exp, delta);
-}
-
-/* Valkey first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
-static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
-{
-	if (!nocopy_vk_ready()) {
-		return NOCOPY_NO_ROOM;
-	}
-	nocopy_put p;
-	nocopy_status s = NOCOPY_OK;
-	if (!o->add_only && (s = build(&p, key, val, o)) == NOCOPY_OK) {
-		p.e->user = user;
-		publish(&p, false);
-	}
-	if (s == NOCOPY_REFUSED) {
-		return s;
-	}
-	time_t expires = o->ttl ? time(NULL) + o->ttl : 0;
-	zend_string *enc = vk_encode(val, expires, user);
-	if (!enc) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-		return NOCOPY_REFUSED;
-	}
-	int r = nocopy_vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), expires ? ((int64_t) expires + 1) * 1000 : 0, o->add_only);
-	zend_string_release(enc);
-	if (r != 1) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-		return r == 0 ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
-	}
-	if (o->add_only && (s = build(&p, key, val, o)) == NOCOPY_OK) {
-		p.e->user = user;
-		publish(&p, false);
-	} else if (s == NOCOPY_REFUSED) {
-		nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)); /* a resource: APCu refuses it */
-		return s;
-	}
-	return NOCOPY_OK;
 }
 
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
 
 void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 {
+	if (UNEXPECTED(detour)) {
+		if (nocopy_a) {
+			nocopy_vk_fetch_multi(keys, out);
+		}
+		return;
+	}
 	zval *k, t;
-	if (!detour) {
-		ZEND_HASH_FOREACH_VAL(keys, k) {
-			ZVAL_DEREF(k);
-			if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
-				zend_symtable_update(out, Z_STR_P(k), &t);
-			}
-		} ZEND_HASH_FOREACH_END();
-		return;
-	}
-	if (!nocopy_a || !nocopy_vk_ready()) {
-		return;
-	}
-	zend_string **miss = safe_emalloc(zend_hash_num_elements(keys), sizeof *miss, 0);
-	uint32_t n = 0;
 	ZEND_HASH_FOREACH_VAL(keys, k) {
 		ZVAL_DEREF(k);
-		if (Z_TYPE_P(k) != IS_STRING) {
-			continue;
-		}
-		if (local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
+		if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
 			zend_symtable_update(out, Z_STR_P(k), &t);
-		} else {
-			miss[n++] = Z_STR_P(k); /* borrowed: keys outlives this call */
-			ZVAL_NULL(&t);
-			zend_symtable_update(out, Z_STR_P(k), &t); /* keeps the requested order; removed if not found */
 		}
 	} ZEND_HASH_FOREACH_END();
-	if (n) {
-		zend_string **raw = ecalloc(n, sizeof *raw);
-		uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
-		bool got = nocopy_vk_mget(n, miss, raw) == 1;
-		for (uint32_t i = 0; i < n; i++) {
-			if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], &t, NULL, NULL)) {
-				zend_symtable_update(out, miss[i], &t);
-			} else {
-				zend_symtable_del(out, miss[i]);
-			}
-			if (raw[i]) {
-				zend_string_release(raw[i]);
-			}
-		}
-		if (got && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
-			for (uint32_t i = 0; i < n; i++) {
-				nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
-			}
-		}
-		efree(raw);
-	}
-	efree(miss);
 }
 
-static void mark_failed(HashTable *failed, zend_string *key)
+void nocopy_mark_failed(HashTable *failed, zend_string *key)
 {
 	if (failed && !EG(exception)) {
 		zval m;
@@ -954,70 +760,10 @@ static void mark_failed(HashTable *failed, zend_string *key)
 	}
 }
 
-/* vk_store for many keys: local copies first, then every SET in one pipeline. */
-static bool vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
-{
-	zend_ulong h;
-	zend_string *k;
-	zval *v;
-	bool all = true;
-	if (!nocopy_vk_ready()) {
-		ZEND_HASH_FOREACH_KEY(vals, h, k) {
-			zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
-			mark_failed(failed, key);
-			zend_string_release(key);
-		} ZEND_HASH_FOREACH_END();
-		return false;
-	}
-	uint32_t cap = zend_hash_num_elements(vals), m = 0;
-	zend_string **keys = safe_emalloc(cap, sizeof *keys, 0), **enc = safe_emalloc(cap, sizeof *enc, 0);
-	nocopy_vk_kv *kv = safe_emalloc(cap, sizeof *kv, 0);
-	time_t expires = o->ttl ? time(NULL) + o->ttl : 0;
-	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
-		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
-		nocopy_put p;
-		nocopy_status s = build(&p, key, v, o);
-		if (s == NOCOPY_OK) {
-			p.e->user = 0;
-			publish(&p, false);
-		}
-		zend_string *e = s == NOCOPY_REFUSED ? NULL : vk_encode(v, expires, 0);
-		if (!e) {
-			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
-			all = false;
-			mark_failed(failed, key);
-			zend_string_release(key);
-			if (EG(exception)) {
-				break;
-			}
-			continue;
-		}
-		keys[m] = key;
-		enc[m] = e;
-		kv[m] = (nocopy_vk_kv) {.k = ZSTR_VAL(key), .kl = ZSTR_LEN(key), .v = ZSTR_VAL(e), .vl = ZSTR_LEN(e)};
-		m++;
-	} ZEND_HASH_FOREACH_END();
-	int8_t *res = emalloc(m + 1);
-	if (m) {
-		nocopy_vk_mset(m, kv, expires ? ((int64_t) expires + 1) * 1000 : 0, res);
-	}
-	for (uint32_t i = 0; i < m; i++) {
-		if (res[i] != 1) {
-			nocopy_drop_local(ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
-			all = false;
-			mark_failed(failed, keys[i]);
-		}
-		zend_string_release(keys[i]);
-		zend_string_release(enc[i]);
-	}
-	efree(res), efree(kv), efree(enc), efree(keys);
-	return all;
-}
-
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
 {
 	if (nocopy_vk_on && !o->add_only && nocopy_a) {
-		return vk_store_multi(vals, o, failed); /* ponytail: add stays one round trip per key (NX decides first) */
+		return nocopy_vk_store_multi(vals, o, failed); /* ponytail: add stays one round trip per key (NX decides first) */
 	}
 	zend_ulong h;
 	zend_string *k;
@@ -1027,7 +773,7 @@ bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed
 		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
 		if (nocopy_store(key, v, o) != NOCOPY_OK) {
 			all = false;
-			mark_failed(failed, key);
+			nocopy_mark_failed(failed, key);
 		}
 		zend_string_release(key);
 		if (EG(exception)) {
@@ -1080,17 +826,17 @@ static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
 	uint32_t user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
 	if (UNEXPECTED(!nocopy_a)) {
-		build(NULL, key, rv, o);
+		nocopy_build(NULL, key, rv, o);
 		return;
 	}
 	if (nocopy_vk_on) {
-		vk_store(key, rv, o, user);
+		nocopy_vk_store(key, rv, o, user);
 		return;
 	}
 	nocopy_put p;
-	if (build(&p, key, rv, o) == NOCOPY_OK) {
+	if (nocopy_build(&p, key, rv, o) == NOCOPY_OK) {
 		p.e->user = user;
-		publish(&p, o->add_only);
+		nocopy_publish(&p, o->add_only);
 	}
 }
 
@@ -1570,6 +1316,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
+#ifdef HAVE_NOCOPY_VALKEY
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
 	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, nocopy_vk_on_prefix)
 	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, nocopy_vk_on_timeout)
@@ -1577,6 +1324,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY1("nocopy.valkey_tls_cert_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_cert)
 	PHP_INI_ENTRY1("nocopy.valkey_tls_key_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_key)
 	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, nocopy_vk_on_verify)
+#endif
 PHP_INI_END()
 
 /* Read by apcu_* callers (Symfony's ApcuAdapter, Composer) before they use the apcu polyfill; nocopy itself ignores them. */
