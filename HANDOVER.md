@@ -56,6 +56,8 @@ sometimes saw a truncated `nocopy.c`: rerun.
 - Asymmetric fence (`membarrier`) for pins: reader fence hides under cache misses (shuffled 40.9 -> 41.3 ns); writer pays 6-46 us under the shard lock with 4-16 processes.
 - Robust pthread mutexes for dead lock holders: 15% slower uncontended, 2-8x with contention (owner-id locks + `shard_repair` instead).
 - Ghost variants (`bench/hitratio.php`): 2-way no better; 2x tags +0-3 points on mixed loads for 4 B/slot more; no ghost loses 2 points on mixed and all hits on scans.
+- Dropping `nocopy_get_multiple`/`put_multiple` on one host (PHP loop instead): get 10 keys 142 -> 292 ns, 100 keys 1.3 -> 2.8 us; put 100 keys 8.3 -> 9.3 us.
+  `nocopy_shared_with()` into `nocopy_stats()`: 15 -> 430 ns, and Drupal calls it per write.
 - One-pass `copy_out`: `zend_array_dup` of an immutable array is one memcpy already; the cost was per-key allocation (fixed by key dedupe).
 
 ## Open (rough priority)
