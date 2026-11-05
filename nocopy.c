@@ -675,12 +675,12 @@ bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 }
 
 /* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
-static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t *exp, uint32_t *delta, bool stale)
 {
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	bool copy = !NOCOPY_G(zero_copy);
 	nocopy_borrow_begin(c);
-	nocopy_entry *e = nocopy_find(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	nocopy_entry *e = nocopy_find_ex(c, zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key), stale);
 	bool hit = e != NULL;
 	ZVAL_NULL(rv);
 	if (e) {
@@ -716,6 +716,11 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	__atomic_store_n(ctr, *ctr + 1, __ATOMIC_RELAXED); /* single writer per slot: no RMW needed */
 	nocopy_borrow_end(c);
 	return hit;
+}
+
+static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+{
+	return local_fetch_ex(key, rv, exp, delta, false);
 }
 
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { return local_fetch(key, rv, exp, delta); }
@@ -877,6 +882,9 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 		}
 		if (fetch(key, rv, NULL, NULL)) {
 			return; /* the holder stored it */
+		}
+		if (beta > 0 && !detour && local_fetch_ex(key, rv, NULL, NULL, true)) {
+			return; /* stale-while-revalidate: the expired value, while the holder computes the new one */
 		}
 		if (now_s(CLOCK_MONOTONIC) > deadline) {
 			break;

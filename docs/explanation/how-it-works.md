@@ -67,7 +67,8 @@ APCu wipes everything when it runs out of memory. nocopy evicts gradually, in th
 
 When a popular entry expires, every worker misses at once and recomputes it. `nocopy_remember()` lets only the first
 worker compute (a lease per key) while the others wait for its result, and refreshes slightly before expiry
-(probabilistic early expiration, XFetch), so most expiries never cause a miss at all.
+(probabilistic early expiration, XFetch), so most expiries never cause a miss at all. When one does, the waiters get the
+just-expired value while the first worker recomputes.
 
 ## One cache per machine, or per cluster
 

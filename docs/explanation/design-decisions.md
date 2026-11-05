@@ -71,6 +71,12 @@ does by default), so each call reads one bin key instead of two.
 **Leases in a fixed per-shard table, not in the cache.** As cache entries they used slots, showed up in counts, were wiped by
 `clear`, and a drop could hit a retaken lease.
 
+**Lease waiters get the expired value** (stale-while-revalidate, as memcache's leases at Facebook) if it expired less than one
+TTL ago. XFetch already avoids most expiries under steady traffic; this covers bursts after idle. `bench/stampede.php`, workers
+waking together after a gap longer than the TTL: requests slower than half the compute time 112 -> 22 (16 workers, 100 ms),
+83 -> 24 (300 ms), 158 -> 37 (32 workers); callback runs unchanged. Bounded to one TTL so an idle shard (no sweeps) never serves
+arbitrarily old data.
+
 ## APCu
 
 **Compatibility as a PHP polyfill**, not in the extension. The extension keeps only `apc.enabled`/`apc.enable_cli`

@@ -63,9 +63,11 @@ Returns the cached value, or computes it with `$callback($key)`, stores it and r
 - **Single flight:** on a miss, the first worker takes a lease and runs the callback; the others wait for its value.
   A dead lease holder is detected, a stuck one is ignored after 30 s, and a recursive call for the same key does not wait.
   With `nocopy.valkey` the single flight is per server.
+- **Stale while revalidate:** while another worker recomputes, a waiter gets the expired value instead, if it expired less
+  than one TTL ago (so it is at most 2 × TTL old). Deleted or invalidated keys are never served stale. Not with `nocopy.valkey`, nor with `$beta = 0` (so `apcu_entry` never returns an expired value).
 - **Early refresh:** before the TTL ends, one worker recomputes early ([XFetch](https://doi.org/10.14778/2757807.2757813))
   with a probability that rises as expiry nears, scaled by the callback's measured run time × `$beta`. The others keep
-  getting the current value. `$beta = 0` turns this off.
+  getting the current value. `$beta = 0` turns this and stale serving off.
 - The callback may return anything storable, objects included (stored serialized).
 
 ## Introspection

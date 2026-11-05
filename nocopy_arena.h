@@ -312,7 +312,11 @@ static inline __attribute__((always_inline)) bool nocopy_key_eq(const char *a, c
 
 /* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
-static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen)
+/* An expired entry that a lease waiter may still be served: expired less than its TTL ago. */
+static inline bool nocopy_stale_ok(const nocopy_entry *e) { return e->expires && (time_t) (2 * e->expires - e->created) >= time(NULL); }
+
+/* stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). */
+static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
 {
 	uint32_t si = nocopy_shard_idx(h); /* not sh - shards: that divides by sizeof(nocopy_shard) */
 	nocopy_shard *sh = &nocopy_a->shards[si];
@@ -335,7 +339,7 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ct
 			}
 			if (e->h == h && e->klen == klen && nocopy_key_eq(nocopy_key(e), k, klen)) {
 				if (nocopy_expired(e)) {
-					return NULL;
+					return stale && nocopy_stale_ok(e) ? e : NULL;
 				}
 				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 				if (f < NOCOPY_HOT_MAX && (!f || !(nocopy_rand(c) & ((1u << f) - 1)))) {
@@ -351,6 +355,11 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ct
 		}
 		nocopy_cpu_relax();
 	}
+}
+
+static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen)
+{
+	return nocopy_find_ex(c, h, k, klen, false);
 }
 
 #endif
