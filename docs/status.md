@@ -36,7 +36,6 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 4. **Memory balance:** a shard without writes expires only under memory pressure; a hot shard cannot borrow from idle ones;
    RSS drifts to `nocopy.shm_size`. Candidate: move segments toward the shard with the most `ghost_hits` (Cliffhanger,
    CacheLib's MarginalHits), only once a benchmark shows shards out of balance; it breaks the fixed-slice invariant.
-   Cheaper first: document `ghost_hits` as the "cache too small" signal in [Size and monitor](how-to/size-and-monitor.md).
 6. **Copy mode:** the kept-copy table is direct-mapped (4096 slots), so colliding keys evict each other (a 3000-key loop
    fetches at ~400 ns with room to spare); set-associative if that shows up in workers.
 5. **Valkey:** Sentinel, Cluster, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module

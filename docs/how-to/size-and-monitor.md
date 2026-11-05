@@ -26,6 +26,24 @@ Roughly: shards double with size up to 8, each at least 8 MB; an entry gets a bi
 
 More shards mean less write contention: each shard has its own lock.
 
+## Too small? Compare `ghost_hits` with `evicted`
+
+`evicted` alone does not say whether more memory would help: evicting keys that are never asked for again costs nothing.
+`ghost_hits` counts evicted keys that came back soon after (the cache remembers a tag of each evicted key), so
+
+```php
+$s = nocopy_stats();
+printf("%.0f%% of evicted keys came back, %.1f%% of misses were such keys\n",
+    100 * $s['ghost_hits'] / max(1, $s['evicted']), 100 * $s['ghost_hits'] / max(1, $s['misses']));
+```
+
+- **Most evicted keys come back** (`bench/hitratio.php`, Zipf over 1.5x the arena: 82%): the working set does not fit,
+  raise `nocopy.shm_size`. The share of misses that were such keys is roughly what more memory can win back.
+- **Few come back** (same with one-off keys mixed in: 13%): evictions are keys used once; more memory buys little.
+  Shorter TTLs on those keys, or not caching them, helps more.
+
+It is an estimate: tags are kept for about as many recent evictions as the cache has slots, and colliding tags overwrite each other.
+
 ## Many small entries: raise `nocopy.entries_hint`
 
 The slot table is fixed at startup: about 2 slots per `nocopy.entries_hint`, at least one per 256 bytes of arena, and a shard
@@ -41,6 +59,7 @@ The numbers that tell you something:
 |---|---|---|
 | `hits / (hits + misses)` | high, stable | cache too small, TTLs too short, or keys that never repeat |
 | `evicted` growing | slow or flat | raise `nocopy.shm_size` (or `entries_hint`, see above) |
+| `ghost_hits / evicted` | low | most evicted keys come back: raise `nocopy.shm_size` ([above](#too-small-compare-ghost_hits-with-evicted)) |
 | `expunges` | rare | each one is a round of eviction under memory pressure |
 | `lock_steals` | 0 | a worker died while holding a lock (kill -9, OOM killer); repaired, but find out why |
 | `valkey_listener` | a pid, with `nocopy.valkey` | 0: no listener, nothing local is served |
