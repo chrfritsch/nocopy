@@ -53,6 +53,10 @@ then load a page that uses the cache twice and check `nocopy_stats()['hits']` gr
 ## Notes
 
 - The adapter calls `nocopy_*` only, so it works next to a loaded APCu.
-- `clear()` bumps a namespace version instead of deleting keys; old entries leave through normal eviction.
+- `clear()` bumps a namespace version instead of deleting keys; old entries leave through eviction (shm) or a one-year TTL
+  given to items without a lifetime (Valkey).
+- The adapter refuses to start in a process that does not share the cache (`nocopy_shared_with()` is `none`): set
+  `nocopy.shm_name` or `nocopy.valkey` for php-fpm and the CLI, and run the console as the php-fpm user.
+- Multi-key reads and writes (`getItems()`, deferred saves) are one call each; with Valkey, one round trip.
 - Each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
 - Under FrankenPHP worker mode, nocopy switches to copy mode automatically (the kernel keeps values across requests).

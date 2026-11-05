@@ -6,9 +6,16 @@
     "require": {
         "php": ">=8.4",
         "ext-nocopy": "*",
-        "symfony/framework-bundle": "^6.4 || ^7.0 || ^8.0"
+        "symfony/cache": "^6.4 || ^7.0 || ^8.0",
+        "symfony/dependency-injection": "^6.4 || ^7.0 || ^8.0",
+        "symfony/http-kernel": "^6.4 || ^7.0 || ^8.0"
     },
     "autoload": {
-        "psr-4": {"Chrfritsch\\NocopyBundle\\": "src/"}
+        "psr-4": {
+            "Chrfritsch\\NocopyBundle\\": "src/"
+        }
+    },
+    "suggest": {
+        "symfony/framework-bundle": "registers cache.adapter.nocopy for framework.cache pools"
     }
 }

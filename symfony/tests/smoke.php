@@ -34,6 +34,15 @@ class SmokeKernel extends Kernel
     }
 }
 
+if ('none' === nocopy_shared_with()) {
+    try {
+        new Chrfritsch\NocopyBundle\NocopyAdapter();
+        assert(false, 'unshared cache must throw');
+    } catch (Symfony\Component\Cache\Exception\CacheException) {
+    }
+    exit("ok (not shared: refused)\n");
+}
+
 $k = new SmokeKernel('prod', false);
 $k->boot();
 $c = $k->getContainer();
@@ -46,6 +55,7 @@ foreach (['cache.app', 'my.pool'] as $name) {
     $pool->save($pool->getItem('o')->set(new ArrayObject([1])));
     assert($pool->getItem('k')->get() === ['rows' => [1, 2, 3]], "$name roundtrip");
     assert($pool->getItem('o')->get() == new ArrayObject([1]), "$name object");
+    assert(array_map(fn ($i) => $i->isHit(), iterator_to_array($pool->getItems(['k', 'o', 'nope']))) === ['k' => true, 'o' => true, 'nope' => false], "$name getItems");
     assert(is_array(nocopy_get($id->invoke($pool, 'k'))), "$name stores PHP values, not serialized strings");
     assert($pool->deleteItem('o') && !$pool->hasItem('o') && $pool->hasItem('k'), "$name delete");
     assert($pool->clear() && !$pool->hasItem('k'), "$name clear");
