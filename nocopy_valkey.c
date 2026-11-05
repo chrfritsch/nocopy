@@ -7,6 +7,7 @@
 
 #include "nocopy_php.h"
 #include "zend_smart_str.h"
+#include "nocopy_resp.h"
 #include "ext/random/php_random.h"
 #include <time.h>
 #include <sys/socket.h>
@@ -489,69 +490,6 @@ static bool vk_open(nocopy_vk *v, const char **msg)
 }
 
 /* ---- RESP3 ---- */
-
-/* A reply in the read buffer: valid until the next call that reads. Aggregates: n children (maps: 2n) from body. */
-typedef struct {
-	char t; /* RESP type byte; '_' for every null, '?' protocol error */
-	int64_t n;
-	const char *s, *body;
-	size_t len;
-} vk_reply;
-
-/* The end of the value at p; NULL if incomplete (r->t '?' if malformed). */
-static const char *resp_parse(const char *p, const char *end, vk_reply *r)
-{
-	const char *nl = p < end ? memchr(p, '\n', end - p) : NULL;
-	if (!nl) {
-		r->t = 0;
-		return NULL;
-	}
-	r->t = *p;
-	r->s = p + 1;
-	r->len = nl - 1 - r->s;
-	r->n = 0;
-	const char *q = nl + 1;
-	switch (r->t) {
-		case '+': case '-': case ',': case '(': case '#': case '_':
-			return q;
-		case ':':
-			r->n = strtoll(r->s, NULL, 10);
-			return q;
-		case '$': case '!': case '=':
-			r->n = strtoll(r->s, NULL, 10);
-			if (r->n < 0) {
-				r->t = '_';
-				return q;
-			}
-			if (end - q < r->n + 2) {
-				r->t = 0;
-				return NULL;
-			}
-			r->s = q;
-			r->len = (size_t) r->n;
-			return q + r->n + 2;
-		case '*': case '~': case '>': case '%': case '|': {
-			r->n = strtoll(r->s, NULL, 10);
-			if (r->n < 0) {
-				r->t = '_';
-				return q;
-			}
-			r->body = q;
-			int64_t k = r->t == '%' || r->t == '|' ? 2 * r->n : r->n;
-			for (int64_t i = 0; i < k; i++) {
-				vk_reply c;
-				if (!(q = resp_parse(q, end, &c))) {
-					r->t = c.t == '?' ? '?' : 0;
-					return NULL;
-				}
-			}
-			return q;
-		}
-		default:
-			r->t = '?';
-			return NULL;
-	}
-}
 
 static void vk_apply(const vk_reply *push, const char *end)
 {

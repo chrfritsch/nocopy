@@ -58,7 +58,6 @@ typedef struct {
 _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 
 static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
-static inline zend_string *entry_key(const nocopy_entry *e) { return (zend_string *) (nocopy_key(e) - _ZSTR_HEADER_SIZE); }
 
 bool nocopy_available(void)
 {
