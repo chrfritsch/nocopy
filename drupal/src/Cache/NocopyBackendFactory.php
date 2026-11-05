@@ -23,7 +23,7 @@ class NocopyBackendFactory implements CacheFactoryInterface {
       return new NocopyBackend($bin, $this->sitePrefix, $this->checksumProvider, $this->time);
     }
     // Like core's APCu fast layer: without the extension (e.g. Drush) chainedfast just uses the database.
-    return function_exists('nocopy_get') ? new NocopyBackend($bin, $this->sitePrefix, $this->checksumProvider, $this->time, NULL) : new NullBackend($bin);
+    return function_exists('nocopy_get') ? new NocopyBackend($bin, $this->sitePrefix, $this->checksumProvider, $this->time, FALSE) : new NullBackend($bin);
   }
 
 }

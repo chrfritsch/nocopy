@@ -263,6 +263,12 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   Drupal bench, nocopy-valkey, 16 workers (Docker, one run before, two after): anonymous / 12,586 vs 12,920 / 12,588 req/s, logged-in / 1,235 vs 1,358 / 1,273,
   logged-in node 1,101 vs 1,210 / 972, editor-loop readers 765 vs 812 / 751, first request after fpm restart 166 vs 188 / 184 ms: within run-to-run noise.
   The gain is structural: 16 tracking connections and 16 copies of every push per server became 1. The bench's serializer probe now refetches (own write dropped).
+- Drupal: one mode, no journal (2026-11-05, "fresh start" #3, user's choice over TLS first). `NocopyBackend` and `NocopyCacheTagsChecksum` require a cache shared by every
+  process (`nocopy_shared_with()` host or valkey, checked once per process, else RuntimeException naming the fix); the fast layer (`cache.backend.nocopy_fast`) needs none.
+  Deleted: `NocopyJournal`, replay, the checksum epoch, hook_cron, `$settings['nocopy_shared']`, `settings.shared.php`, bench config nocopy-shm (nocopy-all now uses shm_name).
+  `nocopy_update_11001` drops the table. Drupal tests: shm copy, shm zero-copy, Valkey (28 each) + process-only (NocopySharedTest: backend and checksum throw, fast layer works).
+  Bench nocopy-all (8 workers, one run) journal -> shared: anonymous / 9,229 -> 12,938 req/s, logged-in / 1,322 -> 1,467, node 1,088 -> 1,283, anonymous statements 5 -> 0,
+  first request after fpm restart 627 -> 155 ms; Drush save seen by anonymous/logged-in as before. Next of #3: TLS for the Valkey client (managed Valkey), then Sentinel/Cluster.
 
 ## Known gaps / next steps (rough priority)
 

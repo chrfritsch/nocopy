@@ -12,6 +12,9 @@ use Drupal\Core\Cache\CacheTagsChecksumPreloadInterface;
 
 /**
  * Cache bin in nocopy shared memory. Items are plain arrays, so object-free data is read without a copy.
+ *
+ * Every PHP process of the site must share one cache (nocopy.shm_name on one server, nocopy.valkey on several):
+ * writes by Drush and cron then reach php-fpm by themselves. Checked once per process.
  */
 class NocopyBackend implements CacheBackendInterface {
 
@@ -33,15 +36,27 @@ class NocopyBackend implements CacheBackendInterface {
     protected string $sitePrefix,
     protected CacheTagsChecksumInterface $checksumProvider,
     protected TimeInterface $time,
-    // NULL: no journal (fast layer, the database is the source of truth).
-    protected ?NocopyJournal $journal = new NocopyJournal(),
+    // FALSE: the fast layer (chainedfast), where the database is the source of truth and a cache per process will do.
+    bool $requireShared = TRUE,
   ) {
-    if (NocopyJournal::shared()) {
-      $this->journal = NULL;
+    if ($requireShared) {
+      self::requireShared();
     }
   }
 
-  protected ?float $replayedFor = NULL;
+  private static bool $shared = FALSE;
+
+  // A process with a cache of its own would serve what other processes already changed.
+  public static function requireShared(): void {
+    if (self::$shared) {
+      return;
+    }
+    $with = function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none (the nocopy extension is not loaded)';
+    if ($with !== 'host' && $with !== 'valkey') {
+      throw new \RuntimeException(sprintf('nocopy: this %s process does not share the cache with the rest of the site (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this site, and run Drush and cron as the user that starts php-fpm.', PHP_SAPI, $with));
+    }
+    self::$shared = TRUE;
+  }
 
   protected function binKey(string $name): string {
     return $this->sitePrefix . '::' . $this->bin . '::' . $name;
@@ -50,7 +65,6 @@ class NocopyBackend implements CacheBackendInterface {
   // [version, invalidated_at], read on every call: another request may have cleared the bin.
   // Either key lost (new bin, eviction, nocopy.ttl): start a fresh version. That only costs misses, a default could revive deleted items.
   protected function state(): array {
-    $this->replay();
     $version = nocopy_get($this->binKey('version'), $hit);
     $invalidated = nocopy_get($this->binKey('invalidated_at'), $invalidatedHit);
     if (!$hit || !$invalidatedHit) {
@@ -61,29 +75,6 @@ class NocopyBackend implements CacheBackendInterface {
     }
     // invalidateAll() of an older version does not apply after deleteAll().
     return [$version, $invalidated[0] === $version ? $invalidated[1] : 0.0];
-  }
-
-  // Web requests: apply what CLI processes wrote since this bin last looked, once per request.
-  protected function replay(): void {
-    if (!$this->journal || $this->journal->writer || $this->replayedFor === NocopyJournal::request()) {
-      return;
-    }
-    $this->replayedFor = NocopyJournal::request();
-    $last = $this->journal->lastId();
-    $applied = nocopy_get($this->binKey('applied'), $hit);
-    if (!$hit) {
-      // Position unknown: start over.
-      $this->deleteAll();
-    }
-    elseif ($last > $applied) {
-      foreach ($this->journal->since($applied, $this->bin) as $cids) {
-        $cids === NULL ? $this->deleteAll() : $this->deleteMultiple($cids);
-      }
-    }
-    else {
-      return;
-    }
-    nocopy_put($this->binKey('applied'), $last);
   }
 
   protected function key(string $cid, ?string $version = NULL): string {
@@ -144,7 +135,6 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function set($cid, $data, $expire = CacheBackendInterface::CACHE_PERMANENT, array $tags = []) {
     $this->store($cid, $data, $expire, $tags);
-    $this->journal?->record($this->bin, [$cid]);
   }
 
   protected function store($cid, $data, $expire, array $tags): void {
@@ -189,7 +179,6 @@ class NocopyBackend implements CacheBackendInterface {
     foreach ($byTtl as $ttl => $entries) {
       nocopy_put_multiple($entries, $ttl, TRUE);
     }
-    $this->journal?->record($this->bin, array_keys($items));
   }
 
   public function delete($cid) {
@@ -221,13 +210,11 @@ class NocopyBackend implements CacheBackendInterface {
     foreach ($cids as $cid) {
       nocopy_delete($this->key((string) $cid));
     }
-    $this->journal?->record($this->bin, $cids);
   }
 
   // Old entries leave through eviction.
   public function deleteAll() {
     nocopy_put($this->binKey('version'), bin2hex(random_bytes(6)));
-    $this->journal?->record($this->bin, NULL);
   }
 
   public function invalidate($cid) {
@@ -243,14 +230,12 @@ class NocopyBackend implements CacheBackendInterface {
         $this->put((string) $cid, $item);
       }
     }
-    $this->journal?->record($this->bin, $cids);
   }
 
   public function invalidateAll() {
     @trigger_error("CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622", E_USER_DEPRECATED);
     // Rounded like 'created', so every item created up to now compares <=.
     nocopy_put($this->binKey('invalidated_at'), [$this->state()[0], round(microtime(TRUE), 3)]);
-    $this->journal?->record($this->bin, NULL);
   }
 
   public function garbageCollection() {

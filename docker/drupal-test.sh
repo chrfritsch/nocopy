@@ -1,5 +1,6 @@
 #!/bin/sh
-# Inside nocopy-drupal: build nocopy, run the Drupal module's PHPUnit tests in copy and zero-copy mode. /drupal caches the Drupal checkout.
+# Inside nocopy-drupal: build nocopy, run the Drupal module's PHPUnit tests on a shared cache (named arena copy / zero-copy, Valkey),
+# and the shared-cache check in a process-only cache. /drupal caches the Drupal checkout.
 #   docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh
 # EXTRA: more INI lines, e.g. EXTRA="nocopy.shm_size=1M"
 /src/docker/test.sh >/dev/null 2>&1 || { echo "nocopy build/tests failed"; /src/docker/test.sh; exit 1; }
@@ -14,11 +15,12 @@ rc=0
 # kernel tests run in child processes, which do not inherit -d flags: settings go to conf.d
 valkey-cli ping >/dev/null 2>&1 || valkey-server --daemonize yes --save '' --appendonly no >/dev/null
 rm -f /dev/shm/nocopy-drupal-test.*
-for mode in "" "nocopy.request_scope=1" "nocopy.shm_name=/nocopy-drupal-test" "nocopy.valkey=127.0.0.1:6379"; do
-  echo "== mode: ${mode:-copy} $EXTRA"
+for mode in "nocopy.shm_name=/nocopy-drupal-test" "nocopy.shm_name=/nocopy-drupal-test nocopy.request_scope=1" "nocopy.valkey=127.0.0.1:6379" ""; do
+  echo "== mode: ${mode:-process only} $EXTRA"
+  only=; [ -z "$mode" ] && only="--filter NocopySharedTest"
   printf '%s\n' "extension=/build/modules/nocopy.so" "extension=igbinary" "nocopy.serializer=igbinary" "memory_limit=1G" $mode $EXTRA > /usr/local/etc/php/conf.d/zz-nocopy.ini
   rm -f /tmp/t.sqlite*
   SIMPLETEST_DB=sqlite://localhost//tmp/t.sqlite SIMPLETEST_BASE_URL=http://localhost \
-    php vendor/bin/phpunit -c web/core --fail-on-skipped --display-skipped web/modules/contrib/nocopy/tests || rc=1
+    php vendor/bin/phpunit -c web/core --fail-on-skipped --display-skipped $only web/modules/contrib/nocopy/tests || rc=1
 done
 exit $rc

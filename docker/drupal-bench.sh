@@ -1,10 +1,10 @@
 #!/bin/sh
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, five cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm --shm-size=1g -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
-# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all nocopy-shm redis redis2 nocopy-valkey"
-#   (--shm-size: nocopy-shm keeps its 256M arena in /dev/shm)
+# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"
+#   (--shm-size: nocopy-all keeps its 256M arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
-CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all nocopy-shm redis redis2 nocopy-valkey"}
+CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"}
 B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
@@ -99,17 +99,14 @@ extension=igbinary
 nocopy.serializer=igbinary"; SET=fastroutes ;;
     nocopy-all) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
-nocopy.serializer=igbinary"; SET=all ;;
-    nocopy-shm) EXT="extension=/build/modules/nocopy.so
-extension=igbinary
 nocopy.serializer=igbinary
-nocopy.shm_name=/nocopy-bench"; SET=shared ;;
+nocopy.shm_name=/nocopy-bench"; SET=all ;;
     redis|redis2) EXT="extension=$APCU
 extension=redis"; SET=redis ;;
     nocopy-valkey) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary
-nocopy.valkey=127.0.0.1:6379"; SET=shared ;;
+nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   esac
   echo "== $cfg"
   rm -rf $D/web/modules/contrib/redis && cp -r /site/redis$([ $cfg = redis2 ] && echo 2 || echo 1) $D/web/modules/contrib/redis

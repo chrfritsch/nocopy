@@ -1,20 +1,8 @@
 <?php
 
 /**
- * Implements hook_schema().
+ * Drops the journal: the cache is now always shared by every process of the site.
  */
-function nocopy_schema(): array {
-  return [
-    'nocopy_journal' => [
-      'description' => 'Cache writes by CLI processes, replayed by web requests.',
-      'fields' => [
-        'id' => ['type' => 'serial', 'size' => 'big', 'unsigned' => TRUE, 'not null' => TRUE],
-        'created' => ['type' => 'int', 'not null' => TRUE],
-        'name' => ['type' => 'varchar_ascii', 'length' => 255, 'not null' => TRUE],
-        'items' => ['type' => 'text', 'size' => 'big'],
-      ],
-      'primary key' => ['id'],
-      'indexes' => ['created' => ['created']],
-    ],
-  ];
+function nocopy_update_11001(): void {
+  \Drupal::database()->schema()->dropTable('nocopy_journal');
 }

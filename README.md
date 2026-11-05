@@ -55,13 +55,15 @@ Lowest–highest of 3 full runs, config order rotated between runs:
 | database statements per logged-in request | 29–31 | 29–31 | 30–32 | **8** |
 | database statements per anonymous request | 7 | 7 | 7 | **5** |
 
-Statements include connection setup; with nocopy for all bins, an anonymous page cache hit sends one query, the journal check.
+Statements include connection setup. These nocopy numbers predate the shared cache (an anonymous hit then paid the journal query). One
+rerun with `nocopy.shm_name` and no journal (2026-11-05, same Docker setup, 8 workers): anonymous `/` 12,938 req/s, logged-in front page 1,467,
+node page 1,283, 0 statements per anonymous and 7 per logged-in request, first logged-in request after an fpm restart 155 ms.
 
 The fast layer (`ChainedFastBackend` with nocopy instead of APCu, here with `routes` added to `bootstrap`, `config`, `discovery`) is the setup
 that also works on several web servers. It stays close to stock, with or without `routes` (806–1,001 req/s logged-in node page without):
 chainedfast still asks the database for each bin's last write on every request, and those bins were never the bottleneck. The gain
-comes from moving all bins and the cache tags off the database, which needs a single server. Drush and cron changes reach php-fpm through
-a journal table ([details](drupal#trade-offs)).
+comes from moving all bins and the cache tags off the database, which needs one cache for every process of the site: `nocopy.shm_name`
+on a single server, `nocopy.valkey` on several ([details](drupal)).
 
 ## Features
 
@@ -72,7 +74,7 @@ a journal table ([details](drupal#trade-offs)).
 - **Stampede protection.** `nocopy_remember()` and `apcu_entry()` run the callback once per key across all workers. `nocopy_remember()` also refreshes early via XFetch.
 - **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
 - **Valkey tier** (`nocopy.valkey`): Valkey becomes the cache of record shared by all servers, nocopy the zero-copy local copy in front of it. nocopy.so speaks RESP3 itself (no phpredis) and keeps local copies in sync through Valkey's client-side tracking.
-- **Drupal module** with a cache backend for all bins and cache tag checksums in shared memory (single server, or several with `nocopy.valkey`).
+- **Drupal module** with a cache backend for all bins and cache tag checksums, shared by php-fpm and Drush (`nocopy.shm_name`, or `nocopy.valkey` for several servers).
 
 ## Quick start
 
@@ -146,11 +148,9 @@ The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` a
 
 The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 11.2+) puts every cache bin and the cache tag checksums
 in nocopy, so cache reads and tag checks no longer touch the database. Install it, enable it, and add the `settings.php` lines from
-[`drupal/README.md`](drupal/README.md). It is for single-server sites, or several servers with `nocopy.valkey`.
-
-With `nocopy.shm_name` (and `$settings['nocopy_shared'] = TRUE`), Drush and cron attach to php-fpm's memory, so `drush cr`, `drush cim`
-and `drush cron` reach php-fpm directly. Without it, CLI processes get their own memory and log every cache write and tag invalidation
-to a database table, which each web request replays at the cost of one query per request ([details](drupal#trade-offs)).
+[`drupal/README.md`](drupal/README.md). It needs a cache shared by every PHP process of the site: `nocopy.shm_name` on a single
+server (Drush and cron attach to php-fpm's memory, so `drush cr`, `drush cim` and `drush cron` reach php-fpm directly), `nocopy.valkey`
+on several. A process without one throws instead of serving stale data.
 
 Reproduce the benchmark:
 
@@ -225,7 +225,7 @@ usual shared setup: drupal/redis with phpredis on the same Valkey, APCu chainedf
 | second server, requests 6-30 (p50) | 6.6 ms | 4.3 ms | n/a |
 
 A web save on server A and a Drush save both show up on server B in both shared setups. Anonymous traffic beats the single-server
-mode because Valkey replaces the journal query that every request paid.
+mode of that run because Valkey replaced the journal query that every request paid then (the journal is gone since).
 
 - The listener is started by the first process that needs it (and again by the next one if it dies: no heartbeat for 1 s). It pings
   Valkey every second; when its connection is lost or silent, nothing local is served until it is back, and it clears the local cache on
