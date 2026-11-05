@@ -15,9 +15,9 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
-| `./dev test` (8.5) | 54 passed, 1 skipped |
-| `./dev novalkey` | 44 passed, 11 skipped |
-| `./dev zts` | 46 passed, 9 skipped |
+| `./dev test` (8.5) | 55 passed, 1 skipped |
+| `./dev novalkey` | 45 passed, 11 skipped |
+| `./dev zts` | 47 passed, 9 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
 | `./dev symfony` (8.x) | pass |
@@ -30,10 +30,15 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 1. **Release.** Push to GitHub and get CI green; `composer.json` and a GitHub release for PIE; split `drupal/`, `symfony/`,
    `apcu/` into their own repositories for Packagist.
 2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`.
-3. **Eviction tuning:** merge keeps read entries up to one segment per 4 merged (test 029): tune if full-cache hit rates
-   need it. When truly full, evacuation copies data about to expire.
+3. **Eviction tuning:** victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
+   [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
+   expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
 4. **Memory balance:** a shard without writes expires only under memory pressure; a hot shard cannot borrow from idle ones;
-   RSS drifts to `nocopy.shm_size`.
+   RSS drifts to `nocopy.shm_size`. Candidate: move segments toward the shard with the most `ghost_hits` (Cliffhanger,
+   CacheLib's MarginalHits), only once a benchmark shows shards out of balance; it breaks the fixed-slice invariant.
+   Cheaper first: document `ghost_hits` as the "cache too small" signal in [Size and monitor](how-to/size-and-monitor.md).
+6. **Copy mode:** the kept-copy table is direct-mapped (4096 slots), so colliding keys evict each other (a 3000-key loop
+   fetches at ~400 ns with room to spare); set-associative if that shows up in workers.
 5. **Valkey:** Sentinel, Cluster, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
    to save round trips.
 
