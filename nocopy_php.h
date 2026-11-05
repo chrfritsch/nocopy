@@ -23,7 +23,8 @@ typedef struct {
 	uint32_t gen;
 } nocopy_keys;
 
-#define NOCOPY_LOCAL 4096 /* ponytail: direct-mapped, colliding keys evict each other; set-associative if hit rates need it */
+#define NOCOPY_LOCAL 4096 /* 1024 sets of NOCOPY_LOCAL_WAYS */
+#define NOCOPY_LOCAL_WAYS 4
 
 /* Copy mode: a private copy of an arena entry, valid while the entry is the same version (address + seq). */
 typedef struct {

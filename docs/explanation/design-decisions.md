@@ -51,6 +51,10 @@ raise `nocopy.entries_hint`.
 182 -> 12.8 ns; small values at most 0.8 ns slower. **Kept on the second fetch only** (a doorkeeper): keeping every copy
 made 100k distinct strings 37 -> 64 ns. Over budget, a SIEVE hand evicts copies not used since it last passed (was: a full flush). `bench/local.php`, 3000 arrays
 of 20 rows under Zipf: local_size 4M 320-371 -> 233-242 ns, 1M 423-429 -> 333-366 ns; within budget and on loops unchanged.
+**4-way set-associative** (was direct-mapped, 4096 slots either way): colliding keys evicted each other with budget to spare. `bench/local.php`
+3000 arrays of 20 rows (~9 MB), local_size 32M, 5 interleaved runs: Zipf 103-135 -> 47-53 ns (zero-copy: 49-66), loop 352-574 -> 94-108 ns.
+Price: kept-copy hits +0.6-2 ns (`ab.sh read`, near its noise); a loop over more than the budget 788-1490 -> 1474-1711 ns (more copies kept,
+then freed unused). Copy mode is what long-running workers use, so this is their part of zero-copy: give them a `local_size` that holds their working set.
 
 **Copy-out of `""` and 1-char strings uses PHP's interned ones** (`ZVAL_STRINGL_FAST`): no allocation. A cold copy of
 `bench/run.php`'s 1k rows (two 1-char strings each, `local_size=0`) 69 -> 59 µs.

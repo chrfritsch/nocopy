@@ -432,7 +432,21 @@ static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const 
 	if (UNEXPECTED(!NOCOPY_G(local))) {
 		NOCOPY_G(local) = ecalloc(NOCOPY_LOCAL, sizeof(nocopy_local));
 	}
-	return &NOCOPY_G(local)[(((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 52];
+	nocopy_local *set = &NOCOPY_G(local)[((((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 54) * NOCOPY_LOCAL_WAYS], *victim = set;
+	int best = 4;
+	for (int i = 0; i < NOCOPY_LOCAL_WAYS; i++) {
+		nocopy_local *l = &set[i];
+		if (l->e == e || l->seen == e) {
+			return l;
+		}
+		/* victim: a way with no copy and no pending sighting, else no copy, else one not used since the SIEVE hand passed */
+		int rank = !l->e ? (l->seen ? 1 : 0) : (l->visited ? 3 : 2);
+		if (rank < best) {
+			best = rank;
+			victim = l;
+		}
+	}
+	return victim;
 }
 
 static void local_flush(void)
