@@ -64,9 +64,10 @@ class NocopyBackend implements CacheBackendInterface {
 
   // Read on every call: another request may have cleared the bin.
   // Lost (new bin, eviction): a fresh version. That only costs misses, a default could revive deleted items.
-  protected function version(): string {
-    $version = nocopy_get($this->versionKey(), $hit);
-    if (!$hit) {
+  // $found: a nocopy_get_multiple() result that asked for versionKey() too.
+  protected function version(?array $found = NULL): string {
+    $version = $found === NULL ? nocopy_get($this->versionKey()) : $found[$this->versionKey()] ?? NULL;
+    if (!is_string($version)) {
       $version = bin2hex(random_bytes(6));
       nocopy_put($this->versionKey(), $version);
     }
@@ -85,13 +86,13 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function getMultiple(&$cids, $allow_invalid = FALSE) {
     $raw = [];
-    $version = $this->version();
     $keys = [];
     foreach ($cids as $cid) {
       $keys[$this->key((string) $cid)] = $cid;
     }
-    // With nocopy.valkey: every local miss in one round trip.
-    $found = nocopy_get_multiple(array_keys($keys));
+    // The bin version in the same lookup; with nocopy.valkey every local miss in one round trip.
+    $found = nocopy_get_multiple([$this->versionKey(), ...array_keys($keys)]);
+    $version = $this->version($found);
     foreach ($keys as $key => $cid) {
       if (($found[$key][self::VERSION] ?? NULL) === $version && !isset($this->delayedDeletions[$cid])) {
         $raw[$cid] = $found[$key];
@@ -204,14 +205,18 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function invalidateMultiple(array $cids) {
     $past = $this->time->getRequestTime() - 1;
-    $version = $this->version();
-    foreach ($cids as $cid) {
-      $key = $this->key((string) $cid);
-      $item = nocopy_get($key);
-      if (($item[self::VERSION] ?? NULL) === $version) {
-        $item[self::EXPIRE] = $past;
-        nocopy_put($key, $item, $this->ttl($past), TRUE);
+    $keys = array_map(fn ($cid) => $this->key((string) $cid), $cids);
+    $found = nocopy_get_multiple([$this->versionKey(), ...$keys]);
+    $version = $this->version($found);
+    $items = [];
+    foreach ($keys as $key) {
+      if (($found[$key][self::VERSION] ?? NULL) === $version) {
+        $items[$key] = $found[$key];
+        $items[$key][self::EXPIRE] = $past;
       }
+    }
+    if ($items) {
+      nocopy_put_multiple($items, $this->ttl($past), TRUE);
     }
   }
 
