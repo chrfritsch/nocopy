@@ -23,13 +23,15 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev symfony` (8.x) | pass |
 | `./dev apcu` | 23 failures, all known |
 | `./dev drupal` | 4 modes OK |
-| `./dev drupal-bench` | matches the published numbers (nocopy, all bins: anonymous 12,229 req/s, 7 statements logged-in, first request 146 ms) |
+| `./dev drupal-bench` | 10 configs incl. `apcu-all` / `nocopy-all-dbtags` breakdown, published ([results](../bench/results-drupal/2026-11-05)) |
+| `docker/fpm-bench.sh` | published; bench app fixed to use `cache.adapter.nocopy` (APCu layer gone since the polyfill) |
 
 ## Roadmap (rough priority)
 
 1. **Release.** Push to GitHub and get CI green; `composer.json` and a GitHub release for PIE; split `drupal/`, `symfony/`,
    `apcu/` into their own repositories for Packagist.
-2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`.
+2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`. Micro benchmarks cross-checked on Graviton4
+   (c8g.xlarge pod, 3 vCPU): ratios hold. Symfony and Drupal there are still to come.
 3. **Eviction tuning:** victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.

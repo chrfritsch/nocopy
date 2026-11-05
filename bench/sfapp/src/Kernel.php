@@ -29,7 +29,7 @@ class Kernel extends BaseKernel
             'serializer' => ['enabled' => true],
             'validation' => ['enabled' => true],
             'property_info' => ['enabled' => true],
-            'cache' => ['app' => 'cache.adapter.apcu', 'prefix_seed' => 'bench'],
+            'cache' => ['app' => extension_loaded('nocopy') ? 'cache.adapter.nocopy' : 'cache.adapter.apcu', 'prefix_seed' => 'bench'],
         ]);
         // a pool without Symfony's marshaller: the bundle's under nocopy, a plain ApcuAdapter under APCu
         if (extension_loaded('nocopy')) {

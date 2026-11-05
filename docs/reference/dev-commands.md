@@ -32,7 +32,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 |---|---|
 | `./dev bench` | `bench/run.php` groups ×3 for APCu, nocopy copy and zero-copy; prints medians |
 | `./dev stampede [workers secs ttl compute_ms]` | `bench/stampede.php`: naive vs `apcu_entry` vs `nocopy_remember` |
-| `./dev drupal-bench` | Drupal 11 under nginx + php-fpm + MariaDB, 8 cache configs; results to `bench/results-drupal/`. Env: `WORKERS`, `CONC`, `REQS`, `REQS_AUTH`, `EDITOR_T`, `CONFIGS` (see `docker/drupal-bench.sh`) |
+| `./dev drupal-bench` | Drupal 11 under nginx + php-fpm + MariaDB, 10 cache configs; results to `bench/results-drupal/`. Env: `WORKERS`, `CONC`, `REQS`, `REQS_AUTH`, `EDITOR_T`, `CONFIGS` (see `docker/drupal-bench.sh`) |
 
 Not wrapped (they need extra mounts): `docker/ab.sh` (A/B of two trees) and `docker/fpm-bench.sh` (Symfony app);
 usage in their headers and in [Develop, test and benchmark](../how-to/develop.md#benchmark).

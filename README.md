@@ -2,10 +2,9 @@
 
 # nocopy
 
-**A shared-memory cache for PHP that hands out cached arrays without copying them.**
+**A cache for PHP that reads a 1,000-row array as fast as a single integer.**
 
-Lock-free reads, segment-based eviction, stampede-safe `nocopy_remember()`, one cache for php-fpm and the CLI,
-and Valkey as a shared tier for several servers. An `apcu_*` polyfill (PHP) eases migration.
+Simple `put` / `get` functions, one cache shared by every PHP worker on the machine, and no copying on read.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![PHP 8.4 | 8.5](https://img.shields.io/badge/PHP-8.4%20%7C%208.5-777bb4.svg)
@@ -16,43 +15,75 @@ and Valkey as a shared tier for several servers. An `apcu_*` polyfill (PHP) ease
 
 ```php
 nocopy_put('products', $rows);      // 1,000 rows
-$rows = nocopy_get('products');     // APCu: ~200 µs to rebuild the array. nocopy: ~13 ns, any size.
+$rows = nocopy_get('products');     // APCu: ~200 µs. nocopy: ~13 ns. Any size.
 ```
 
 > **Status:** works and is tested, not released yet: build from source ([status and roadmap](docs/status.md)).
 
-## Why
+## The idea in one picture
 
-APCu copies every value out of shared memory on each fetch: arrays are rebuilt element by element, so the cost grows with
-the size of what you cache, and readers take a lock. nocopy stores arrays and strings as opcache-style immutable structures
-in shared memory and hands out a pointer: no copy, no unserialize, no lock ([how it works](docs/explanation/how-it-works.md)).
+APCu and similar caches keep your data in memory that all PHP workers share. But every time you read a value, they
+**copy it** into your request, element by element. A big array means a big copy, on every single read.
 
-| | APCu | nocopy |
+nocopy hands your code the shared value **itself**. Nothing is copied, so reading a huge array costs the same as reading
+a number.
+
+```mermaid
+flowchart LR
+    subgraph APCu
+        A1[(shared memory)] -- "copy every element<br/>~200 µs" --> A2[your request]
+    end
+    subgraph nocopy
+        N1[(shared memory)] -- "hand over a pointer<br/>~13 ns" --> N2[your request]
+    end
+```
+
+Think of a library: APCu photocopies the whole book each time you want to read it. nocopy lets you read it right on the
+shelf. And if you write in it? PHP quietly makes you a private copy first, exactly as it does with any array you pass
+around. Your code never notices.
+
+## How much faster?
+
+| | without nocopy | with nocopy |
 |---|---:|---:|
-| fetch array, 1k rows | 202 µs | **13 ns** |
-| fetch int / 100 B string | 28.6 / 34.9 ns | 13.0 / 13.0 ns |
-| parallel fetch int, 8 workers | 3.8 M ops/s | **221 M ops/s** |
-| Symfony app, cache-heavy page (php-fpm) | 4,116 req/s | **14,231 req/s** |
-| Drupal 11, anonymous `/` / logged-in node page | 4,376–5,478 / 798–915 req/s | **8,679–9,934 / 1,191–1,313 req/s** |
-| Drupal 11, database statements per logged-in request | 29–31 | **8** |
+| Read an array with 1,000 rows (vs APCu) | 202 µs | **13 ns** |
+| Read an int / a 100-byte string (vs APCu) | 28.6 / 34.9 ns | 13.0 / 13.0 ns |
+| Reads per second, 8 workers in parallel (vs APCu) | 3.8 M | **221 M** |
+| Symfony app, cache-heavy page (vs APCu) | 3,815 req/s | **8,924 req/s** |
+| Drupal 11, one server (vs stock): anonymous / logged-in node page | 4,980 / 909 req/s | **11,870 / 1,107 req/s** |
+| Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 5,105 / 628 req/s | **12,244 / 1,202 req/s** |
+| Drupal 11, database queries per logged-in request (vs stock) | 29–31 | **7** |
 
-Linux, Docker on arm64, PHP 8.5. Pages that barely touch the cache gain nothing; the gain is where requests read large
-cached arrays. All numbers and how to reproduce them: [benchmark results](docs/reference/benchmarks.md).
+Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
-## Features
+**The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,
+entity lists). If your pages barely touch the cache, you won't see a difference. Objects are stored serialized, as in
+APCu, so cache **arrays** to get the speedup.
 
-- **Zero-copy reads** under php-fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode. Long-running workers and the CLI get a safe **copy mode** that still reuses private copies of unchanged entries.
-- **Lock-free reads, sharded writes.** Up to 8 shards with their own locks. A writer killed with `kill -9` mid-write is detected and its shard repaired.
-- **Smarter eviction when full.** APCu wipes the whole cache. nocopy evicts its oldest segments and keeps entries read since they were written, using Segcache-style merging with a ghost list for keys that return.
-- **Stampede protection.** `nocopy_remember()` runs the callback once per key across all workers and refreshes early via XFetch.
-- **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
-- **Valkey tier** (`nocopy.valkey`): Valkey becomes the cache of record shared by all servers, nocopy the zero-copy local copy in front of it. nocopy.so speaks RESP3 itself (no phpredis) and keeps local copies in sync through Valkey's client-side tracking.
-- **Drupal module** with a cache backend for all bins and cache tag checksums, shared by php-fpm and Drush (`nocopy.shm_name`, or `nocopy.valkey` for several servers).
-- **APCu polyfill** ([`apcu/`](apcu)): `apcu_*` in PHP on top of `nocopy_*`, for code you cannot change yet ([migrate from APCu](docs/how-to/migrate-from-apcu.md)).
+On Drupal, most of the gain comes from something else: because php-fpm, Drush and cron share one cache that survives
+restarts, every cache bin and cache tag can move out of the database. Not copying adds little there
+([breakdown](docs/reference/benchmarks.md#drupal-11-where-the-gain-comes-from-dev-drupal-bench)).
 
-## Quick start
+## What you get
 
-Try it without installing anything but Docker:
+| | |
+|---|---|
+| ⚡ **Fast reads** | No copy, no unserialize, no lock while reading. |
+| 🖥️ **One cache for web and CLI** | php-fpm, Drush, `bin/console` and cron jobs all see the same cache, and it survives php-fpm restarts. |
+| 🧹 **Graceful when full** | APCu throws away the *whole* cache when memory runs out. nocopy removes the oldest, least-read entries and keeps the popular ones. |
+| 🚦 **No stampedes** | `nocopy_remember()` computes an expensive value **once**, even if 100 workers ask for it at the same moment, and refreshes it shortly before it expires. |
+| 🌐 **Several servers** | Point it at [Valkey](https://valkey.io) (the open-source Redis fork) and all servers share one cache, while each keeps a fast local copy that stays in sync automatically. No extra PHP extension needed. |
+| 🛡️ **Crash-safe** | A worker killed mid-write (OOM killer, `kill -9`) can't corrupt the cache: the damage is detected and repaired. |
+| 🧩 **Framework integrations** | [Symfony bundle](docs/how-to/symfony.md) (`cache.adapter.nocopy`), [Drupal module](drupal/README.md) (all cache bins and cache tags). |
+| 🔁 **Easy switch from APCu** | A [polyfill](apcu) provides the `apcu_*` functions on top of nocopy, for code you can't change yet. |
+
+Works with php-fpm, Apache, LiteSpeed, CGI, `php -S` and FrankenPHP. Long-running processes (CLI scripts, queue workers,
+FrankenPHP worker mode) automatically get a safe mode that hands out private copies and reuses them while the entry is
+unchanged.
+
+## Try it in one minute
+
+All you need is Docker:
 
 ```sh
 git clone <this repository> nocopy && cd nocopy
@@ -60,42 +91,59 @@ git clone <this repository> nocopy && cd nocopy
 php -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
 ```
 
-On a server (Linux, PHP 8.4+ with `phpize`, a C compiler):
+## Use it
+
+The whole API fits on a sticky note:
+
+```php
+nocopy_put('products', $rows, ttl: 300);    // store for 5 minutes
+$rows = nocopy_get('products', $hit);       // $hit is true if it was found
+
+$report = nocopy_remember('report', fn () => buildReport(), ttl: 60);   // compute once, cache, return
+
+nocopy_inc('page_views');                   // atomic counter
+nocopy_delete('products');
+```
+
+Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, `nocopy_delete_multiple`,
+`nocopy_clear`, `nocopy_stats`. All of them: [function reference](docs/reference/functions.md).
+
+## Install on a server
+
+You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required:
 
 ```sh
 phpize && ./configure && make
 ```
 
+Then load it in a config file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
+
 ```ini
-; conf.d file read by php-fpm and the CLI
 extension=/path/to/nocopy/modules/nocopy.so
-nocopy.shm_name=/nocopy       ; required: one cache for php-fpm and the CLI, kept over restarts
-nocopy.shm_size=128M
+nocopy.shm_name=/nocopy     ; required: the cache's name, so web and CLI share it
+nocopy.shm_size=128M        ; how much memory the cache may use
 ```
 
-```php
-nocopy_put('products', $rows, ttl: 300);
-$rows = nocopy_get('products', $hit);
-$report = nocopy_remember('report', fn () => buildReport(), ttl: 60);   // computed once across all workers
-```
+Step by step: [install guide](docs/how-to/install.md). Several servers: [Valkey guide](docs/how-to/valkey.md).
 
-## Documentation
+## Learn more
 
-| Start here | Then |
-|---|---|
-| [Your first cache](docs/tutorials/first-cache.md): a 10-minute tutorial | [Install on a server](docs/how-to/install.md), [php-fpm + CLI](docs/how-to/share-between-fpm-and-cli.md), [Valkey](docs/how-to/valkey.md) |
-| [Functions](docs/reference/functions.md), [configuration](docs/reference/configuration.md), [`nocopy_stats()`](docs/reference/stats.md) | [Symfony](docs/how-to/symfony.md), [Drupal](drupal/README.md), [migrate from APCu](docs/how-to/migrate-from-apcu.md) |
-| [How nocopy works](docs/explanation/how-it-works.md) | [Design decisions](docs/explanation/design-decisions.md), [architecture](docs/explanation/architecture.md) |
+| New here | Using it | How it works |
+|---|---|---|
+| [Your first cache](docs/tutorials/first-cache.md) (10-minute tutorial) | [Symfony](docs/how-to/symfony.md) · [Drupal](drupal/README.md) · [Migrate from APCu](docs/how-to/migrate-from-apcu.md) | [How nocopy works](docs/explanation/how-it-works.md) |
+| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
+| | [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
 
-Everything: [docs/](docs/README.md). Project state and roadmap: [status](docs/status.md).
+Everything: [docs/](docs/README.md).
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For a bug, include the PHP version, SAPI (fpm, FrankenPHP, CLI…), NTS/ZTS and
-the output of `nocopy_stats()`.
+Bug reports and pull requests are welcome. For a bug, please include your PHP version, how PHP runs (php-fpm,
+FrankenPHP, CLI…), whether it's thread-safe (`php -v` shows `ZTS` or `NTS`), and the output of `nocopy_stats()`.
 
-All you need is Docker: `./dev test` builds and runs the suite, `./dev ci` runs what CI runs. Start with the
-[first change tutorial](docs/tutorials/first-change.md), then [Develop, test and benchmark](docs/how-to/develop.md).
+You don't need PHP or a compiler on your machine, just Docker: `./dev test` builds and runs the tests, `./dev ci` runs
+what CI runs. Start with the [first change tutorial](docs/tutorials/first-change.md), then
+[Develop, test and benchmark](docs/how-to/develop.md).
 
 ## License
 

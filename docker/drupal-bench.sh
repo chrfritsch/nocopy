@@ -1,10 +1,10 @@
 #!/bin/sh
-# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, five cache configs, anonymous / logged-in / editor / cold start.
+# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, ten cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm --shm-size=1g -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
-# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"
+# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-fast-routes nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"
 #   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
-CONFIGS=${CONFIGS:-"stock stock-igbinary nocopy-fast nocopy-fast-routes nocopy-all redis redis2 nocopy-valkey"}
+CONFIGS=${CONFIGS:-"stock stock-igbinary apcu-all nocopy-fast nocopy-fast-routes nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"}
 B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
@@ -50,7 +50,7 @@ $DRUSH en redis -y >/dev/null 2>&1   # its services; the bins only use it in the
 nodes=$($DRUSH sqlq 'select count(*) from node'); echo "nodes: $nodes"
 [ "$nodes" -ge 1000 ] || { echo "content generation failed"; exit 1; }
 rm -rf $D/web/modules/contrib/nocopy && mkdir -p $D/web/modules/contrib && cp -r /src/drupal $D/web/modules/contrib/nocopy
-cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/sites/default/
+cp /src/bench/drupal/settings.*.php /src/bench/drupal/*.services.yml /src/bench/drupal/IgbinarySerialize.php $D/web/sites/default/
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
@@ -91,6 +91,9 @@ for cfg in $CONFIGS; do
     stock-igbinary) EXT="extension=$APCU
 extension=igbinary
 apc.serializer=igbinary"; SET=stock ;;
+    apcu-all) EXT="extension=$APCU
+extension=igbinary
+apc.serializer=igbinary"; SET=apcu ;;
     nocopy-fast) EXT="extension=/build/modules/nocopy.so
 nocopy.shm_name=/nocopy-bench
 extension=igbinary
@@ -99,11 +102,17 @@ nocopy.serializer=igbinary"; SET=fast ;;
 nocopy.shm_name=/nocopy-bench
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fastroutes ;;
+    nocopy-all-dbtags) EXT="extension=/build/modules/nocopy.so
+extension=igbinary
+nocopy.serializer=igbinary
+nocopy.shm_name=/nocopy-bench"; SET=alldbtags ;;
     nocopy-all) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary
 nocopy.shm_name=/nocopy-bench"; SET=all ;;
     redis|redis2) EXT="extension=$APCU
+extension=igbinary
+apc.serializer=igbinary
 extension=redis"; SET=redis ;;
     nocopy-valkey) EXT="extension=/build/modules/nocopy.so
 extension=igbinary

@@ -1,0 +1,6 @@
+services:
+  serialization.igbinary:
+    class: NocopyBench\IgbinarySerialize
+  cache.backend.redis:
+    class: Drupal\redis\Cache\CacheBackendFactory
+    arguments: ['@redis.factory', '@cache_tags.invalidator.checksum', '@serialization.igbinary']

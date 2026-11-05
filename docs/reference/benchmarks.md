@@ -15,59 +15,83 @@ Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`,
 Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): fetching 1k rows the second time costs
 12.8 ns instead of 68 µs.
 
+**Cross-check on Graviton4** (AWS c8g.xlarge, Kubernetes pod capped at 3 vCPU, PHP 8.5.12, same `docker/bench.sh`, 2026-11-05):
+absolute times are higher for both, the ratios hold.
+
+| | APCu | nocopy (zero-copy) | ratio here / above |
+|---|---:|---:|---:|
+| fetch int | 95.1 ns | 22.6 ns | 4.2x / 2.2x |
+| fetch array, 1k rows | 264 µs | 22.9 ns | ~11,500x / ~15,500x |
+| fetch array, 10k rows | 2.96 ms | 22.9 ns | size still irrelevant |
+| parallel fetch int, 8 workers | 3.6 M ops/s | 104 M ops/s | 29x / 58x (3 vCPU cap) |
+| 4 readers + 1 writer, reader throughput | 8.1 k ops/s | 1.63 M ops/s | |
+
 ## Symfony (`docker/fpm-bench.sh`)
 
-`bench/sfapp` behind nginx + php-fpm, 8 static workers, `ab`, median of 3.
+`bench/sfapp` behind nginx + php-fpm, 8 static workers, `ab`, median of 3, cache pool without Symfony's marshaller
+(2026-11-05).
 
-| | APCu | nocopy (copy) | nocopy (zero-copy) |
+| req/s | APCu | nocopy (copy) | nocopy (zero-copy) |
 |---|---:|---:|---:|
-| cache-heavy page | 4,116 req/s | 4,553 req/s | **14,231 req/s** |
+| cache-heavy page (`products?page=3`) | 3,815 | 4,777 | **8,924** |
+| cache-heavy page (`product/77`) | 3,595 | 4,626 | **9,182** |
+| no cache (`hello`) | 9,386 | 9,886 | 9,238 |
+| validator (`validate`) | 5,431 | 4,874 | 5,096 |
 
-Pages that barely touch the cache gain nothing; the gain is where requests read large cached arrays.
+Zero-copy brings cache-heavy pages up to what a page without cache reaches on this host (~9,400 req/s), so the ratio is
+capped by the host, not by nocopy. Pages that barely touch the cache gain nothing. An earlier run measured 4,116 vs
+14,231 req/s on a faster day of the same host; it could not be reproduced and is retired.
 
-## Drupal 11, one server (`./dev drupal-bench`)
+## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 
-2,000 nodes, php-fpm 8 workers, MariaDB. Lowest–highest of 3 full runs, config order rotated between runs
-([raw numbers](../../bench/results-drupal)).
+2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host, one full run on 2026-11-05
+([raw numbers](../../bench/results-drupal/2026-11-05)). igbinary in every config except stock. Each row changes one
+thing against the one above it:
 
-| | stock (DB + APCu) | stock + igbinary | nocopy fast layer + routes | nocopy, all bins |
+| | anonymous `/` | logged-in `/` / node | DB statements anon / logged-in | first request after fpm restart | Drush save visible on the web |
+|---|---:|---:|---:|---:|:---:|
+| stock: DB bins, APCu fast layer | 4,980 req/s | 994 / 909 req/s | 7 / 29-31 | 181 ms | yes |
+| apcu-all: all bins in APCu, tags in DB | 7,361 req/s | 1,156 / 1,086 req/s | 5 / 12-13 | 490 ms | **no** |
+| nocopy-all-dbtags: all bins in nocopy, tags in DB | 8,340 req/s | 1,218 / 980 req/s | 5 / 12-13 | 164 ms | yes |
+| nocopy-all: bins and tags in nocopy | **11,870 req/s** | **1,249 / 1,107 req/s** | **0 / 7** | 160 ms | yes |
+
+- **Bins out of the database** (stock → apcu-all): +48% anonymous, +16-19% logged-in. Any memory cache gets this.
+- **No copy on read** (apcu-all → nocopy-all-dbtags): +13% anonymous, +5% / -10% logged-in, within the noise of one
+  run. Drupal pages read few large arrays per request, unlike the Symfony page above.
+- **Tags out of the database** (nocopy-all-dbtags → nocopy-all): +42% anonymous (the page cache hit needs no query at
+  all), +3% / +13% logged-in.
+- apcu-all is only a measuring point: Drush and cron write to their own APCu, so their saves never reach php-fpm, and
+  the cache starts empty after every fpm restart. What nocopy adds over it is one cache for every process that survives
+  restarts, which is what makes moving all bins off the database safe.
+
+Editor loop under reader load (p50; save / edit form / view after save) and readers served meanwhile:
+
+| | stock | apcu-all | nocopy-all-dbtags | nocopy-all |
 |---|---:|---:|---:|---:|
-| anonymous `/` (page cache) | 4,376–5,478 req/s | 3,840–5,062 req/s | 3,784–5,383 req/s | **8,679–9,934 req/s** |
-| logged-in node page | 798–915 req/s | 815–893 req/s | 979–995 req/s | **1,191–1,313 req/s** |
-| logged-in front page | 966–1,031 req/s | 904–1,071 req/s | 876–1,035 req/s | **1,051–1,483 req/s** |
-| editor: save / edit form / view after save (p50) | 27–31 / 44–48 / 36–42 ms | 27–30 / 43–49 / 37–41 ms | 26–29 / 43–47 / 35–38 ms | **20–22 / 32–33 / 19–21 ms** |
-| readers served during editing | 530–598 req/s | 562–625 req/s | 598–651 req/s | **752–859 req/s** |
-| database statements per logged-in request | 29–31 | 29–31 | 30–32 | **8** |
-| database statements per anonymous request | 7 | 7 | 7 | **5** |
+| editor | 30 / 47 / 40 ms | 29 / 33 / 20 ms | 29 / 34 / 21 ms | **23 / 34 / 20 ms** |
+| readers | 563 req/s | 716 req/s | 696 req/s | 699 req/s |
 
-Statements include connection setup. These nocopy numbers predate the shared cache (an anonymous hit then paid a journal
-query). Reruns with `nocopy.shm_name` and no journal, same setup:
+Not in the table: stock + igbinary is the same as stock (4,934 / 962 req/s), and so is nocopy as chainedfast's fast
+layer (`nocopy-fast` 5,127 / 883 req/s, with `routes` 4,816 / 975 req/s). Chainedfast asks the database for each bin's
+last write on every request, and those bins were never the bottleneck.
 
-| run | anonymous `/` | logged-in front / node | statements anon / logged-in | first logged-in request after fpm restart |
-|---|---:|---:|---:|---:|
-| 2026-11-05 a | 12,938 req/s | 1,467 / 1,283 req/s | 0 / 7 | 155 ms |
-| 2026-11-05 b (noisy host) | 12,229 req/s | | – / 7 | 146 ms |
+## Drupal 11, several servers: nocopy + Valkey vs drupal/redis
 
-The **fast layer** (`ChainedFastBackend` with nocopy instead of APCu, `routes` added to `bootstrap`, `config`, `discovery`)
-also works on several servers but stays close to stock (806–1,001 req/s logged-in node page without `routes`): chainedfast
-asks the database for each bin's last write on every request, and those bins were never the bottleneck. The gain comes
-from moving all bins and the cache tags off the database.
+Same run. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
+igbinary, APCu chainedfast in front of bootstrap/config/discovery.
 
-## Drupal 11, Valkey (`bench/results-drupal/valkey`)
+| | drupal/redis | nocopy + Valkey |
+|---|---:|---:|
+| anonymous `/` | 5,105 req/s | **12,244 req/s** |
+| logged-in `/` / node | 688 / 628 req/s | **1,340 / 1,202 req/s** |
+| editor: save / edit form / view after save (p50) | 26 / 40 / 28 ms | **23 / 34 / 21 ms** |
+| readers served during editing | 447 req/s | **711 req/s** |
+| first request after fpm restart | 170 ms | 158 ms |
+| second server joining: first request / p50 of requests 6-30 | 161 / 6.8 ms | 167 / **4.2 ms** |
 
-Same site, all bins and tags shared, one run. Baseline: drupal/redis with phpredis on the same Valkey, APCu chainedfast in
-front of bootstrap/config/discovery.
-
-| req/s (p50) | drupal/redis | nocopy + Valkey | nocopy, single server |
-|---|---|---|---|
-| anonymous `/` | 5,129 (2 ms) | 12,546 (1 ms) | 9,109 (1 ms) |
-| logged-in `/` | 727 (10 ms) | 1,437 (5 ms) | 1,454 (5 ms) |
-| logged-in node | 711 (11 ms) | 1,299 (6 ms) | 1,239 (6 ms) |
-| first logged-in request after an fpm restart | 157 ms | 182 ms | 504 ms |
-| second server, requests 6-30 (p50) | 6.6 ms | 4.3 ms | n/a |
-
-A web save on server A and a Drush save both show up on server B in both shared setups. The single-server column of this
-run still paid the journal query (gone since), which is why Valkey beats it on anonymous traffic.
+Both have 0 / 7 database statements per anonymous / logged-in request: the difference is reading local zero-copy copies
+instead of a network round trip and unserialize per item. drupal/redis 2.0-alpha2 is slower than 1.11 here (3,323 / 702
+req/s). A web save on server A and a Drush save both show up on server B in both setups.
 
 ## Batches (`nocopy_get_multiple` / `put_multiple`), one host
 

@@ -1,0 +1,11 @@
+config	probe_bytes
+apcu-all	5032
+nocopy-all	5008
+nocopy-all-dbtags	5008
+nocopy-fast	5008
+nocopy-fast-routes	5008
+nocopy-valkey	5008
+redis	5032
+redis2	5032
+stock	115104
+stock-igbinary	5032
