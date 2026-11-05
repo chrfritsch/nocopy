@@ -30,7 +30,7 @@ nocopy stores arrays and strings as **opcache-style immutable structures** in on
 (or ZTS threads) share. `nocopy_get()` then returns a pointer straight into shared memory, with no copy, no unserialize and no lock.
 Per-worker pins keep that memory alive until the request ends, so a fetched value can never point at freed memory.
 
-Measured on Linux (Docker, arm64, PHP 8.5, release builds; details and method in [`HANDOVER.md`](HANDOVER.md)):
+Measured on Linux (Docker, arm64, PHP 8.5, release builds; `docker/bench.sh`, `docker/fpm-bench.sh`):
 
 | | APCu | nocopy (copy) | nocopy (zero-copy) |
 |---|---:|---:|---:|
@@ -170,7 +170,6 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 |---|---|---|
 | `nocopy.shm_size` | `32M` | Arena size |
 | `nocopy.shm_name` | (none, required) | Name of the POSIX shared-memory object that holds the cache, e.g. `/nocopy`: php-fpm, the CLI (Drush, cron) and restarted servers attach to the same one ([below](#shared-by-name)). Not set, or a process that cannot attach: no cache (startup warning) |
-| `nocopy.ttl` | `0` | Default TTL in seconds (0 = none) |
 | `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full |
 | `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
 | `nocopy.local_size` | `8M` | Copy mode only: keeps private copies of arrays and strings (≥ 512 B) fetched twice and hands them out again while the entry is unchanged. Counts against `memory_limit`. `0` = off |
@@ -270,6 +269,9 @@ flowchart LR
 
 The full design, including invariants and failure handling, is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+Limits: the arena is split into up to 8 shards of at least 8 MB each, and a single entry must fit into one shard.
+Under ZTS, nocopy is tested with `parallel` and FrankenPHP, not with mod_php under a threaded MPM.
+
 ## APCu polyfill
 
 For code that calls `apcu_*` and cannot change yet, load nocopy **instead of** APCu and require [`apcu/apcu.php`](apcu)
@@ -283,9 +285,6 @@ or `nocopy_*` for that.
 Not covered: `APCUIterator`, `apcu_key_info()`, the `APC_*` constants and every `apc.*` INI setting except `apc.enabled` and
 `apc.enable_cli` (size with `nocopy.*`). `apcu_cache_info()` and `apcu_sma_info()` return totals without per-entry lists.
 Against APCu's own test suite (`scripts/apcu-suite.sh`) the 22 failures are these gaps plus error messages that name `nocopy_*`.
-
-Other limits: the arena is split into up to 8 shards of at least 8 MB each, and a single entry must fit into one shard.
-Under ZTS, nocopy is tested with `parallel` and FrankenPHP, not with mod_php under a threaded MPM.
 
 ## Development
 
@@ -304,10 +303,10 @@ docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh      # build 
 docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30 # race stress loop
 ```
 
-Benchmarks against APCu need release builds of PHP and both extensions: `PHP=… NOCOPY_SO=… APCU_SO=… bench/all.sh`.
+Benchmarks against APCu: `docker/bench.sh` (CLI micro-benchmarks, release image) and `docker/fpm-bench.sh` (Symfony app behind php-fpm).
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) covers PHP 8.4/8.5 on amd64 and arm64, ZTS 8.4, FrankenPHP and Symfony 6.4/7.4/8.x.
 
-For project state, measurement history and next steps, see [`HANDOVER.md`](HANDOVER.md).
+For project state, decisions with their numbers and next steps, see [`HANDOVER.md`](HANDOVER.md).
 
 ## Contributing
 

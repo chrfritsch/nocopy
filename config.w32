@@ -1,7 +1,0 @@
-ARG_ENABLE('nocopy', 'nocopy support', 'no');
-
-if (PHP_NOCOPY != 'no') {
-	AC_DEFINE('HAVE_NOCOPY', 1, "Define to 1 if the PHP extension 'nocopy' is available.");
-
-	EXTENSION('nocopy', 'nocopy.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c nocopy_valkey.c', null, '/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1');
-}

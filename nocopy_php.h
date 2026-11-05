@@ -66,7 +66,7 @@ typedef enum {
 } nocopy_objects;
 
 typedef struct {
-	zend_long ttl; /* 0: nocopy.ttl */
+	zend_long ttl; /* 0: none */
 	bool add_only; /* fail if a live entry exists */
 	nocopy_objects objects;
 } nocopy_opts;
@@ -78,7 +78,6 @@ typedef enum {
 	NOCOPY_REFUSED, /* the value: warned, or an exception is pending */
 } nocopy_status;
 
-extern zend_long nocopy_ini_ttl;
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
 bool nocopy_available(void); /* false: nocopy.shm_name could not be attached; the functions below then keep and serve nothing */

@@ -124,7 +124,7 @@ function apcu_cache_info(bool $limited = false): array|false
     }
     $info = [
         'num_slots' => $s['slots'],
-        'ttl' => (int) ini_get('nocopy.ttl'),
+        'ttl' => 0,
         'num_hits' => $s['hits'],
         'num_misses' => $s['misses'],
         'num_entries' => $s['entries'],

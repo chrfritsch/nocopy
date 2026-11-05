@@ -4,7 +4,7 @@
 #   docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 sh /src/docker/shm-name.sh
 #   docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh
 command -v gcc >/dev/null && command -v valkey-server >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl redis-server >/dev/null 2>&1; }
-rm -rf /build && mkdir /build && cp /src/*.c /src/*.h /src/config.m4 /src/config.w32 /build/
+rm -rf /build && mkdir /build && cp /src/*.c /src/*.h /src/config.m4 /build/
 (cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>/build/make.err) || { cat /build/make.err; exit 1; }
 mkdir -p /app && cp /src/docker/shm-name/app.php /app/
 ini() { printf 'extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy\nnocopy.shm_size=32M\n%s\n' "$1" > /usr/local/etc/php/conf.d/zz-nocopy.ini; }

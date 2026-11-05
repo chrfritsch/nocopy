@@ -75,7 +75,5 @@ the database alone where the extension is not loaded or `nocopy.shm_name` is not
 - **Without `nocopy.valkey`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
 - **Long-running CLI processes** (queue workers, migrations) in copy mode see changes made elsewhere on their next cache read, like web requests.
 - **Deletes inside a database transaction wait for the commit** (none on rollback), so a concurrent request cannot refill the cache from uncommitted data.
-- **Do not set `nocopy.ttl`** (or `apc.ttl`): it would expire cache tag tokens, and a lost token for a common tag such as `rendered`
-  invalidates most of the site at once.
 - **Memory:** `nocopy.shm_size` must hold the cache, render cache included. When it is full, nocopy evicts entries (cache misses, not errors).
   Check `nocopy_stats()['used']` after warm-up: the 2,000-node benchmark site used 11 MB.

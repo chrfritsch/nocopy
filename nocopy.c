@@ -35,7 +35,6 @@ ZEND_DECLARE_MODULE_GLOBALS(nocopy)
 
 static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
-zend_long nocopy_ini_ttl;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_a NULL: unavailable) */
@@ -533,7 +532,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(key))) + z.n;
 	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
-		o->ttl ? o->ttl : nocopy_ini_ttl);
+		o->ttl);
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : 0;
 		persist_entry(e, key, val, keys);
@@ -619,8 +618,7 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 			*out = 0;
 			return false;
 		}
-		zend_long t = ttl ? ttl : nocopy_ini_ttl;
-		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) t * 1000, &v) : -1;
+		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) ttl * 1000, &v) : -1;
 		vk_forget(key); /* the next read fetches it */
 		*out = (zend_long) v;
 		return r == 1;
@@ -869,8 +867,7 @@ static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 	if (s == NOCOPY_REFUSED) {
 		return s;
 	}
-	zend_long ttl = o->ttl ? o->ttl : nocopy_ini_ttl;
-	time_t expires = ttl ? time(NULL) + ttl : 0;
+	time_t expires = o->ttl ? time(NULL) + o->ttl : 0;
 	zend_string *enc = vk_encode(val, expires, user);
 	if (!enc) {
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
@@ -975,8 +972,7 @@ static bool vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *fai
 	uint32_t cap = zend_hash_num_elements(vals), m = 0;
 	zend_string **keys = safe_emalloc(cap, sizeof *keys, 0), **enc = safe_emalloc(cap, sizeof *enc, 0);
 	nocopy_vk_kv *kv = safe_emalloc(cap, sizeof *kv, 0);
-	zend_long ttl = o->ttl ? o->ttl : nocopy_ini_ttl;
-	time_t expires = ttl ? time(NULL) + ttl : 0;
+	time_t expires = o->ttl ? time(NULL) + o->ttl : 0;
 	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
 		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
 		nocopy_put p;
@@ -1567,17 +1563,10 @@ static ZEND_INI_MH(OnSerializer)
 	return SUCCESS;
 }
 
-static ZEND_INI_MH(OnTtl)
-{
-	nocopy_ini_ttl = zend_ini_parse_quantity_warn(new_value, entry->name);
-	return SUCCESS;
-}
-
 PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
 	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
 	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
-	PHP_INI_ENTRY("nocopy.ttl", "0", PHP_INI_SYSTEM, OnTtl)
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)

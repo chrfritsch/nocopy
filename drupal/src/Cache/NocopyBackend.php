@@ -63,7 +63,7 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   // [version, invalidated_at], read on every call: another request may have cleared the bin.
-  // Either key lost (new bin, eviction, nocopy.ttl): start a fresh version. That only costs misses, a default could revive deleted items.
+  // Either key lost (new bin, eviction): start a fresh version. That only costs misses, a default could revive deleted items.
   protected function state(): array {
     $version = nocopy_get($this->binKey('version'), $hit);
     $invalidated = nocopy_get($this->binKey('invalidated_at'), $invalidatedHit);

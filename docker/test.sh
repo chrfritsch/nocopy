@@ -2,7 +2,7 @@
 # Inside the image: build /src out of tree in /build, run the own tests (args: extra run-tests options or test paths). Exit 1 on any failure.
 set -e
 rm -rf /build && mkdir /build && cd /src
-cp *.c *.h config.m4 config.w32 /build/
+cp *.c *.h config.m4 /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 grep -i warning make.err || true
 cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu
