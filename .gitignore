@@ -20,7 +20,7 @@ configure.ac
 configure.bat
 configure.in
 configure.js
-include
+/include
 install-sh
 libtool
 ltmain.sh
