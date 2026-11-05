@@ -173,7 +173,7 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | `nocopy.local_size` | `8M` | Copy mode only: keeps private copies of arrays and strings (≥ 512 B) fetched twice and hands them out again while the entry is unchanged. Counts against `memory_limit`. `0` = off |
 | `nocopy.serializer` | `php` | `php` or `igbinary`: the format for values stored serialized (objects, shared references). Arrays and scalars are never serialized. `igbinary` needs the igbinary extension, otherwise a startup warning and `php`. Alias: `apc.serializer` |
 | `nocopy.apcu_compat` | `1` | Registers `apcu_*`, `APCUIterator`, `APC_*` and `apc.*`. `0`: only `nocopy_*`, so real APCu can be loaded too. If APCu is already loaded, nocopy switches to `0` itself and logs a startup warning |
-| `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `host:port` or `unix:///path`: share the cache through Valkey ([below](#valkey)). `phpinfo()` hides the credentials |
+| `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `tls://…` or `rediss://…` (TLS), `host:port` or `unix:///path`: share the cache through Valkey ([below](#valkey)). `phpinfo()` hides the credentials |
 | `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey; servers with the same prefix share one cache |
 | `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connect or a reply before treating Valkey as down |
 | `nocopy.valkey_tls_ca_file` | (system store) | PEM file of the CAs that may sign the server certificate, for `tls://` / `rediss://` |
