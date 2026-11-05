@@ -37,11 +37,9 @@ typedef struct {
 
 /* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
 typedef struct {
-	int fd;          /* -1: not connected */
+	void *c;         /* valkeyContext *, NULL: not connected */
 	void *ssl;       /* SSL *, with TLS */
 	char err[160];   /* why the connection failed last */
-	char *buf;       /* replies and pushes, persistent memory */
-	size_t len, pos, cap;
 	int64_t retry_at; /* ms, monotonic: after a failure, no new attempt before */
 	bool synced;     /* connected and the listener live, checked in this request */
 } nocopy_vk;

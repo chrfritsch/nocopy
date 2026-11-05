@@ -1425,7 +1425,6 @@ static PHP_GINIT_FUNCTION(nocopy)
 #endif
 	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
 	nocopy_globals->ctx.slot = -1;
-	nocopy_globals->vk.fd = -1;
 	nocopy_globals->keys.slot = pecalloc(NOCOPY_KEYS, sizeof(nocopy_kslot), 1);
 }
 

@@ -22,11 +22,16 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
   AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
     AC_DEFINE([HAVE_NOCOPY_VALKEY], [1], [Define to 1 if nocopy has the Valkey tier.])
     nocopy_sources="$nocopy_sources nocopy_valkey.c"
+    dnl vendored libvalkey: the same list as scripts/vendor-libvalkey.sh
+    lv_sources="adlist.c alloc.c async.c conn.c dict.c net.c read.c sds.c sockcompat.c valkey.c"
+    dnl its public API stays out of nocopy.so's exports (its visibility.h would mark it default)
+    lv_cflags="-DVALKEY_USE_THREADS -DVALKEY_VISIBILITY_H -DLIBVALKEY_API="
     dnl TLS for nocopy.valkey (tls://): OpenSSL when found, else a build without it
     PKG_CHECK_MODULES([NOCOPY_OPENSSL], [openssl >= 1.1.1], [
       PHP_EVAL_INCLINE([$NOCOPY_OPENSSL_CFLAGS])
       PHP_EVAL_LIBLINE([$NOCOPY_OPENSSL_LIBS], [NOCOPY_SHARED_LIBADD])
       AC_DEFINE([HAVE_NOCOPY_TLS], [1], [Define to 1 if nocopy.valkey can use TLS.])
+      lv_sources="$lv_sources tls.c"
     ], [AC_MSG_WARN([OpenSSL not found: nocopy.valkey without TLS])])
   ])
   PHP_SUBST([NOCOPY_SHARED_LIBADD])
@@ -34,5 +39,18 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
   PHP_NEW_EXTENSION([nocopy],
     [$nocopy_sources],
     [$ext_shared],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden])
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden $lv_cflags])
+
+  AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
+    lv=third_party/libvalkey
+    PHP_ADD_INCLUDE([$ext_srcdir/$lv/include])
+    PHP_ADD_INCLUDE([$ext_srcdir/$lv/include/valkey])
+    PHP_ADD_INCLUDE([$ext_srcdir/$lv/src])
+    PHP_ADD_BUILD_DIR([$ext_builddir/$lv/src])
+    dnl their code, their warnings: -w; PHP's -D_GNU_SOURCE would give them GNU strerror_r (empty error messages)
+    lv_flags="-fvisibility=hidden $lv_cflags -U_GNU_SOURCE -w"
+    AS_VAR_IF([ext_shared], [no],
+      [PHP_ADD_SOURCES([PHP_EXT_DIR([nocopy])/$lv/src], [$lv_sources], [$lv_flags])],
+      [PHP_ADD_SOURCES_X([PHP_EXT_DIR([nocopy])/$lv/src], [$lv_sources], [$lv_flags], [shared_objects_nocopy], [yes])])
+  ])
 ])

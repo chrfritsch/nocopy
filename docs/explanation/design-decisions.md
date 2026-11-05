@@ -23,6 +23,13 @@ cache, never a private one: a private cache splits invalidation silently ([Shari
 **Valkey: one listener process per arena** holds the only tracking connection: 16 connections and 16 copies of every push
 per server became 1. The writer's own server refetches its write once, since the listener cannot tell own writes apart.
 
+**Valkey connections from vendored libvalkey** (`third_party/libvalkey`, 0.5.0), replacing our own socket, TLS BIO and RESP3 parser
+(~600 lines and a fuzzer): Cluster, when it comes, is libvalkey's `cluster.c` rather than ours. Vendored because no distro or Homebrew
+packages it and PIE builds from the release archive (submodules are left out). `bench/` has no Valkey A/B; a put/get/inc/get_multiple loop
+over loopback (scratch script, 9 interleaved rounds, rounds where both builds ran at the VM's fast speed): put 10.3-11.4 -> 11.5-12.0 µs
+(each reply is a malloc'd tree), get 3.9-4.0 -> 3.7-4.0, inc 11.8-13.8 -> 12.5-13.0, get_multiple of 100 58-75 -> 52-71. Price: ~7k lines
+of C in the repo, updated with `scripts/vendor-libvalkey.sh <tag>`.
+
 **Valkey tier behind a seam.** `nocopy.c` reaches it only through `nocopy_vk_*`, and `--disable-nocopy-valkey` compiles it
 out, so the core builds and ships without it. CI runs the suite both ways. Default stays on.
 

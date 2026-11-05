@@ -21,7 +21,7 @@ stays untouched (it is mounted read-only). A failed test prints its diff: `-` ex
 | anything in C | `./dev test`, `./dev novalkey` (the core must build without the Valkey tier) |
 | locking, pins, reclamation, slot tables, eviction | also `./dev stress 30` and `./dev c 5` |
 | `nocopy_valkey.c` | also `./dev shm` (php-fpm + FrankenPHP with Valkey, listener restarts) |
-| `nocopy_resp.h` | also `./dev fuzz` |
+| `third_party/libvalkey` (only via `scripts/vendor-libvalkey.sh <tag>`, never by hand) | `./dev ci` |
 | thread handling, FrankenPHP | `./dev zts`, `./dev frankenphp` |
 | `nocopy.stub.php` (function signatures) | `./dev stub` to regenerate `nocopy_arginfo.h`, commit both |
 | `apcu/apcu.php` | `./dev apcu` (23 known failures, listed in `scripts/apcu-suite.sh`) |

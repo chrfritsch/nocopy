@@ -15,9 +15,10 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
+| `./dev ci` (8.5, after the libvalkey port) | all passed: tidy, test, novalkey, asan, clang, stress, c, shm, zts, frankenphp, symfony |
 | `./dev test` (8.5) | 57 passed, 1 skipped |
 | `./dev novalkey` | 46 passed, 12 skipped |
-| `./dev zts` | 47 passed, 9 skipped |
+| `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
 | `./dev symfony` (8.x) | pass |
@@ -40,7 +41,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
    CacheLib's MarginalHits), only once a benchmark shows shards out of balance; it breaks the fixed-slice invariant.
 6. **Copy mode:** the kept-copy table is direct-mapped (4096 slots), so colliding keys evict each other (a 3000-key loop
    fetches at ~400 ns with room to spare); set-associative if that shows up in workers.
-5. **Valkey:** Sentinel, Cluster, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
+5. **Valkey:** Cluster (libvalkey's `cluster.c`, vendored next to the rest), Sentinel, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
    to save round trips.
 
 Want to help with one of these? Start with [Your first change](tutorials/first-change.md).

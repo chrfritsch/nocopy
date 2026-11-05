@@ -42,7 +42,6 @@ tests/**/*.exp
 tests/**/*.log
 tests/**/*.sh
 !tests/c/run.sh
-!tests/c/fuzz.sh
 tests/**/*.db
 tests/**/*.mem
 tmp-php.ini

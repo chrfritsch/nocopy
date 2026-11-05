@@ -27,7 +27,6 @@ jobs:
       - run: ./dev tidy
       - run: ./dev asan
       - run: ./dev clang
-      - run: ./dev fuzz 60
   zts:
     strategy:
       fail-fast: false

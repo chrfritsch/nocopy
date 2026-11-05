@@ -4,7 +4,7 @@
 # Prints the best run per measurement (min time, max rate: interference only ever slows a run down) for each tree and mode (copy = request_scope=0, zero = request_scope=1).
 reps=${1:-3}; groups=${2:-read write parallel mixed contend ttl}
 for t in a b; do
-  rm -rf /build-$t && mkdir /build-$t && cp /$t/*.c /$t/*.h /$t/config.m4 /build-$t/
+  rm -rf /build-$t && mkdir /build-$t && cp /$t/*.c /$t/*.h /$t/config.m4 /build-$t/ && { [ ! -d /$t/third_party ] || cp -R /$t/third_party /build-$t/; }
   (cd /build-$t && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>&1) || { echo "build $t failed"; exit 1; }
 done
 R=/tmp/ab; rm -rf $R; mkdir -p $R

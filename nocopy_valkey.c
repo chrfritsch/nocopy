@@ -1,5 +1,6 @@
 /* nocopy's Valkey tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
- * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; nocopy.c only calls nocopy_vk_*. */
+ * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; nocopy.c only calls nocopy_vk_*.
+ * The connections are libvalkey's (third_party/libvalkey), blocking with nocopy.valkey_timeout; pushes come back as replies and are applied here. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -7,12 +8,10 @@
 
 #include "nocopy_php.h"
 #include "zend_smart_str.h"
-#include "nocopy_resp.h"
 #include "ext/random/php_random.h"
+#include <valkey/valkey.h>
 #include <time.h>
 #include <sys/socket.h>
-#include <sys/un.h>
-#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -27,19 +26,16 @@
 # include <sys/prctl.h>
 #endif
 #include <arpa/inet.h>
-#include <limits.h>
 #ifdef HAVE_NOCOPY_TLS
+# include <valkey/tls.h>
 # include <openssl/ssl.h>
 # include <openssl/err.h>
 # include <openssl/x509v3.h>
 #endif
 
-#ifndef MSG_NOSIGNAL
-# define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE on the socket instead */
-#endif
-
 bool nocopy_vk_on;
-static char *vk_host, *vk_port, *vk_path, *vk_user, *vk_pass, *vk_prefix;
+static char *vk_host, *vk_path, *vk_user, *vk_pass, *vk_prefix;
+static int vk_port;
 static size_t vk_plen;
 static int vk_timeout_ms = 500;
 static bool vk_tls; /* tls:// or rediss:// */
@@ -65,7 +61,7 @@ static void pfree(char **p)
 /* tcp://[user:pass@]host:port, tls://.. or rediss://.. (TLS), host:port, [::1]:port, unix:///path */
 ZEND_INI_MH(nocopy_vk_on_url)
 {
-	pfree(&vk_host), pfree(&vk_port), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass);
+	pfree(&vk_host), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass);
 	const char *s = ZSTR_VAL(new_value);
 	nocopy_vk_on = *s != 0;
 	vk_tls = false;
@@ -97,7 +93,7 @@ ZEND_INI_MH(nocopy_vk_on_url)
 		hend = hend ? hend : s + strlen(s);
 		vk_host = pdup(s, hend - s);
 	}
-	vk_port = *hend == ':' ? pdup(hend + 1, strlen(hend + 1)) : pdup("6379", 4);
+	vk_port = *hend == ':' ? atoi(hend + 1) : 6379;
 	return SUCCESS;
 }
 
@@ -158,87 +154,28 @@ static int64_t now_ms(void)
 	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static void vk_close_fd(nocopy_vk *v);
+static void vk_close_c(nocopy_vk *v)
+{
+	if (v->c) {
+		valkeyFree(v->c); /* with TLS: SSL_free, no close_notify: in a forked child the parent still uses the session */
+		v->c = v->ssl = NULL;
+	}
+#ifdef HAVE_NOCOPY_TLS
+	ERR_clear_error(); /* PHP's openssl functions share this thread's error queue */
+#endif
+}
 
 static bool vk_fail(nocopy_vk *v)
 {
-	vk_close_fd(v);
-	v->len = v->pos = 0;
+	valkeyContext *c = v->c;
+	if (c && c->err) {
+		snprintf(v->err, sizeof v->err, "%s", c->errstr);
+	}
+	vk_close_c(v);
 	v->synced = false;
 	int64_t now = now_ms();
 	v->retry_at = now + 500 + (int64_t) (((uint64_t) now * 2654435761u ^ (uint64_t) getpid()) % 1001); /* jitter: no reconnects in step */
 	return false;
-}
-
-static bool vk_wait(int fd, short ev)
-{
-	struct pollfd p = {.fd = fd, .events = ev};
-	int r;
-	while ((r = poll(&p, 1, vk_timeout_ms)) < 0 && errno == EINTR) {
-	}
-	return r > 0 && !(p.revents & (POLLERR | POLLNVAL));
-}
-
-static int vk_dial_one(int family, const struct sockaddr *sa, socklen_t sl)
-{
-	int fd = socket(family, SOCK_STREAM, 0);
-	if (fd < 0) {
-		return -1;
-	}
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-	fcntl(fd, F_SETFD, FD_CLOEXEC);
-#ifdef SO_NOSIGPIPE
-	int one = 1;
-	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-	if (connect(fd, sa, sl) < 0) {
-		int err = errno;
-		socklen_t el = sizeof err;
-		if (err == EINPROGRESS) {
-			struct pollfd p = {.fd = fd, .events = POLLOUT};
-			err = poll(&p, 1, vk_timeout_ms) <= 0 ? ETIMEDOUT : getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) < 0 ? errno : err;
-		}
-		if (err) {
-			close(fd);
-			errno = err;
-			return -1;
-		}
-	}
-	return fd;
-}
-
-static int vk_dial(void)
-{
-	if (vk_path) {
-		struct sockaddr_un un = {.sun_family = AF_UNIX};
-		strncpy(un.sun_path, vk_path, sizeof un.sun_path - 1);
-		return vk_dial_one(AF_UNIX, (struct sockaddr *) &un, sizeof un);
-	}
-	struct addrinfo hints = {.ai_socktype = SOCK_STREAM}, *res, *ai;
-	if (getaddrinfo(vk_host, vk_port, &hints, &res) != 0) {
-		return -1;
-	}
-	int fd = -1;
-	for (ai = res; ai && fd < 0; ai = ai->ai_next) {
-		fd = vk_dial_one(ai->ai_family, ai->ai_addr, ai->ai_addrlen);
-	}
-	freeaddrinfo(res);
-	if (fd >= 0) {
-		int one = 1, idle = 60, intvl = 10, cnt = 3;
-		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-		/* keepalive: load balancers and NAT drop idle TCP (AWS: 350 s); a dead peer is noticed in ~90 s */
-		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
-#ifdef TCP_KEEPIDLE
-		setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
-#elif defined(TCP_KEEPALIVE)
-		setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle); /* macOS */
-#endif
-#ifdef TCP_KEEPINTVL
-		setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
-		setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
-#endif
-	}
-	return fd;
 }
 
 /* ---- TLS ---- */
@@ -246,58 +183,19 @@ static int vk_dial(void)
 #ifdef HAVE_NOCOPY_TLS
 static SSL_CTX *tls_ctx;
 static const char *tls_ctx_err; /* why there is no context */
-static BIO_METHOD *tls_bio;
-
-/* Our own socket BIO: OpenSSL's writes without MSG_NOSIGNAL, and a peer gone mid-write would SIGPIPE the worker. */
-static int bio_write(BIO *b, const char *d, int n)
-{
-	BIO_clear_retry_flags(b);
-	ssize_t w = send((int) (intptr_t) BIO_get_data(b), d, (size_t) n, MSG_NOSIGNAL);
-	if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-		BIO_set_retry_write(b);
-	}
-	return (int) w;
-}
-
-static int bio_read(BIO *b, char *d, int n)
-{
-	BIO_clear_retry_flags(b);
-	ssize_t r = recv((int) (intptr_t) BIO_get_data(b), d, (size_t) n, 0);
-	if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-		BIO_set_retry_read(b);
-	}
-	return (int) r;
-}
-
-static long bio_ctrl(BIO *b, int cmd, long num, void *ptr)
-{
-	(void) b, (void) num, (void) ptr;
-	return cmd == BIO_CTRL_FLUSH;
-}
-
-static int bio_create(BIO *b)
-{
-	BIO_set_init(b, 1);
-	return 1;
-}
 
 static const char *tls_error(void)
 {
 	static char buf[256];
 	unsigned long e = ERR_peek_last_error();
 	ERR_error_string_n(e, buf, sizeof buf);
-	ERR_clear_error(); /* PHP's openssl functions share this thread's error queue */
+	ERR_clear_error();
 	return e ? buf : "TLS failure";
 }
 
 /* Once at startup (forks and threads share it): the files are read here, and an error shows at once. */
 static void tls_init(void)
 {
-	tls_bio = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "nocopy");
-	BIO_meth_set_write(tls_bio, bio_write);
-	BIO_meth_set_read(tls_bio, bio_read);
-	BIO_meth_set_ctrl(tls_bio, bio_ctrl);
-	BIO_meth_set_create(tls_bio, bio_create);
 	SSL_CTX *c = SSL_CTX_new(TLS_client_method());
 	if (!c) {
 		tls_ctx_err = tls_error();
@@ -324,22 +222,7 @@ static void tls_init(void)
 	tls_ctx = c;
 }
 
-/* poll for what OpenSSL wants after a non-blocking call; false: an error (msg set) or the timeout */
-static bool tls_want(nocopy_vk *v, int r, const char **msg)
-{
-	int e = SSL_get_error((SSL *) v->ssl, r);
-	if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-		if (vk_wait(v->fd, e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT)) {
-			return true;
-		}
-		*msg = "TLS: timeout";
-		return false;
-	}
-	*msg = e == SSL_ERROR_SYSCALL && !ERR_peek_last_error() ? "TLS: connection closed" : tls_error();
-	return false;
-}
-
-/* Handshake on the connected v->fd: SNI and the name (or IP) checked against the certificate. */
+/* Handshake on the connected context: SNI and the name (or IP) checked against the certificate. */
 static bool tls_connect(nocopy_vk *v, const char **msg)
 {
 	if (!tls_ctx) {
@@ -347,15 +230,10 @@ static bool tls_connect(nocopy_vk *v, const char **msg)
 		return false;
 	}
 	SSL *s = SSL_new(tls_ctx);
-	BIO *b = BIO_new(tls_bio);
-	if (!s || !b) {
-		SSL_free(s), BIO_free(b);
+	if (!s) {
 		*msg = tls_error();
 		return false;
 	}
-	BIO_set_data(b, (void *) (intptr_t) v->fd);
-	SSL_set_bio(s, b, b);
-	v->ssl = s;
 	unsigned char ip[16];
 	bool is_ip = inet_pton(AF_INET, vk_host, ip) == 1 || inet_pton(AF_INET6, vk_host, ip) == 1;
 	if (!is_ip) {
@@ -365,118 +243,68 @@ static bool tls_connect(nocopy_vk *v, const char **msg)
 		X509_VERIFY_PARAM *p = SSL_get0_param(s);
 		if (is_ip ? !X509_VERIFY_PARAM_set1_ip_asc(p, vk_host) : !X509_VERIFY_PARAM_set1_host(p, vk_host, 0)) {
 			*msg = tls_error();
+			SSL_free(s);
 			return false;
 		}
 	}
-	int r;
-	while ((r = SSL_connect(s)) != 1) {
-		if (!tls_want(v, r, msg)) {
-			long vr = SSL_get_verify_result(s);
-			if (vr != X509_V_OK) {
-				*msg = X509_verify_cert_error_string(vr);
-				ERR_clear_error();
-			}
-			return false;
-		}
+	if (valkeyInitiateTLS(v->c, s) != VALKEY_OK) {
+		long vr = SSL_get_verify_result(s);
+		*msg = vr != X509_V_OK ? X509_verify_cert_error_string(vr) : ERR_peek_last_error() ? tls_error() : ((valkeyContext *) v->c)->errstr;
+		SSL_free(s); /* not taken over on failure */
+		ERR_clear_error();
+		return false;
 	}
+	v->ssl = s;
 	return true;
 }
 #endif
 
-static void vk_close_fd(nocopy_vk *v)
-{
-#ifdef HAVE_NOCOPY_TLS
-	if (v->ssl) {
-		SSL_free((SSL *) v->ssl); /* no close_notify: in a forked child the parent still uses the session */
-		v->ssl = NULL;
-		ERR_clear_error();
-	}
-#endif
-	if (v->fd >= 0) {
-		close(v->fd);
-	}
-	v->fd = -1;
-}
-
 void nocopy_vk_mshutdown(void)
 {
-	pfree(&vk_host), pfree(&vk_port), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass), pfree(&vk_prefix);
+	pfree(&vk_host), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass), pfree(&vk_prefix);
 	pfree(&nocopy_vk_tls_ca), pfree(&nocopy_vk_tls_cert), pfree(&nocopy_vk_tls_key);
 #ifdef HAVE_NOCOPY_TLS
 	if (tls_ctx) {
 		SSL_CTX_free(tls_ctx);
 		tls_ctx = NULL;
 	}
-	if (tls_bio) {
-		BIO_meth_free(tls_bio);
-		tls_bio = NULL;
-	}
 #endif
 }
 
-/* >0: bytes, 0: would block (*want: what to poll for), -1: the connection is gone */
-static ssize_t io_read(nocopy_vk *v, char *b, size_t n, short *want)
-{
-#ifdef HAVE_NOCOPY_TLS
-	if (v->ssl) {
-		int r = SSL_read((SSL *) v->ssl, b, n > INT_MAX ? INT_MAX : (int) n);
-		if (r > 0) {
-			return r;
-		}
-		int e = SSL_get_error((SSL *) v->ssl, r);
-		*want = e == SSL_ERROR_WANT_WRITE ? POLLOUT : POLLIN;
-		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-			return 0;
-		}
-		snprintf(v->err, sizeof v->err, "%s", ERR_peek_last_error() ? tls_error() : "connection closed");
-		return -1;
-	}
-#endif
-	ssize_t r;
-	while ((r = recv(v->fd, b, n, MSG_DONTWAIT)) < 0 && errno == EINTR) {
-	}
-	*want = POLLIN;
-	if (r > 0 || (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
-		return r > 0 ? r : 0;
-	}
-	snprintf(v->err, sizeof v->err, "%s", r == 0 ? "connection closed" : strerror(errno));
-	return -1;
-}
-
-static ssize_t io_write(nocopy_vk *v, const char *b, size_t n, short *want)
-{
-#ifdef HAVE_NOCOPY_TLS
-	if (v->ssl) {
-		int r = SSL_write((SSL *) v->ssl, b, n > INT_MAX ? INT_MAX : (int) n);
-		if (r > 0) {
-			return r;
-		}
-		int e = SSL_get_error((SSL *) v->ssl, r);
-		*want = e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
-		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-			return 0;
-		}
-		snprintf(v->err, sizeof v->err, "%s", ERR_peek_last_error() ? tls_error() : "connection closed");
-		return -1;
-	}
-#endif
-	ssize_t w;
-	while ((w = send(v->fd, b, n, MSG_NOSIGNAL)) < 0 && errno == EINTR) {
-	}
-	*want = POLLOUT;
-	if (w > 0 || (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
-		return w > 0 ? w : 0;
-	}
-	snprintf(v->err, sizeof v->err, "%s", strerror(errno));
-	return -1;
-}
-
-/* Connected (and the TLS handshake done) on v->fd. false: *msg says why. */
+/* Connected (and the TLS handshake done) in v->c, which vk_fail closes. false: *msg says why. */
 static bool vk_open(nocopy_vk *v, const char **msg)
 {
-	if ((v->fd = vk_dial()) < 0) {
-		*msg = strerror(errno);
+	struct timeval tv = {.tv_sec = vk_timeout_ms / 1000, .tv_usec = (vk_timeout_ms % 1000) * 1000};
+	valkeyOptions o = {.options = VALKEY_OPT_NO_PUSH_AUTOFREE | VALKEY_OPT_PREFER_IP_UNSPEC, .connect_timeout = &tv, .command_timeout = &tv};
+	if (vk_path) {
+		VALKEY_OPTIONS_SET_UNIX(&o, vk_path);
+	} else {
+		VALKEY_OPTIONS_SET_TCP(&o, vk_host, vk_port);
+	}
+	valkeyContext *c = valkeyConnectWithOptions(&o);
+	v->c = c;
+	if (!c || c->err) {
+		*msg = c ? c->errstr : "out of memory";
 		return false;
+	}
+	int one = 1;
+	fcntl(c->fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+	setsockopt(c->fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one); /* macOS; PHP's SAPIs ignore SIGPIPE elsewhere */
+#endif
+	if (!vk_path) {
+		int idle = 60, intvl = 10, cnt = 3;
+		/* keepalive: load balancers and NAT drop idle TCP (AWS: 350 s); a dead peer is noticed in ~90 s */
+		setsockopt(c->fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
+#ifdef TCP_KEEPIDLE
+		setsockopt(c->fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
+#elif defined(TCP_KEEPALIVE)
+		setsockopt(c->fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle); /* macOS */
+#endif
+#ifdef TCP_KEEPINTVL
+		setsockopt(c->fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+		setsockopt(c->fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt);
+#endif
 	}
 	if (!vk_tls) {
 		return true;
@@ -489,124 +317,77 @@ static bool vk_open(nocopy_vk *v, const char **msg)
 #endif
 }
 
-/* ---- RESP3 ---- */
+/* ---- replies ---- */
 
-static void vk_apply(const vk_reply *push, const char *end)
+static bool is_str(const valkeyReply *r)
 {
-	vk_reply kind, keys;
-	if (push->n < 2) {
+	return r->type == VALKEY_REPLY_STRING || r->type == VALKEY_REPLY_STATUS || r->type == VALKEY_REPLY_VERB;
+}
+
+static void vk_apply(const valkeyReply *push)
+{
+	if (push->elements < 2 || !is_str(push->element[0]) || push->element[0]->len != 10 || memcmp(push->element[0]->str, "invalidate", 10) != 0) {
 		return;
 	}
-	const char *q = resp_parse(push->body, end, &kind);
-	if (kind.len != 10 || memcmp(kind.s, "invalidate", 10) != 0) {
-		return;
-	}
-	resp_parse(q, end, &keys);
+	const valkeyReply *keys = push->element[1];
 	__atomic_add_fetch(&nocopy_a->inval_gen, 1, __ATOMIC_SEQ_CST); /* before the drops: see the fill guard in nocopy.c */
-	if (keys.t == '_') {
+	if (keys->type == VALKEY_REPLY_NIL) {
 		nocopy_clear(); /* FLUSHALL / FLUSHDB */
 		return;
 	}
-	q = keys.body;
-	for (int64_t i = 0; i < keys.n; i++) {
-		vk_reply k;
-		q = resp_parse(q, end, &k);
-		if (k.len >= vk_plen && memcmp(k.s, vk_prefix, vk_plen) == 0) {
-			nocopy_drop_local(k.s + vk_plen, k.len - vk_plen);
+	for (size_t i = 0; i < keys->elements; i++) {
+		const valkeyReply *k = keys->element[i];
+		if (is_str(k) && k->len >= vk_plen && memcmp(k->str, vk_prefix, vk_plen) == 0) {
+			nocopy_drop_local(k->str + vk_plen, k->len - vk_plen);
 		}
 	}
 }
 
-/* Reads what is there (block: waits up to the timeout for at least one byte). -1: connection gone, 0: nothing, 1: read. */
-static int vk_recv(nocopy_vk *v, bool block)
+/* The next reply (freeReplyObject it); pushes in front of it are applied. NULL: the connection failed and is closed. */
+static valkeyReply *vk_get(nocopy_vk *v)
 {
-	if (v->pos == v->len) {
-		v->pos = v->len = 0;
-		if (v->cap > 1024 * 1024) { /* a large reply is consumed: do not keep its buffer for the worker's life */
-			pefree(v->buf, 1);
-			v->buf = NULL;
-			v->cap = 0;
-		}
-	}
-	if (v->cap - v->len < 16384) {
-		if (v->pos) {
-			memmove(v->buf, v->buf + v->pos, v->len - v->pos);
-			v->len -= v->pos;
-			v->pos = 0;
-		}
-		if (v->cap - v->len < 16384) {
-			v->cap = v->cap ? v->cap * 2 : 65536;
-			v->buf = perealloc(v->buf, v->cap, 1);
-		}
-	}
 	for (;;) {
-		short want = POLLIN;
-		ssize_t n = io_read(v, v->buf + v->len, v->cap - v->len, &want);
-		if (n > 0) {
-			v->len += (size_t) n;
-			return 1;
+		valkeyReply *r;
+		if (valkeyGetReply(v->c, (void **) &r) != VALKEY_OK) {
+			vk_fail(v);
+			return NULL;
 		}
-		if (n < 0) {
-			return -1;
+		if (r->type != VALKEY_REPLY_PUSH) {
+			return r;
 		}
-		if (!block && want == POLLIN) {
-			return 0;
-		}
-		if (!vk_wait(v->fd, want)) {
-			snprintf(v->err, sizeof v->err, "no reply within nocopy.valkey_timeout");
-			return -1; /* timeout: the reply stream is out of step, start over */
-		}
+		vk_apply(r);
+		freeReplyObject(r);
 	}
 }
 
-/* The next reply; pushes in front of it are applied. */
-static bool vk_read(nocopy_vk *v, vk_reply *r)
+/* Applies the complete pushes read so far. false: a protocol error, an error reply, or (strict) any other reply. */
+static bool vk_pushes(valkeyContext *c, bool strict)
 {
-	for (;;) {
-		const char *end = v->buf + v->len, *q = resp_parse(v->buf + v->pos, end, r);
-		if (q) {
-			v->pos = (size_t) (q - v->buf);
-			if (r->t == '>') {
-				vk_apply(r, end);
-			} else if (r->t != '|') {
-				return true;
-			}
-			continue;
+	valkeyReply *r;
+	while (valkeyGetReplyFromReader(c, (void **) &r) == VALKEY_OK && r) {
+		bool push = r->type == VALKEY_REPLY_PUSH, bad = r->type == VALKEY_REPLY_ERROR || (strict && !push);
+		if (push) {
+			vk_apply(r);
 		}
-		if (r->t == '?' || vk_recv(v, true) < 0) {
-			return vk_fail(v);
+		freeReplyObject(r);
+		if (bad) {
+			return false;
 		}
 	}
+	return !c->err;
 }
 
 /* Applies the pushes waiting on the socket; no command is outstanding. */
 static bool vk_drain(nocopy_vk *v)
 {
-	for (;;) {
-		int got = vk_recv(v, false);
-		if (got < 0) {
+	valkeyContext *c = v->c;
+	struct pollfd p = {.fd = c->fd, .events = POLLIN};
+	while (poll(&p, 1, 0) > 0) {
+		if (valkeyBufferRead(c) != VALKEY_OK || !vk_pushes(c, true)) {
 			return vk_fail(v);
-		}
-		vk_reply r;
-		for (;;) {
-			const char *end = v->buf + v->len, *q = resp_parse(v->buf + v->pos, end, &r);
-			if (!q) {
-				break;
-			}
-			v->pos = (size_t) (q - v->buf);
-			if (r.t == '>') {
-				vk_apply(&r, end);
-			} else if (r.t != '|') {
-				return vk_fail(v); /* a reply nobody asked for */
-			}
-		}
-		if (r.t == '?') {
-			return vk_fail(v);
-		}
-		if (!got) {
-			return true;
 		}
 	}
+	return true;
 }
 
 static void arg(smart_str *s, const char *a, size_t n)
@@ -637,35 +418,25 @@ static void head(smart_str *s, int argc)
 
 #define ARG(s, lit) arg(s, lit, sizeof(lit) - 1)
 
+/* Queues the commands in s (freed); vk_get sends them and reads the replies. */
 static bool vk_send(nocopy_vk *v, smart_str *s)
 {
-	const char *b = ZSTR_VAL(s->s);
-	size_t n = ZSTR_LEN(s->s);
-	while (n) {
-		short want = POLLOUT;
-		ssize_t w = io_write(v, b, n, &want);
-		if (w > 0) {
-			b += w, n -= (size_t) w;
-		} else if (w == 0 && vk_wait(v->fd, want)) {
-		} else {
-			smart_str_free(s);
-			return vk_fail(v);
-		}
-	}
+	smart_str_0(s);
+	bool ok = valkeyAppendFormattedCommand(v->c, ZSTR_VAL(s->s), ZSTR_LEN(s->s)) == VALKEY_OK;
 	smart_str_free(s);
-	return true;
+	return ok || vk_fail(v);
 }
 
-/* Sends s (freed) and reads one reply. */
-static bool vk_call(nocopy_vk *v, smart_str *s, vk_reply *r)
+/* Sends s (freed) and reads one reply (freeReplyObject it). NULL: the connection failed. */
+static valkeyReply *vk_call(nocopy_vk *v, smart_str *s)
 {
-	smart_str_0(s);
-	return vk_send(v, s) && vk_read(v, r);
+	return vk_send(v, s) ? vk_get(v) : NULL;
 }
 
 /* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from Valkey's idle `timeout`.
+ * The SUBSCRIBE confirmation is a push, applied (ignored) with the next reply.
  * ponytail: the connection counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of unread pushes. */
-static bool vk_handshake(nocopy_vk *v, bool track, vk_reply *r)
+static bool vk_handshake(nocopy_vk *v, bool track)
 {
 	smart_str s = {0};
 	head(&s, vk_pass ? 7 : 4);
@@ -680,9 +451,21 @@ static bool vk_handshake(nocopy_vk *v, bool track, vk_reply *r)
 	}
 	head(&s, 2);
 	ARG(&s, "SUBSCRIBE"), ARG(&s, "__nocopy_keepalive__");
-	smart_str_0(&s);
-	*r = (vk_reply) {0};
-	return vk_send(v, &s) && vk_read(v, r) && r->t != '-' && r->t != '!' && (!track || (vk_read(v, r) && r->t == '+'));
+	if (!vk_send(v, &s)) {
+		return false;
+	}
+	valkeyReply *r = vk_get(v);
+	bool ok = r && r->type != VALKEY_REPLY_ERROR;
+	if (r && !ok) {
+		snprintf(v->err, sizeof v->err, "%.*s", (int) r->len, r->str);
+	}
+	freeReplyObject(r);
+	if (ok && track) {
+		r = vk_get(v);
+		ok = r && r->type == VALKEY_REPLY_STATUS;
+		freeReplyObject(r);
+	}
+	return ok;
 }
 
 /* A worker's command connection: no tracking, so a reconnect needs no local clear (the listener tracks). */
@@ -697,13 +480,8 @@ static bool vk_connect(nocopy_vk *v)
 		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to Valkey (%s): %s", vk_path ? vk_path : vk_host, msg);
 		return vk_fail(v);
 	}
-	vk_reply r;
-	if (!vk_handshake(v, false, &r)) {
-		if (r.t == '-') {
-			php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %.*s", (int) r.len, r.s);
-		} else {
-			php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %s", v->err[0] ? v->err : "unexpected reply");
-		}
+	if (!vk_handshake(v, false)) {
+		php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %s", v->err[0] ? v->err : "unexpected reply");
 		return vk_fail(v);
 	}
 	return true;
@@ -723,33 +501,23 @@ void nocopy_vk_minit(void)
 #endif
 }
 
-/* Reads and applies what arrived. -1: the connection is gone or out of step, 0: nothing came, 1: something did. */
-static int vk_listen_read(nocopy_vk *v)
+/* Writes what vk_send queued. */
+static bool vk_flush(valkeyContext *c)
 {
-	int got = vk_recv(v, false);
-	if (got < 0) {
-		return -1;
-	}
-	for (;;) {
-		vk_reply r;
-		const char *end = v->buf + v->len, *q = resp_parse(v->buf + v->pos, end, &r);
-		if (!q) {
-			return r.t == '?' ? -1 : got;
-		}
-		v->pos = (size_t) (q - v->buf);
-		if (r.t == '>') {
-			vk_apply(&r, end);
-		} else if (r.t == '-' || r.t == '!') {
-			return -1;
+	int done = 0;
+	while (!done) {
+		if (valkeyBufferWrite(c, &done) != VALKEY_OK) {
+			return false;
 		}
 	}
+	return true;
 }
 
 static ZEND_NORETURN void vk_listen(void)
 {
 	nocopy_arena *a = nocopy_a;
 	uint32_t me = (uint32_t) getpid();
-	nocopy_vk v = {.fd = -1};
+	nocopy_vk v = {0};
 	struct pollfd p = {.fd = -1, .events = POLLIN};
 	int64_t ping_at = 0, heard_by = 0;
 	for (;;) {
@@ -758,10 +526,9 @@ static ZEND_NORETURN void vk_listen(void)
 			_exit(0); /* replaced, or the arena is gone */
 		}
 		__atomic_store_n(&a->vk_beat, now, __ATOMIC_RELEASE);
-		vk_reply r;
-		if (v.fd < 0 && now >= v.retry_at) {
+		if (!v.c && now >= v.retry_at) {
 			const char *msg;
-			if (!vk_open(&v, &msg) || !vk_handshake(&v, true, &r)) {
+			if (!vk_open(&v, &msg) || !vk_handshake(&v, true)) {
 				vk_fail(&v);
 			} else {
 				__atomic_add_fetch(&a->inval_gen, 1, __ATOMIC_SEQ_CST); /* the fill guard: fills in flight drop their copy */
@@ -770,7 +537,8 @@ static ZEND_NORETURN void vk_listen(void)
 				ping_at = now + 1000, heard_by = 0;
 			}
 		}
-		p.fd = v.fd;
+		valkeyContext *c = v.c;
+		p.fd = c ? c->fd : -1;
 		int wait = BEAT_MS;
 #ifdef HAVE_NOCOPY_TLS
 		if (v.ssl && SSL_pending((SSL *) v.ssl) > 0) {
@@ -780,23 +548,18 @@ static ZEND_NORETURN void vk_listen(void)
 		if (poll(&p, 1, wait) <= 0) {
 			p.revents = 0;
 		}
-		if (v.fd < 0) {
+		if (!c) {
 			continue;
 		}
-		int got = p.revents || !wait ? vk_listen_read(&v) : 0;
-		bool ok = got >= 0;
+		bool got = p.revents || !wait, ok = !got || (valkeyBufferRead(c) == VALKEY_OK && vk_pushes(c, false));
 		now = now_ms();
-		if (got > 0) {
+		if (got) {
 			heard_by = 0; /* anything from Valkey answers the PING */
 		}
 		if (ok && heard_by && now > heard_by) {
 			ok = false; /* a silent connection: PING unanswered */
 		} else if (ok && now >= ping_at) {
-			smart_str s = {0};
-			head(&s, 1);
-			ARG(&s, "PING");
-			smart_str_0(&s);
-			ok = vk_send(&v, &s);
+			ok = valkeyAppendCommand(c, "PING") == VALKEY_OK && vk_flush(c);
 			ping_at = now + 1000;
 			heard_by = heard_by ? heard_by : now + (vk_timeout_ms > 1000 ? vk_timeout_ms : 1000);
 		}
@@ -857,6 +620,7 @@ static void vk_spawn(void)
 	for (int sig = 1; sig < NSIG; sig++) {
 		signal(sig, SIG_DFL);
 	}
+	signal(SIGPIPE, SIG_IGN); /* a write to a closed connection fails instead */
 #ifdef __linux__
 	prctl(PR_SET_NAME, "nocopy-valkey");
 #endif
@@ -904,10 +668,10 @@ static bool vk_ready(void)
 	if (EXPECTED(v->synced)) {
 		return true;
 	}
-	if (v->fd >= 0 && !vk_drain(v)) {
+	if (v->c && !vk_drain(v)) {
 		v->retry_at = 0; /* found closed with no command in flight: reconnect now, not after the pause */
 	}
-	if ((v->fd < 0 && !vk_connect(v)) || !listener_live()) {
+	if ((!v->c && !vk_connect(v)) || !listener_live()) {
 		return false;
 	}
 	v->synced = true;
@@ -921,14 +685,8 @@ void nocopy_vk_new_request(void)
 
 void nocopy_vk_close(nocopy_vk *v)
 {
-	vk_close_fd(v); /* in a forked child only its copy */
-	v->len = v->pos = 0;
+	vk_close_c(v); /* in a forked child only its copy */
 	v->synced = false;
-	if (v->buf) {
-		pefree(v->buf, 1);
-		v->buf = NULL;
-		v->cap = 0;
-	}
 }
 
 /* ---- commands: keys without the prefix. -1: Valkey unreachable or failed (the connection is reset). ---- */
@@ -938,26 +696,24 @@ typedef struct {
 	size_t kl, vl;
 } vk_kv;
 
-#define READY(v) nocopy_vk *v = &NOCOPY_G(vk); if (v->fd < 0 && !vk_ready()) return -1
+#define READY(v) nocopy_vk *v = &NOCOPY_G(vk); if (!v->c && !vk_ready()) return -1
 
 static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 {
 	READY(v);
 	smart_str s = {0};
-	vk_reply r, c;
 	head(&s, (int) n + 1), ARG(&s, "MGET");
 	for (uint32_t i = 0; i < n; i++) {
 		key_arg(&s, ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
 	}
-	if (!vk_call(v, &s, &r) || r.t != '*' || r.n != (int64_t) n) {
-		return -1;
+	valkeyReply *r = vk_call(v, &s);
+	bool ok = r && r->type == VALKEY_REPLY_ARRAY && r->elements == n;
+	for (uint32_t i = 0; ok && i < n; i++) {
+		const valkeyReply *c = r->element[i];
+		vals[i] = c->type == VALKEY_REPLY_STRING ? zend_string_init(c->str, c->len, 0) : NULL;
 	}
-	const char *end = v->buf + v->pos, *q = r.body;
-	for (uint32_t i = 0; i < n; i++) {
-		q = resp_parse(q, end, &c);
-		vals[i] = c.t == '$' ? zend_string_init(c.s, c.len, 0) : NULL;
-	}
-	return 1;
+	freeReplyObject(r);
+	return ok ? 1 : -1;
 }
 
 static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
@@ -973,16 +729,16 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 			ARG(&s, "PXAT"), arg(&s, b, bl);
 		}
 	}
-	smart_str_0(&s);
 	if (!vk_send(v, &s)) {
 		return -1;
 	}
 	for (uint32_t i = 0; i < n; i++) {
-		vk_reply r;
-		if (!vk_read(v, &r)) {
+		valkeyReply *r = vk_get(v);
+		if (!r) {
 			return -1;
 		}
-		res[i] = r.t == '+' ? 1 : -1;
+		res[i] = r->type == VALKEY_REPLY_STATUS ? 1 : -1;
+		freeReplyObject(r);
 	}
 	return 1;
 }
@@ -991,7 +747,6 @@ static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 {
 	READY(v);
 	smart_str s = {0};
-	vk_reply r;
 	head(&s, 3 + nx + (pxat ? 2 : 0)), ARG(&s, "SET"), key_arg(&s, k, kl), arg(&s, val, vl);
 	if (nx) {
 		ARG(&s, "NX");
@@ -1000,52 +755,55 @@ static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 		char b[24];
 		ARG(&s, "PXAT"), arg(&s, b, (size_t) snprintf(b, sizeof b, "%" PRId64, pxat));
 	}
-	if (!vk_call(v, &s, &r)) {
-		return -1;
-	}
-	return r.t == '+' ? 1 : r.t == '_' ? 0 : -1;
+	valkeyReply *r = vk_call(v, &s);
+	int ret = !r ? -1 : r->type == VALKEY_REPLY_STATUS ? 1 : r->type == VALKEY_REPLY_NIL ? 0 : -1;
+	freeReplyObject(r);
+	return ret;
 }
 
-static int vk_unlink(const char *k, size_t kl)
-{
-	READY(v);
-	smart_str s = {0};
-	vk_reply r;
-	head(&s, 2), ARG(&s, "UNLINK"), key_arg(&s, k, kl);
-	return vk_call(v, &s, &r) && r.t == ':' ? (int) (r.n > 0) : -1;
-}
-
+/* UNLINK of n keys; *gone: how many existed. */
 static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
 {
 	READY(v);
 	smart_str s = {0};
-	vk_reply r;
 	head(&s, (int) n + 1), ARG(&s, "UNLINK");
 	for (uint32_t i = 0; i < n; i++) {
 		key_arg(&s, ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
 	}
-	if (!vk_call(v, &s, &r) || r.t != ':') {
-		return -1;
+	valkeyReply *r = vk_call(v, &s);
+	bool ok = r && r->type == VALKEY_REPLY_INTEGER;
+	if (ok) {
+		*gone = r->integer;
 	}
-	*gone = r.n;
-	return 1;
+	freeReplyObject(r);
+	return ok ? 1 : -1;
+}
+
+static int vk_unlink(const char *k, size_t kl)
+{
+	zend_string *key = zend_string_init(k, kl, 0);
+	int64_t gone = 0;
+	int r = vk_unlink_n(1, &key, &gone);
+	zend_string_release(key);
+	return r < 0 ? -1 : gone > 0;
 }
 
 static int vk_eval_long(nocopy_vk *v, const char *script, size_t sl, const char *k, size_t kl, int64_t a1, int64_t a2, int64_t *out)
 {
 	smart_str s = {0};
-	vk_reply r;
 	char b1[24], b2[24];
 	head(&s, 6), ARG(&s, "EVAL"), arg(&s, script, sl), ARG(&s, "1"), key_arg(&s, k, kl);
 	arg(&s, b1, (size_t) snprintf(b1, sizeof b1, "%" PRId64, a1)), arg(&s, b2, (size_t) snprintf(b2, sizeof b2, "%" PRId64, a2));
-	if (!vk_call(v, &s, &r)) {
+	valkeyReply *r = vk_call(v, &s);
+	if (!r) {
 		return -1;
 	}
-	if (r.t != ':') {
-		return 0; /* an error reply: not an integer */
+	int ret = r->type == VALKEY_REPLY_INTEGER; /* else an error reply: not an integer */
+	if (ret) {
+		*out = r->integer;
 	}
-	*out = r.n;
-	return 1;
+	freeReplyObject(r);
+	return ret;
 }
 
 /* Created as delta with ttl_ms when missing (APCu), else INCRBY. 0: not an integer. */
@@ -1079,33 +837,38 @@ static int vk_clear(void)
 	smart_str_appendc(&pat, '*');
 	smart_str_0(&pat);
 	char cursor[24] = "0";
+	int ret = 1;
 	do {
 		smart_str s = {0};
-		vk_reply r, c, keys;
 		head(&s, 6), ARG(&s, "SCAN"), arg(&s, cursor, strlen(cursor)), ARG(&s, "MATCH"), arg(&s, ZSTR_VAL(pat.s), ZSTR_LEN(pat.s)), ARG(&s, "COUNT"), ARG(&s, "1000");
-		if (!vk_call(v, &s, &r) || r.t != '*' || r.n != 2) {
-			smart_str_free(&pat);
-			return -1;
+		valkeyReply *r = vk_call(v, &s);
+		if (!r || r->type != VALKEY_REPLY_ARRAY || r->elements != 2 || !is_str(r->element[0])) {
+			freeReplyObject(r);
+			ret = -1;
+			break;
 		}
-		const char *end = v->buf + v->pos, *q = resp_parse(r.body, end, &c);
-		resp_parse(q, end, &keys);
-		snprintf(cursor, sizeof cursor, "%.*s", (int) c.len, c.s);
-		if (keys.n > 0) {
-			head(&s, (int) keys.n + 1), ARG(&s, "UNLINK");
-			q = keys.body;
-			for (int64_t i = 0; i < keys.n; i++) {
-				vk_reply k;
-				q = resp_parse(q, end, &k);
-				arg(&s, k.s, k.len);
+		const valkeyReply *keys = r->element[1];
+		snprintf(cursor, sizeof cursor, "%.*s", (int) r->element[0]->len, r->element[0]->str);
+		size_t n = keys->type == VALKEY_REPLY_ARRAY ? keys->elements : 0;
+		if (n) {
+			head(&s, (int) n + 1), ARG(&s, "UNLINK");
+			for (size_t i = 0; i < n; i++) {
+				arg(&s, keys->element[i]->str, keys->element[i]->len);
 			}
-			if (!vk_call(v, &s, &r)) {
-				smart_str_free(&pat);
-				return -1;
+		}
+		freeReplyObject(r);
+		if (n) {
+			r = vk_call(v, &s);
+			bool failed = !r;
+			freeReplyObject(r);
+			if (failed) {
+				ret = -1;
+				break;
 			}
 		}
 	} while (strcmp(cursor, "0") != 0);
 	smart_str_free(&pat);
-	return 1;
+	return ret;
 }
 
 /* ---- the tier: the arena holds local copies of what Valkey holds ---- */

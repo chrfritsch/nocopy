@@ -125,9 +125,11 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 
 `nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` hands `nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`, the multi variants,
 `compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy.c`); `nocopy_valkey.c` owns the routing, the connection and every command.
-- TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): one `SSL_CTX` from MINIT, shared by forks and threads; our own BIO (`send(MSG_NOSIGNAL)`: OpenSSL's socket BIO would SIGPIPE the worker);
-  `io_read`/`io_write` map WANT_READ/WANT_WRITE to the poll event; a forked child `SSL_free`s its copy without close_notify; the listener polls with 0 ms while `SSL_pending`. Errors leave nothing in OpenSSL's per-thread queue (PHP's openssl functions read it).
-- A command connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).
+- Connections are libvalkey's (vendored in `third_party/libvalkey`, `scripts/vendor-libvalkey.sh`; compiled with `-w`, `-U_GNU_SOURCE` and its API hidden): blocking `valkeyContext`s with `nocopy.valkey_timeout` for connect and every read and write,
+  `VALKEY_OPT_NO_PUSH_AUTOFREE` so pushes come back as replies and are applied here. Commands are built as RESP by hand (the key prefix without a copy) and queued with `valkeyAppendFormattedCommand`.
+- TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): our `SSL_CTX` from MINIT, shared by forks and threads; our `SSL` (SNI, host or IP verified) handed to `valkeyInitiateTLS`. libvalkey frees it without close_notify, so a forked child leaves the parent's session intact.
+  Its socket BIO writes without `MSG_NOSIGNAL`: PHP's SAPIs (CLI, php-fpm, FrankenPHP) ignore SIGPIPE, the listener does so itself, macOS sockets get `SO_NOSIGPIPE`. The listener polls with 0 ms while `SSL_pending`. Errors leave nothing in OpenSSL's per-thread queue (PHP's openssl functions read it).
+- A command connection per worker (`NOCOPY_G(vk)`), lazy. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).
   No tracking: a reconnect needs no clear. Any error or timeout closes it (the reply stream would be out of step); a new attempt waits 0.5-1.5 s.
 - One listener per arena: a process of its own (double fork, `setsid`, signals reset, every inherited fd closed, stdio on /dev/null, `nocopy-valkey`), running only C:
   one connection with `CLIENT TRACKING ON BCAST PREFIX p NOLOOP`, `poll` at 100 ms, applies pushes, `PING` every second (no answer within max(1 s, timeout): reconnect).
