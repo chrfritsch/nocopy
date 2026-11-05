@@ -1586,6 +1586,10 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
 	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, nocopy_vk_on_prefix)
 	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, nocopy_vk_on_timeout)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_ca_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_ca)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_cert_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_cert)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_key_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_key)
+	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, nocopy_vk_on_verify)
 PHP_INI_END()
 
 static const zend_ini_entry_def ini_nocopy[] = {

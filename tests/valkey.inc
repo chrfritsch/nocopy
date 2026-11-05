@@ -3,7 +3,7 @@
 function vk(string ...$a)
 {
     static $s;
-    $s ??= fsockopen('127.0.0.1', 6379);
+    $s ??= fsockopen('127.0.0.1', $GLOBALS['VK_PORT'] ?? 6379);
     $c = '*' . count($a) . "\r\n";
     foreach ($a as $x) {
         $c .= '$' . strlen($x) . "\r\n$x\r\n";

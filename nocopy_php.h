@@ -37,6 +37,8 @@ typedef struct {
 /* Valkey connection of this worker (nocopy_valkey.c). */
 typedef struct {
 	int fd;          /* -1: not connected */
+	void *ssl;       /* SSL *, with TLS */
+	char err[160];   /* why the connection failed last */
 	char *buf;       /* replies and pushes, persistent memory */
 	size_t len, pos, cap;
 	int64_t retry_at; /* ms, monotonic: after a failure, no new attempt before */
@@ -114,6 +116,9 @@ void nocopy_apcu_minit(int module_number);
 extern bool nocopy_vk_on;
 ZEND_INI_MH(nocopy_vk_on_url);
 ZEND_INI_DISP(nocopy_vk_display);
+ZEND_INI_MH(nocopy_vk_on_path);
+ZEND_INI_MH(nocopy_vk_on_verify);
+extern char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
 ZEND_INI_MH(nocopy_vk_on_prefix);
 ZEND_INI_MH(nocopy_vk_on_timeout);
 void nocopy_vk_mshutdown(void);

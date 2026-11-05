@@ -176,6 +176,9 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `host:port` or `unix:///path`: share the cache through Valkey ([below](#valkey)). `phpinfo()` hides the credentials |
 | `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey; servers with the same prefix share one cache |
 | `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connect or a reply before treating Valkey as down |
+| `nocopy.valkey_tls_ca_file` | (system store) | PEM file of the CAs that may sign the server certificate, for `tls://` / `rediss://` |
+| `nocopy.valkey_tls_cert_file`, `nocopy.valkey_tls_key_file` | (none) | Client certificate (chain) and key, where the server asks for one (`tls-auth-clients`) |
+| `nocopy.valkey_tls_verify` | `1` | Verify the server certificate and its name (or IP); `0` only for tests |
 | `apc.enabled`, `apc.enable_cli` | `1`, `0` | As in APCu. These switch the `apcu_*` functions, not `nocopy_*` |
 
 If both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
@@ -236,7 +239,11 @@ mode of that run because Valkey replaced the journal query that every request pa
   retried every 0.5-1.5 s (jittered) per worker. A connection found closed at the start of a request is reopened at once. Each connection
   subscribes to one idle channel, so Valkey's `timeout` does not close it, and uses TCP keepalive (60 s) against load balancers that drop idle
   connections. In `CLIENT LIST` the listener is `name=nocopy-listener`, workers `name=nocopy`.
-- Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. An optional nocopy module for Valkey is planned to save round trips.
+- Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. TLS: `nocopy.valkey=tls://user:pass@host:6380` (or `rediss://`),
+  TLS 1.2+, the server certificate verified against the system store or `nocopy.valkey_tls_ca_file`, with SNI and the host name (or IP)
+  checked; client certificates for mutual TLS. The files are read once at startup (by php-fpm's master, so the key may be readable by root
+  only); an unreadable one is a startup warning and every connection fails with it. Built when OpenSSL (1.1.1+, headers and pkg-config)
+  is found; a build without it says so on connect. An optional nocopy module for Valkey is planned to save round trips.
 - Local only: `APCUIterator`, `apcu_cache_info`, `nocopy_stats()`, and the single flight of `nocopy_remember`/`apcu_entry` (per server).
 - Valkey evicts by its own `maxmemory-policy`; an evicted key is a miss everywhere. The Drupal module is built for `volatile-lfu` ([details](drupal/README.md)).
 - Values are stored with `nocopy.serializer` (integers as plain numbers), so all servers need the same serializer.

@@ -3,4 +3,5 @@
 #   docker run --rm -v "$PWD":/src:ro nocopy-zts:8.4 /src/docker/test.sh
 ARG PHP=8.4
 FROM php:${PHP}-zts
-RUN docker-php-ext-install pcntl && pecl install parallel && docker-php-ext-enable parallel
+RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config && rm -rf /var/lib/apt/lists/* \
+ && docker-php-ext-install pcntl && pecl install parallel && docker-php-ext-enable parallel

@@ -25,6 +25,13 @@
 #ifdef __linux__
 # include <sys/prctl.h>
 #endif
+#include <arpa/inet.h>
+#include <limits.h>
+#ifdef HAVE_NOCOPY_TLS
+# include <openssl/ssl.h>
+# include <openssl/err.h>
+# include <openssl/x509v3.h>
+#endif
 
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE on the socket instead */
@@ -34,6 +41,9 @@ bool nocopy_vk_on;
 static char *vk_host, *vk_port, *vk_path, *vk_user, *vk_pass, *vk_prefix;
 static size_t vk_plen;
 static int vk_timeout_ms = 500;
+static bool vk_tls; /* tls:// or rediss:// */
+char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
+bool nocopy_vk_tls_verify = true;
 
 static char *pdup(const char *s, size_t n)
 {
@@ -51,12 +61,13 @@ static void pfree(char **p)
 	}
 }
 
-/* tcp://[user:pass@]host:port, host:port, [::1]:port, unix:///path */
+/* tcp://[user:pass@]host:port, tls://.. or rediss://.. (TLS), host:port, [::1]:port, unix:///path */
 ZEND_INI_MH(nocopy_vk_on_url)
 {
 	pfree(&vk_host), pfree(&vk_port), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass);
 	const char *s = ZSTR_VAL(new_value);
 	nocopy_vk_on = *s != 0;
+	vk_tls = false;
 	if (!nocopy_vk_on) {
 		return SUCCESS;
 	}
@@ -66,6 +77,9 @@ ZEND_INI_MH(nocopy_vk_on_url)
 	}
 	if (strncmp(s, "tcp://", 6) == 0) {
 		s += 6;
+	} else if (strncmp(s, "tls://", 6) == 0 || strncmp(s, "rediss://", 9) == 0) {
+		s = strstr(s, "://") + 3;
+		vk_tls = true;
 	}
 	const char *at = strrchr(s, '@');
 	if (at) {
@@ -109,6 +123,23 @@ ZEND_INI_MH(nocopy_vk_on_prefix)
 	return SUCCESS;
 }
 
+/* nocopy.valkey_tls_*: a path, or empty */
+ZEND_INI_MH(nocopy_vk_on_path)
+{
+	char **p = (char **) mh_arg1;
+	pfree(p);
+	if (ZSTR_LEN(new_value)) {
+		*p = pdup(ZSTR_VAL(new_value), ZSTR_LEN(new_value));
+	}
+	return SUCCESS;
+}
+
+ZEND_INI_MH(nocopy_vk_on_verify)
+{
+	nocopy_vk_tls_verify = zend_ini_parse_bool(new_value);
+	return SUCCESS;
+}
+
 ZEND_INI_MH(nocopy_vk_on_timeout)
 {
 	double t = zend_strtod(ZSTR_VAL(new_value), NULL);
@@ -116,10 +147,6 @@ ZEND_INI_MH(nocopy_vk_on_timeout)
 	return SUCCESS;
 }
 
-void nocopy_vk_mshutdown(void)
-{
-	pfree(&vk_host), pfree(&vk_port), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass), pfree(&vk_prefix);
-}
 
 /* ---- connection ---- */
 
@@ -130,12 +157,11 @@ static int64_t now_ms(void)
 	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+static void vk_close_fd(nocopy_vk *v);
+
 static bool vk_fail(nocopy_vk *v)
 {
-	if (v->fd >= 0) {
-		close(v->fd);
-	}
-	v->fd = -1;
+	vk_close_fd(v);
 	v->len = v->pos = 0;
 	v->synced = false;
 	int64_t now = now_ms();
@@ -212,6 +238,254 @@ static int vk_dial(void)
 #endif
 	}
 	return fd;
+}
+
+/* ---- TLS ---- */
+
+#ifdef HAVE_NOCOPY_TLS
+static SSL_CTX *tls_ctx;
+static const char *tls_ctx_err; /* why there is no context */
+static BIO_METHOD *tls_bio;
+
+/* Our own socket BIO: OpenSSL's writes without MSG_NOSIGNAL, and a peer gone mid-write would SIGPIPE the worker. */
+static int bio_write(BIO *b, const char *d, int n)
+{
+	BIO_clear_retry_flags(b);
+	ssize_t w = send((int) (intptr_t) BIO_get_data(b), d, (size_t) n, MSG_NOSIGNAL);
+	if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+		BIO_set_retry_write(b);
+	}
+	return (int) w;
+}
+
+static int bio_read(BIO *b, char *d, int n)
+{
+	BIO_clear_retry_flags(b);
+	ssize_t r = recv((int) (intptr_t) BIO_get_data(b), d, (size_t) n, 0);
+	if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+		BIO_set_retry_read(b);
+	}
+	return (int) r;
+}
+
+static long bio_ctrl(BIO *b, int cmd, long num, void *ptr)
+{
+	(void) b, (void) num, (void) ptr;
+	return cmd == BIO_CTRL_FLUSH;
+}
+
+static int bio_create(BIO *b)
+{
+	BIO_set_init(b, 1);
+	return 1;
+}
+
+static const char *tls_error(void)
+{
+	static char buf[256];
+	unsigned long e = ERR_peek_last_error();
+	ERR_error_string_n(e, buf, sizeof buf);
+	ERR_clear_error(); /* PHP's openssl functions share this thread's error queue */
+	return e ? buf : "TLS failure";
+}
+
+/* Once at startup (forks and threads share it): the files are read here, and an error shows at once. */
+static void tls_init(void)
+{
+	tls_bio = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "nocopy");
+	BIO_meth_set_write(tls_bio, bio_write);
+	BIO_meth_set_read(tls_bio, bio_read);
+	BIO_meth_set_ctrl(tls_bio, bio_ctrl);
+	BIO_meth_set_create(tls_bio, bio_create);
+	SSL_CTX *c = SSL_CTX_new(TLS_client_method());
+	if (!c) {
+		tls_ctx_err = tls_error();
+		return;
+	}
+	SSL_CTX_set_min_proto_version(c, TLS1_2_VERSION);
+	SSL_CTX_set_verify(c, nocopy_vk_tls_verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
+	const char *what = NULL;
+	if (nocopy_vk_tls_ca ? !SSL_CTX_load_verify_locations(c, nocopy_vk_tls_ca, NULL) : !SSL_CTX_set_default_verify_paths(c)) {
+		what = "nocopy.valkey_tls_ca_file";
+	} else if (nocopy_vk_tls_cert && !SSL_CTX_use_certificate_chain_file(c, nocopy_vk_tls_cert)) {
+		what = "nocopy.valkey_tls_cert_file";
+	} else if ((nocopy_vk_tls_key || nocopy_vk_tls_cert) && !SSL_CTX_use_PrivateKey_file(c, nocopy_vk_tls_key ? nocopy_vk_tls_key : nocopy_vk_tls_cert, SSL_FILETYPE_PEM)) {
+		what = "nocopy.valkey_tls_key_file";
+	}
+	if (what) {
+		static char buf[400];
+		snprintf(buf, sizeof buf, "%s: %s", what, tls_error());
+		tls_ctx_err = buf;
+		php_error_docref(NULL, E_WARNING, "nocopy: %s", buf);
+		SSL_CTX_free(c);
+		return;
+	}
+	tls_ctx = c;
+}
+
+/* poll for what OpenSSL wants after a non-blocking call; false: an error (msg set) or the timeout */
+static bool tls_want(nocopy_vk *v, int r, const char **msg)
+{
+	int e = SSL_get_error((SSL *) v->ssl, r);
+	if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+		if (vk_wait(v->fd, e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT)) {
+			return true;
+		}
+		*msg = "TLS: timeout";
+		return false;
+	}
+	*msg = e == SSL_ERROR_SYSCALL && !ERR_peek_last_error() ? "TLS: connection closed" : tls_error();
+	return false;
+}
+
+/* Handshake on the connected v->fd: SNI and the name (or IP) checked against the certificate. */
+static bool tls_connect(nocopy_vk *v, const char **msg)
+{
+	if (!tls_ctx) {
+		*msg = tls_ctx_err ? tls_ctx_err : "TLS not initialized";
+		return false;
+	}
+	SSL *s = SSL_new(tls_ctx);
+	BIO *b = BIO_new(tls_bio);
+	if (!s || !b) {
+		SSL_free(s), BIO_free(b);
+		*msg = tls_error();
+		return false;
+	}
+	BIO_set_data(b, (void *) (intptr_t) v->fd);
+	SSL_set_bio(s, b, b);
+	v->ssl = s;
+	unsigned char ip[16];
+	bool is_ip = inet_pton(AF_INET, vk_host, ip) == 1 || inet_pton(AF_INET6, vk_host, ip) == 1;
+	if (!is_ip) {
+		SSL_set_tlsext_host_name(s, vk_host);
+	}
+	if (nocopy_vk_tls_verify) {
+		X509_VERIFY_PARAM *p = SSL_get0_param(s);
+		if (is_ip ? !X509_VERIFY_PARAM_set1_ip_asc(p, vk_host) : !X509_VERIFY_PARAM_set1_host(p, vk_host, 0)) {
+			*msg = tls_error();
+			return false;
+		}
+	}
+	int r;
+	while ((r = SSL_connect(s)) != 1) {
+		if (!tls_want(v, r, msg)) {
+			long vr = SSL_get_verify_result(s);
+			if (vr != X509_V_OK) {
+				*msg = X509_verify_cert_error_string(vr);
+				ERR_clear_error();
+			}
+			return false;
+		}
+	}
+	return true;
+}
+#endif
+
+static void vk_close_fd(nocopy_vk *v)
+{
+#ifdef HAVE_NOCOPY_TLS
+	if (v->ssl) {
+		SSL_free((SSL *) v->ssl); /* no close_notify: in a forked child the parent still uses the session */
+		v->ssl = NULL;
+		ERR_clear_error();
+	}
+#endif
+	if (v->fd >= 0) {
+		close(v->fd);
+	}
+	v->fd = -1;
+}
+
+void nocopy_vk_mshutdown(void)
+{
+	pfree(&vk_host), pfree(&vk_port), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass), pfree(&vk_prefix);
+	pfree(&nocopy_vk_tls_ca), pfree(&nocopy_vk_tls_cert), pfree(&nocopy_vk_tls_key);
+#ifdef HAVE_NOCOPY_TLS
+	if (tls_ctx) {
+		SSL_CTX_free(tls_ctx);
+		tls_ctx = NULL;
+	}
+	if (tls_bio) {
+		BIO_meth_free(tls_bio);
+		tls_bio = NULL;
+	}
+#endif
+}
+
+/* >0: bytes, 0: would block (*want: what to poll for), -1: the connection is gone */
+static ssize_t io_read(nocopy_vk *v, char *b, size_t n, short *want)
+{
+#ifdef HAVE_NOCOPY_TLS
+	if (v->ssl) {
+		int r = SSL_read((SSL *) v->ssl, b, n > INT_MAX ? INT_MAX : (int) n);
+		if (r > 0) {
+			return r;
+		}
+		int e = SSL_get_error((SSL *) v->ssl, r);
+		*want = e == SSL_ERROR_WANT_WRITE ? POLLOUT : POLLIN;
+		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+			return 0;
+		}
+		snprintf(v->err, sizeof v->err, "%s", ERR_peek_last_error() ? tls_error() : "connection closed");
+		return -1;
+	}
+#endif
+	ssize_t r;
+	while ((r = recv(v->fd, b, n, MSG_DONTWAIT)) < 0 && errno == EINTR) {
+	}
+	*want = POLLIN;
+	if (r > 0 || (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+		return r > 0 ? r : 0;
+	}
+	snprintf(v->err, sizeof v->err, "%s", r == 0 ? "connection closed" : strerror(errno));
+	return -1;
+}
+
+static ssize_t io_write(nocopy_vk *v, const char *b, size_t n, short *want)
+{
+#ifdef HAVE_NOCOPY_TLS
+	if (v->ssl) {
+		int r = SSL_write((SSL *) v->ssl, b, n > INT_MAX ? INT_MAX : (int) n);
+		if (r > 0) {
+			return r;
+		}
+		int e = SSL_get_error((SSL *) v->ssl, r);
+		*want = e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT;
+		if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+			return 0;
+		}
+		snprintf(v->err, sizeof v->err, "%s", ERR_peek_last_error() ? tls_error() : "connection closed");
+		return -1;
+	}
+#endif
+	ssize_t w;
+	while ((w = send(v->fd, b, n, MSG_NOSIGNAL)) < 0 && errno == EINTR) {
+	}
+	*want = POLLOUT;
+	if (w > 0 || (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+		return w > 0 ? w : 0;
+	}
+	snprintf(v->err, sizeof v->err, "%s", strerror(errno));
+	return -1;
+}
+
+/* Connected (and the TLS handshake done) on v->fd. false: *msg says why. */
+static bool vk_open(nocopy_vk *v, const char **msg)
+{
+	if ((v->fd = vk_dial()) < 0) {
+		*msg = strerror(errno);
+		return false;
+	}
+	if (!vk_tls) {
+		return true;
+	}
+#ifdef HAVE_NOCOPY_TLS
+	return tls_connect(v, msg);
+#else
+	*msg = "this nocopy build has no TLS (built without OpenSSL)";
+	return false;
+#endif
 }
 
 /* ---- RESP3 ---- */
@@ -328,21 +602,20 @@ static int vk_recv(nocopy_vk *v, bool block)
 		}
 	}
 	for (;;) {
-		ssize_t n = recv(v->fd, v->buf + v->len, v->cap - v->len, MSG_DONTWAIT);
+		short want = POLLIN;
+		ssize_t n = io_read(v, v->buf + v->len, v->cap - v->len, &want);
 		if (n > 0) {
 			v->len += (size_t) n;
 			return 1;
 		}
-		if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+		if (n < 0) {
 			return -1;
 		}
-		if (errno == EINTR) {
-			continue;
-		}
-		if (!block) {
+		if (!block && want == POLLIN) {
 			return 0;
 		}
-		if (!vk_wait(v->fd, POLLIN)) {
+		if (!vk_wait(v->fd, want)) {
+			snprintf(v->err, sizeof v->err, "no reply within nocopy.valkey_timeout");
 			return -1; /* timeout: the reply stream is out of step, start over */
 		}
 	}
@@ -431,11 +704,11 @@ static bool vk_send(nocopy_vk *v, smart_str *s)
 	const char *b = ZSTR_VAL(s->s);
 	size_t n = ZSTR_LEN(s->s);
 	while (n) {
-		ssize_t w = send(v->fd, b, n, MSG_NOSIGNAL);
+		short want = POLLOUT;
+		ssize_t w = io_write(v, b, n, &want);
 		if (w > 0) {
 			b += w, n -= (size_t) w;
-		} else if (w < 0 && errno == EINTR) {
-		} else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && vk_wait(v->fd, POLLOUT)) {
+		} else if (w == 0 && vk_wait(v->fd, want)) {
 		} else {
 			smart_str_free(s);
 			return vk_fail(v);
@@ -477,16 +750,22 @@ static bool vk_handshake(nocopy_vk *v, bool track, vk_reply *r)
 /* A worker's command connection: no tracking, so a reconnect needs no local clear (the listener tracks). */
 static bool vk_connect(nocopy_vk *v)
 {
+	v->err[0] = 0;
 	if (now_ms() < v->retry_at) {
 		return false;
 	}
-	if ((v->fd = vk_dial()) < 0) {
-		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to Valkey (%s): %s", vk_path ? vk_path : vk_host, strerror(errno));
+	const char *msg;
+	if (!vk_open(v, &msg)) {
+		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to Valkey (%s): %s", vk_path ? vk_path : vk_host, msg);
 		return vk_fail(v);
 	}
 	vk_reply r;
 	if (!vk_handshake(v, false, &r)) {
-		php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed%s%.*s", r.t == '-' ? ": " : "", r.t == '-' ? (int) r.len : 0, r.s);
+		if (r.t == '-') {
+			php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %.*s", (int) r.len, r.s);
+		} else {
+			php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %s", v->err[0] ? v->err : "unexpected reply");
+		}
 		return vk_fail(v);
 	}
 	return true;
@@ -503,6 +782,11 @@ static int life[2] = {-1, -1};
 
 void nocopy_vk_minit(bool named)
 {
+#ifdef HAVE_NOCOPY_TLS
+	if (nocopy_vk_on && vk_tls) {
+		tls_init();
+	}
+#endif
 	if (nocopy_vk_on && !named && pipe(life) == 0) {
 		fcntl(life[0], F_SETFD, FD_CLOEXEC);
 		fcntl(life[1], F_SETFD, FD_CLOEXEC);
@@ -546,7 +830,8 @@ static ZEND_NORETURN void vk_listen(void)
 		__atomic_store_n(&a->vk_beat, now, __ATOMIC_RELEASE);
 		vk_reply r;
 		if (v.fd < 0 && now >= v.retry_at) {
-			if ((v.fd = vk_dial()) < 0 || !vk_handshake(&v, true, &r)) {
+			const char *msg;
+			if (!vk_open(&v, &msg) || !vk_handshake(&v, true, &r)) {
 				vk_fail(&v);
 			} else {
 				__atomic_add_fetch(&a->inval_gen, 1, __ATOMIC_SEQ_CST); /* the fill guard: fills in flight drop their copy */
@@ -556,13 +841,20 @@ static ZEND_NORETURN void vk_listen(void)
 			}
 		}
 		p[0].fd = v.fd;
-		if (poll(p, 2, BEAT_MS) > 0 && p[1].revents) {
+		int wait = BEAT_MS;
+#ifdef HAVE_NOCOPY_TLS
+		if (v.ssl && SSL_pending((SSL *) v.ssl) > 0) {
+			wait = 0; /* decrypted already, the socket may stay quiet */
+		}
+#endif
+		int ready = poll(p, 2, wait);
+		if (ready > 0 && p[1].revents) {
 			_exit(0); /* the anonymous arena's last user is gone */
 		}
 		if (v.fd < 0) {
 			continue;
 		}
-		int got = p[0].revents ? vk_listen_read(&v) : 0;
+		int got = p[0].revents || !wait ? vk_listen_read(&v) : 0;
 		bool ok = got >= 0;
 		now = now_ms();
 		if (got > 0) {
@@ -702,10 +994,7 @@ void nocopy_vk_new_request(void)
 
 void nocopy_vk_close(nocopy_vk *v)
 {
-	if (v->fd >= 0) {
-		close(v->fd); /* in a forked child only its copy */
-	}
-	v->fd = -1;
+	vk_close_fd(v); /* in a forked child only its copy */
 	v->len = v->pos = 0;
 	v->synced = false;
 	if (v->buf) {

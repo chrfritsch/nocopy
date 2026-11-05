@@ -269,6 +269,13 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   `nocopy_update_11001` drops the table. Drupal tests: shm copy, shm zero-copy, Valkey (28 each) + process-only (NocopySharedTest: backend and checksum throw, fast layer works).
   Bench nocopy-all (8 workers, one run) journal -> shared: anonymous / 9,229 -> 12,938 req/s, logged-in / 1,322 -> 1,467, node 1,088 -> 1,283, anonymous statements 5 -> 0,
   first request after fpm restart 627 -> 155 ms; Drush save seen by anonymous/logged-in as before. Next of #3: TLS for the Valkey client (managed Valkey), then Sentinel/Cluster.
+- Valkey TLS (2026-11-05, rest of #3): `tls://` / `rediss://`, INI `nocopy.valkey_tls_{ca_file,cert_file,key_file,verify}`; OpenSSL via pkg-config in config.m4 (optional: without it a
+  `tls://` connect fails with "built without OpenSSL"). Custom BIO for MSG_NOSIGNAL, SNI, host/IP verification (`X509_VERIFY_PARAM_set1_host` / `_ip_asc`), TLS 1.2 minimum.
+  A connection keeps the cause of its last failure (`err`): TLS 1.3 servers reject a missing client cert only after the handshake (alert or reset, racy which one shows).
+  Test 063 (own CA, server and client certs, valkey-server --tls-port, plain port beside it for the invalidating client): verified + listener invalidation, rediss://,
+  unknown CA, verify off, IP not in the cert, no client cert, bad key file (startup warning), plain to the TLS port. Images now carry libssl-dev + pkg-config
+  (rebuilt; their Debian valkey now also on 8.3/8.4, so the Valkey tests run there). Suite 8.3/8.4/8.5/amd64/ZTS (+ redis-server: 14 Valkey tests incl. TLS), TSAN, stress 10,
+  shm-name.sh fpm, Drupal 4 modes: clean. Not done: Sentinel, Cluster; TLS over a unix socket; CRL/OCSP; a `tls_server_name` override.
 
 ## Known gaps / next steps (rough priority)
 

@@ -122,6 +122,8 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 
 `nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` routes `nocopy_store`/`fetch`/`drop`/`info`/`add_long`/`cas_long`,
 `compute` and `nocopy_clear_all` through it (`vk_*`); `nocopy_valkey.c` owns the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
+- TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): one `SSL_CTX` from MINIT, shared by forks and threads; our own BIO (`send(MSG_NOSIGNAL)`: OpenSSL's socket BIO would SIGPIPE the worker);
+  `io_read`/`io_write` map WANT_READ/WANT_WRITE to the poll event; a forked child `SSL_free`s its copy without close_notify; the listener polls with 0 ms while `SSL_pending`. Errors leave nothing in OpenSSL's per-thread queue (PHP's openssl functions read it).
 - A command connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).
   No tracking: a reconnect needs no clear. Any error or timeout closes it (the reply stream would be out of step); a new attempt waits 0.5-1.5 s.
 - One listener per arena: a process of its own (double fork, `setsid`, signals reset, every inherited fd closed, stdio on /dev/null, `nocopy-valkey`), running only C:
