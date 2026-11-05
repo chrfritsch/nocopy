@@ -58,6 +58,8 @@ sometimes saw a truncated `nocopy.c`: rerun.
 - Ghost variants (`bench/hitratio.php`): 2-way no better; 2x tags +0-3 points on mixed loads for 4 B/slot more; no ghost loses 2 points on mixed and all hits on scans.
 - Dropping `nocopy_get_multiple`/`put_multiple` on one host (PHP loop instead): get 10 keys 142 -> 292 ns, 100 keys 1.3 -> 2.8 us; put 100 keys 8.3 -> 9.3 us.
   `nocopy_shared_with()` into `nocopy_stats()`: 15 -> 430 ns, and Drupal calls it per write.
+- Dropping `nocopy.entries_hint` for 1 slot per 128 B (was 256): `fetch int, 100k distinct keys` 30.3 -> 39.2 ns (-22%), 500 B values -0.6/-1.1 hit points
+  (4.7% of the arena more in tables); only tiny entries gain (+7-9 points). Dropping the knob alone keeps the defaults but loses that +7-9 for who sets it.
 - One-pass `copy_out`: `zend_array_dup` of an immutable array is one memcpy already; the cost was per-key allocation (fixed by key dedupe).
 
 ## Open (rough priority)
