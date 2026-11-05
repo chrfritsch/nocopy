@@ -113,6 +113,7 @@ Code comments are one short line, or none.
 | GL-Cache's utility per age (reads / age) to rank merge victims | loops collapse: 1.5x loop 25 -> 0% (young unread segments evicted first); a read prior does not fix it. Reads alone + forced oldest kept |
 | Scanning the candidates' entries to rank them (no per-segment counter) | same hit ratios, but puts under eviction +40% at 32M, +75% at 256M (32 segments walked under the lock) |
 | Cost-benefit order for compaction victims (LFS/RAMCloud `(1-u)·age/(1+u)`) | no change in any `hitratio.php` workload: rarely more than 4 sparse candidates |
+| `nocopy_worker` aligned to 128 B (Apple's line size; one worker's per-fetch `hits` write shares a line with its neighbour's) | Graviton4 (c8g.xlarge, 64 B lines), 4-8 readers on 1 / 100k keys: all within ±2%, medians of 8. The +20-50% on an M3 Pro (128 B lines) sat inside its 2-3x run-to-run noise. Padding `nocopy_seg` to 64 B and dropping reader `hot` writes: no signal above that noise either |
 | One-pass `copy_out` | `zend_array_dup` of an immutable array is already one memcpy; the cost was per-key allocation (fixed by key dedupe) |
 
 ## Adding to this page
