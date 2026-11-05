@@ -47,3 +47,4 @@ tests/**/*.mem
 tmp-php.ini
 *~
 .cache/
+.idea/
