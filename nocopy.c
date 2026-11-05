@@ -228,36 +228,36 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 	GC_SET_REFCOUNT(ht, 2);
 	GC_TYPE_INFO(ht) = GC_ARRAY | IS_ARRAY_IMMUTABLE;
 
+	/* serialization does not keep the next free index, so neither do we: max int key + 1 */
+	zend_long max = ZEND_LONG_MIN;
 	if (HT_IS_PACKED(ht)) {
 		zval *v;
 		ZEND_HASH_PACKED_FOREACH_VAL(ht, v) {
 			persist_zval(p, v);
 		} ZEND_HASH_FOREACH_END();
+		for (uint32_t i = ht->nNumUsed; i-- > 0;) {
+			if (Z_TYPE(ht->arPacked[i]) != IS_UNDEF) {
+				max = (zend_long) i;
+				break;
+			}
+		}
 	} else {
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(ht, b) {
 			if (b->key) {
 				nocopy_kslot *s = key_slot(&p->keys, b->h);
-				if (key_hit(&p->keys, s, b->key, b->h)) {
-					b->key = (zend_string *) s->s;
+				if (key_hit(&p->keys, s, b->key, b->h)) { /* s->s: the source key, so equal pointers skip the compare */
+					b->key = s->copy;
 				} else {
-					b->key = persist_str(p, b->key);
 					key_put(&p->keys, s, b->key, b->h);
+					b->key = s->copy = persist_str(p, b->key);
 				}
+			} else if ((zend_long) b->h > max) {
+				max = (zend_long) b->h;
 			}
 			persist_zval(p, &b->val);
 		} ZEND_HASH_FOREACH_END();
 	}
-
-	/* serialization does not keep the next free index, so neither do we: max int key + 1 */
-	zend_long max = ZEND_LONG_MIN;
-	zend_ulong ih;
-	zend_string *ik;
-	ZEND_HASH_FOREACH_KEY(ht, ih, ik) {
-		if (!ik && (zend_long) ih > max) {
-			max = (zend_long) ih;
-		}
-	} ZEND_HASH_FOREACH_END();
 	ht->nNextFreeElement = (max == ZEND_LONG_MIN || max == ZEND_LONG_MAX) ? max : max + 1;
 	return ht;
 }
@@ -364,7 +364,7 @@ static void copy_out(nocopy_keys *keys, zval *dst, const zval *src)
 {
 	switch (Z_TYPE_P(src)) {
 		case IS_STRING:
-			ZVAL_STRINGL(dst, Z_STRVAL_P(src), Z_STRLEN_P(src));
+			ZVAL_STRINGL_FAST(dst, Z_STRVAL_P(src), Z_STRLEN_P(src)); /* "" and 1 char: interned, no alloc */
 			break;
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(src);
@@ -1090,7 +1090,7 @@ PHP_FUNCTION(nocopy_get_multiple)
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	array_init(return_value);
+	array_init_size(return_value, zend_hash_num_elements(keys));
 	nocopy_fetch_multi(keys, Z_ARRVAL_P(return_value));
 }
 

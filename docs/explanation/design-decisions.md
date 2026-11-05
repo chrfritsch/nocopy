@@ -45,6 +45,17 @@ raise `nocopy.entries_hint`.
 made 100k distinct strings 37 -> 64 ns. Over budget, a SIEVE hand evicts copies not used since it last passed (was: a full flush). `bench/local.php`, 3000 arrays
 of 20 rows under Zipf: local_size 4M 320-371 -> 233-242 ns, 1M 423-429 -> 333-366 ns; within budget and on loops unchanged.
 
+**Copy-out of `""` and 1-char strings uses PHP's interned ones** (`ZVAL_STRINGL_FAST`): no allocation. A cold copy of
+`bench/run.php`'s 1k rows (two 1-char strings each, `local_size=0`) 69 -> 59 µs.
+
+## Writes
+
+Found with cachegrind (per-op cost from runs of n and 2n ops, `cg_diff`). **`persist_array` takes the next free index
+from the loop it already runs** (was a second pass over every array, ~10% of a put), and **its key dedupe remembers the
+source key**, so repeated keys match by pointer (was a `memcmp` against the persisted copy for every key). Store array
+10 / 1k / 1k unserialized-key rows: 616 -> 520 ns, 59.2 -> 49.5 µs, 65.7 -> 53.8 µs. **`nocopy_get_multiple` sizes
+its result up front**: no rehash, 10 keys 122 -> 109 ns.
+
 ## Eviction
 
 **Segcache-style merge** instead of APCu's full wipe: the oldest segments are merged, read entries move forward, the rest go.

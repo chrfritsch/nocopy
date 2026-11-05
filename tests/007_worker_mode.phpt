@@ -11,7 +11,7 @@ $orig = ['name' => 'orig', 'list' => range(1, 300), 'nested' => ['a' => 'b']];
 nocopy_put('k', $orig);
 $held = nocopy_get('k');
 ob_start(); debug_zval_dump($held); $d = ob_get_clean();
-var_dump(str_contains($d, 'interned'));
+var_dump((bool) preg_match('/string\((?:[2-9]|\d{2,})\) "[^"]*" interned/', $d)); // "" and 1 char: PHP's own interned strings
 for ($i = 0; $i < 300; $i++) nocopy_put('churn', range(1, 1000));
 for ($i = 0; $i < 30; $i++) nocopy_put('k', array_fill(0, 200, "overwrite-$i")); // recycle freed blocks
 $s = nocopy_stats();
