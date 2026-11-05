@@ -188,10 +188,9 @@ class NocopyBackend implements CacheBackendInterface {
     }
   }
 
+  // With nocopy.valkey: one UNLINK.
   protected function doDelete(array $cids): void {
-    foreach ($cids as $cid) {
-      nocopy_delete($this->key((string) $cid));
-    }
+    nocopy_delete_multiple(array_map(fn ($cid) => $this->key((string) $cid), $cids));
   }
 
   // Old items stay until rewritten (same key), evicted or expired.

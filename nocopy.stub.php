@@ -30,6 +30,9 @@ function nocopy_clear(): bool {}
 
 function nocopy_delete(string $key): bool {}
 
+/** How many of $keys existed; with nocopy.valkey, one UNLINK. */
+function nocopy_delete_multiple(array $keys): int {}
+
 /** The hits as key => value; with nocopy.valkey, every local miss in one round trip. */
 function nocopy_get_multiple(array $keys): array {}
 

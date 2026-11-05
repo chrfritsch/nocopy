@@ -15,8 +15,8 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
-| `./dev test` (8.5) | 55 passed, 1 skipped |
-| `./dev novalkey` | 45 passed, 11 skipped |
+| `./dev test` (8.5) | 57 passed, 1 skipped |
+| `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 47 passed, 9 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |

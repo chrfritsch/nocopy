@@ -89,6 +89,7 @@ bool nocopy_fetch(zend_string *key, zval *rv);
 void nocopy_fetch_multi(HashTable *keys, HashTable *out);
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
 bool nocopy_drop(zend_string *key);
+zend_long nocopy_drop_multi(HashTable *keys); /* how many existed */
 /* Integers in place under the shard lock. add: creates it as delta (ttl) if missing; false if it is not an integer or there is no room. */
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
@@ -129,6 +130,7 @@ bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
 void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out);
 bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
 bool nocopy_vk_drop(zend_string *key);
+zend_long nocopy_vk_drop_multi(HashTable *keys);
 bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw);
 void nocopy_vk_clear(void); /* Valkey's keys under the prefix */
@@ -145,6 +147,7 @@ static inline bool nocopy_vk_fetch(zend_string *k, zval *rv, time_t *e, uint32_t
 static inline void nocopy_vk_fetch_multi(HashTable *k, HashTable *o) { (void) k, (void) o; }
 static inline bool nocopy_vk_store_multi(HashTable *v, const nocopy_opts *o, HashTable *f) { (void) v, (void) o, (void) f; return false; }
 static inline bool nocopy_vk_drop(zend_string *k) { (void) k; return false; }
+static inline zend_long nocopy_vk_drop_multi(HashTable *k) { (void) k; return 0; }
 static inline bool nocopy_vk_add_long(zend_string *k, zend_long d, zend_long t, zend_long *o) { (void) k, (void) d, (void) t; *o = 0; return false; }
 static inline bool nocopy_vk_cas_long(zend_string *k, zend_long o, zend_long n) { (void) k, (void) o, (void) n; return false; }
 static inline void nocopy_vk_clear(void) {}

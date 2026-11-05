@@ -1015,6 +1015,22 @@ static int vk_unlink(const char *k, size_t kl)
 	return vk_call(v, &s, &r) && r.t == ':' ? (int) (r.n > 0) : -1;
 }
 
+static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
+{
+	READY(v);
+	smart_str s = {0};
+	vk_reply r;
+	head(&s, (int) n + 1), ARG(&s, "UNLINK");
+	for (uint32_t i = 0; i < n; i++) {
+		key_arg(&s, ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
+	}
+	if (!vk_call(v, &s, &r) || r.t != ':') {
+		return -1;
+	}
+	*gone = r.n;
+	return 1;
+}
+
 static int vk_eval_long(nocopy_vk *v, const char *script, size_t sl, const char *k, size_t kl, int64_t a1, int64_t a2, int64_t *out)
 {
 	smart_str s = {0};
@@ -1344,6 +1360,28 @@ bool nocopy_vk_drop(zend_string *key)
 	int r = vk_ready() ? vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
 	vk_forget(key);
 	return r == 1;
+}
+
+zend_long nocopy_vk_drop_multi(HashTable *keys)
+{
+	zend_string **ks = safe_emalloc(zend_hash_num_elements(keys), sizeof *ks, 0);
+	uint32_t n = 0;
+	zval *k;
+	ZEND_HASH_FOREACH_VAL(keys, k) {
+		ZVAL_DEREF(k);
+		if (Z_TYPE_P(k) == IS_STRING) {
+			ks[n++] = Z_STR_P(k);
+		}
+	} ZEND_HASH_FOREACH_END();
+	int64_t gone = 0;
+	if (n && vk_ready()) {
+		vk_unlink_n(n, ks, &gone);
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		vk_forget(ks[i]);
+	}
+	efree(ks);
+	return (zend_long) gone;
 }
 
 bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)

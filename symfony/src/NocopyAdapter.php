@@ -62,9 +62,7 @@ class NocopyAdapter extends AbstractAdapter
 
     protected function doDelete(array $ids): bool
     {
-        foreach ($ids as $id) {
-            nocopy_delete($id);
-        }
+        nocopy_delete_multiple($ids);
 
         return true;
     }

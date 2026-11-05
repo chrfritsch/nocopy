@@ -593,6 +593,20 @@ bool nocopy_drop(zend_string *key)
 	return drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 }
 
+zend_long nocopy_drop_multi(HashTable *keys)
+{
+	if (UNEXPECTED(detour)) {
+		return nocopy_a ? nocopy_vk_drop_multi(keys) : 0;
+	}
+	zend_long n = 0;
+	zval *k;
+	ZEND_HASH_FOREACH_VAL(keys, k) {
+		ZVAL_DEREF(k);
+		n += Z_TYPE_P(k) == IS_STRING && drop_local(Z_STRVAL_P(k), Z_STRLEN_P(k));
+	} ZEND_HASH_FOREACH_END();
+	return n;
+}
+
 void nocopy_clear_all(void)
 {
 	if (UNEXPECTED(!nocopy_a)) {
@@ -1077,6 +1091,17 @@ PHP_FUNCTION(nocopy_delete)
 	ZEND_PARSE_PARAMETERS_END();
 
 	RETURN_BOOL(nocopy_drop(key));
+}
+
+PHP_FUNCTION(nocopy_delete_multiple)
+{
+	HashTable *keys;
+
+	ZEND_PARSE_PARAMETERS_START(1, 1)
+		Z_PARAM_ARRAY_HT(keys)
+	ZEND_PARSE_PARAMETERS_END();
+
+	RETURN_LONG(nocopy_drop_multi(keys));
 }
 
 PHP_FUNCTION(nocopy_get_multiple)

@@ -39,6 +39,10 @@ Like `nocopy_put()`, only if the key is missing (or expired). `false` if it exis
 
 `true` if the key existed.
 
+### `nocopy_delete_multiple(array $keys): int`
+
+Removes `$keys`; returns how many existed. Keys that are not strings are skipped. With `nocopy.valkey`, one `UNLINK`.
+
 ### `nocopy_clear(): bool`
 
 Removes every entry. With `nocopy.valkey`, every key under `nocopy.valkey_prefix` in Valkey too.

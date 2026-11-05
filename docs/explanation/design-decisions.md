@@ -56,6 +56,11 @@ source key**, so repeated keys match by pointer (was a `memcmp` against the pers
 10 / 1k / 1k unserialized-key rows: 616 -> 520 ns, 59.2 -> 49.5 µs, 65.7 -> 53.8 µs. **`nocopy_get_multiple` sizes
 its result up front**: no rehash, 10 keys 122 -> 109 ns.
 
+**`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
+round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
+3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
+`apcu_delete()` returns the keys that failed, and a count cannot say which.
+
 ## Eviction
 
 **Segcache-style merge** instead of APCu's full wipe: the oldest segments are merged, read entries move forward, the rest go.
