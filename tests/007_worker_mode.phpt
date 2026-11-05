@@ -1,10 +1,9 @@
 --TEST--
-nocopy: worker mode (request_scope=0) fetches private copies and holds no pins
+nocopy: worker mode (CLI default) fetches private copies and holds no pins
 --EXTENSIONS--
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t007
-nocopy.request_scope=0
 --FILE--
 <?php
 $orig = ['name' => 'orig', 'list' => range(1, 300), 'nested' => ['a' => 'b']];

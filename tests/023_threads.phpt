@@ -6,7 +6,6 @@ parallel
 --INI--
 nocopy.shm_name=/nocopy-t023
 nocopy.shm_size=64M
-nocopy.request_scope=0
 --FILE--
 <?php
 nocopy_put('shared', ['a' => range(1, 100)]);

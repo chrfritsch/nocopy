@@ -5,7 +5,6 @@ nocopy
 --INI--
 nocopy.shm_name=/nocopy-t034
 nocopy.shm_size=2M
-nocopy.request_scope=0
 --FILE--
 <?php
 $rows = [];

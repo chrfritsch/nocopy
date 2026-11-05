@@ -4,7 +4,6 @@ apcu_*: worker mode copies on fetch and tolerates re-entrant unserialize
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t010
-nocopy.request_scope=0
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';

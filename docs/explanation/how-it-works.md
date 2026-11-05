@@ -34,8 +34,8 @@ request ends. So a value you fetched stays valid for the whole request, even if 
 ## Zero-copy and copy mode
 
 Pins last until the request ends, which is fine for web requests but not for processes that never end a request: a CLI
-script, a queue worker, a FrankenPHP worker script. They could pin memory forever. So nocopy has two fetch modes
-(`nocopy.request_scope`):
+script, a queue worker, a FrankenPHP worker script. They could pin memory forever. So nocopy picks the fetch mode from
+the SAPI (not configurable):
 
 - **Zero-copy** (default under php-fpm, CGI, Apache, LiteSpeed, `php -S`, FrankenPHP classic): the pointer, pinned until the request ends.
 - **Copy** (default for the CLI and FrankenPHP workers): a private copy, made with one `memcpy` for the array structure.

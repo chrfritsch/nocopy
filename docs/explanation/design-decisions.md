@@ -47,6 +47,10 @@ raise `nocopy.entries_hint`.
 
 ## Copy mode
 
+**The fetch mode follows the SAPI; there is no setting.** `nocopy.request_scope` (`auto`/`1`/`0`) only let users get it wrong:
+`1` under a long CLI worker pinned segments until it exited, `0` under php-fpm copied for nothing. Nobody needed zero-copy CLI
+scripts. Price: none on the fetch path (same code). Tests and `bench.sh` get zero-copy as `php -S` requests (`tests/serve.inc`); `fpm-bench`'s copy row, FrankenPHP's forced run and the Drupal suite's zero-copy mode went (phpunit is CLI).
+
 **Kept copies** (`nocopy.local_size`, 8M default): 1k rows 68 µs -> 12.8 ns, 10k rows 711 µs -> 12.8 ns, 10 KB string
 182 -> 12.8 ns; small values at most 0.8 ns slower. **Kept on the second fetch only** (a doorkeeper): keeping every copy
 made 100k distinct strings 37 -> 64 ns. Over budget, a SIEVE hand evicts copies not used since it last passed (was: a full flush). `bench/local.php`, 3000 arrays

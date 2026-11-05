@@ -29,5 +29,4 @@ run_cfg() { name=$1; raw=$2; shift 2
 run_cfg "apcu / default pool" 0 "extension=$APCU" "apc.serializer=default"
 run_cfg "nocopy / default pool" 0 "extension=/build/modules/nocopy.so" "nocopy.shm_name=/nocopy-bench" "nocopy.shm_size=256M" "nocopy.entries_hint=20000"
 run_cfg "apcu / raw pool" 1 "extension=$APCU" "apc.serializer=default"
-run_cfg "nocopy copy / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.shm_name=/nocopy-bench" "nocopy.shm_size=256M" "nocopy.entries_hint=20000" "nocopy.request_scope=0"
 run_cfg "nocopy zero / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.shm_name=/nocopy-bench" "nocopy.shm_size=256M" "nocopy.entries_hint=20000"

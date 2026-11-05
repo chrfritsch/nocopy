@@ -38,7 +38,7 @@ static zend_long ini_hint = 4096;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_a NULL: unavailable) */
-static bool request_scope;
+static bool sapi_zero_copy;
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
 typedef int (*igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
 static bool use_igbinary; /* nocopy.serializer=igbinary, and igbinary resolved */
@@ -1325,19 +1325,16 @@ static ZEND_INI_MH(OnShmName)
 	return SUCCESS;
 }
 
-/* "auto" (default): zero-copy for the whole request only under SAPIs whose requests are short. */
-static ZEND_INI_MH(OnRequestScope)
+/* Zero-copy only under SAPIs whose requests are short: values cannot outlive the request. */
+static bool short_lived_sapi(void)
 {
-	if (zend_string_equals_literal_ci(new_value, "auto")) {
-		static const char *const short_lived[] = {"fpm-fcgi", "cgi-fcgi", "apache2handler", "apache2filter", "litespeed", "fcgi", "cli-server", "frankenphp", NULL};
-		request_scope = false;
-		for (int i = 0; short_lived[i]; i++) {
-			request_scope |= strcmp(sapi_module.name, short_lived[i]) == 0;
+	static const char *const names[] = {"fpm-fcgi", "cgi-fcgi", "apache2handler", "apache2filter", "litespeed", "fcgi", "cli-server", "frankenphp", NULL};
+	for (int i = 0; names[i]; i++) {
+		if (strcmp(sapi_module.name, names[i]) == 0) {
+			return true;
 		}
-	} else {
-		request_scope = zend_ini_parse_bool(new_value);
 	}
-	return SUCCESS;
+	return false;
 }
 
 static ZEND_INI_MH(OnShmSize)
@@ -1368,7 +1365,6 @@ static ZEND_INI_MH(OnSerializer)
 }
 
 PHP_INI_BEGIN()
-	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
 	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
 	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
@@ -1455,6 +1451,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
+	sapi_zero_copy = short_lived_sapi();
 	if (!zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
 		zend_register_ini_entries(ini_apc, module_number);
 	}
@@ -1519,7 +1516,7 @@ PHP_RINIT_FUNCTION(nocopy)
 	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) {
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
-	NOCOPY_G(zero_copy) = request_scope;
+	NOCOPY_G(zero_copy) = sapi_zero_copy;
 	NOCOPY_G(local_ok) = local_size > 0;
 	nocopy_vk_new_request();
 	return SUCCESS;

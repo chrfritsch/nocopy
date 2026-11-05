@@ -1,7 +1,7 @@
 #!/bin/sh
 # A/B benchmark of two source trees in one container, runs interleaved so machine noise hits both alike.
 #   docker run --rm --shm-size=1g -v <old>:/a:ro -v <new>:/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh [reps=3] [groups]
-# Prints the best run per measurement (min time, max rate: interference only ever slows a run down) for each tree and mode (copy = request_scope=0, zero = request_scope=1).
+# Prints the best run per measurement (min time, max rate: interference only ever slows a run down) for each tree and mode (copy = CLI, zero = under php -S via bench/zero.php).
 reps=${1:-3}; groups=${2:-read write parallel mixed contend ttl}
 for t in a b; do
   rm -rf /build-$t && mkdir /build-$t && cp /$t/*.c /$t/*.h /$t/config.m4 /build-$t/ && { [ ! -d /$t/third_party ] || cp -R /$t/third_party /build-$t/; }
@@ -12,7 +12,7 @@ C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=512M -d apc.entries
 for rep in $(seq "$reps"); do
   order="a b"; [ $((rep % 2)) -eq 0 ] && order="b a"
   for g in $groups; do for t in $order; do for m in 0 1; do
-    rm -f /dev/shm/nocopy-bench.*; php $C -d extension=/build-$t/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.shm_size=512M -d nocopy.entries_hint=200000 -d nocopy.request_scope=$m /src/bench/run.php $g >> $R/$t$m.jsonl 2>/dev/null
+    rm -f /dev/shm/nocopy-bench.*; f=run; [ $m = 1 ] && f=zero; NOCOPY_SO=/build-$t/modules/nocopy.so php $C -d extension=/build-$t/modules/nocopy.so -d nocopy.shm_name=/nocopy-bench -d nocopy.shm_size=512M -d nocopy.entries_hint=200000 /src/bench/$f.php $g >> $R/$t$m.jsonl 2>/dev/null
   done; done; done
 done
 php -n -r '

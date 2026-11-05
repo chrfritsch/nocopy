@@ -6,8 +6,10 @@ pcntl
 --INI--
 nocopy.shm_name=/nocopy-t006
 nocopy.shm_size=4M
-nocopy.request_scope=1
 --FILE--
+<?php
+require __DIR__ . '/serve.inc';
+echo serve(<<<'CODE'
 <?php
 for ($n = 0; nocopy_put("v$n", range(1, 3000)) && nocopy_stats()['expunges'] == 0; $n++); // fill the arena until it evicts
 $pid = pcntl_fork();
@@ -22,6 +24,7 @@ for ($i = 0; $i < 400; $i++) {               // needs the dead child's pins gone
     $ok += nocopy_put('k', range(1, 1000));
 }
 var_dump($ok);
+CODE, ['extension' => 'pcntl']);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t006*')); ?>

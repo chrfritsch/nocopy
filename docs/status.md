@@ -15,7 +15,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
-| `./dev ci` (8.5, after the libvalkey port) | all passed: tidy, test, novalkey, asan, clang, stress, c, shm, zts, frankenphp, symfony |
+| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
 | `./dev test` (8.5) | 57 passed, 1 skipped |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
@@ -23,7 +23,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
 | `./dev symfony` (8.x) | pass |
 | `./dev apcu` | 23 failures, all known |
-| `./dev drupal` | 4 modes OK |
+| `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 10 configs incl. `apcu-all` / `nocopy-all-dbtags` breakdown, published ([results](../bench/results-drupal/2026-11-05)) |
 | `docker/fpm-bench.sh` | published; bench app fixed to use `cache.adapter.nocopy` (APCu layer gone since the polyfill) |
 

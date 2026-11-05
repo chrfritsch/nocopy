@@ -1,5 +1,5 @@
 #!/bin/sh
-# FrankenPHP (ZTS, threads): classic requests, worker mode under "auto" and with nocopy.request_scope=1 (both copy mode).
+# FrankenPHP (ZTS, threads): classic requests, worker mode (copy mode).
 #   docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
 set -e
 command -v gcc >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl >/dev/null 2>&1; }
@@ -19,6 +19,5 @@ run() { # $1 label, $2 extra ini, $3 worker flag
   echo "$1: $(cat /tmp/last)"
   kill $pid; wait $pid 2>/dev/null || true
 }
-run "classic, auto      " "" ""
-run "worker, auto       " "" "--worker /app/app.php"
-run "worker, scope=1    " "nocopy.request_scope=1" "--worker /app/app.php"
+run "classic            " "" ""
+run "worker             " "" "--worker /app/app.php"

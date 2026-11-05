@@ -4,8 +4,10 @@ nocopy: cached strings stored without a hash still work as array keys (zero-copy
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t020
-nocopy.request_scope=1
 --FILE--
+<?php
+require __DIR__ . '/serve.inc';
+echo serve(<<<'CODE'
 <?php
 $k = str_repeat("ab", 300);
 nocopy_put("x", [$k, "y", "z" => $k]);
@@ -13,6 +15,7 @@ $a = nocopy_get("x");
 $m = [$a[0] => 1];
 var_dump(isset($m[$k]), array_flip($a)["y"], array_search($k, $a, true), isset(array_count_values($a)[$k]));
 var_dump(isset([nocopy_get("x")["z"] => 1][$k]));
+CODE);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t020*')); ?>

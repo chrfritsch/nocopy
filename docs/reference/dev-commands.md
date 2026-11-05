@@ -21,7 +21,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev frankenphp` | FrankenPHP classic and worker mode; then the `shm` checks under FrankenPHP | `dunglas/frankenphp:1-php8.4` |
 | `./dev symfony [version=8.*]` | Symfony bundle smoke test, alone and next to APCu; installs `symfony/framework-bundle` into `.cache/` | `nocopy-linux:$PHP` |
 | `./dev apcu` | APCu's own test suite against the polyfill (23 known failures) | `nocopy-linux:$PHP` |
-| `./dev drupal` | Drupal module PHPUnit tests in 4 modes: shared copy, zero-copy, Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
+| `./dev drupal` | Drupal module PHPUnit tests in 3 modes: shared (CLI: copy mode), Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
 | `./dev tidy` | clang-tidy over the extension's C sources, checks in `.clang-tidy`; any finding fails | `nocopy-linux:$PHP` |
 | `./dev ci` | `tidy test novalkey asan clang stress c shm zts frankenphp symfony`, stops at the first failure | |
 

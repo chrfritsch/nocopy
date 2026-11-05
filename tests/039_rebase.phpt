@@ -5,7 +5,6 @@ nocopy
 --INI--
 nocopy.shm_name=/nocopy-t039
 nocopy.shm_size=4M
-nocopy.request_scope=0
 --FILE--
 <?php
 class P { public $a = [1, 2]; }

@@ -111,15 +111,7 @@ hit, 10000 rows, 862 ns per fetch
 
 A hit: the CLI and the web server share one cache. The CLI is slower because it runs in **copy mode**: a long-running
 script could keep a value forever, so it gets its own copy, and nocopy reuses that copy while the entry is unchanged.
-You can force zero-copy for a short script:
-
-```sh
-php -d nocopy.request_scope=1 /tmp/demo/index.php
-```
-
-```
-hit, 10000 rows, 17 ns per fetch
-```
+nocopy picks the mode from the SAPI; there is nothing to configure.
 
 ## 6. Compare with APCu
 

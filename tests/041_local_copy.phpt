@@ -4,7 +4,6 @@ nocopy: copy mode keeps private copies for the request; modifying, overwriting o
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t041
-nocopy.request_scope=0
 nocopy.local_size=64K
 --FILE--
 <?php

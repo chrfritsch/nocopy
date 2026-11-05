@@ -4,9 +4,11 @@ nocopy: a value fetched in this request survives replacement for the rest of the
 nocopy
 --INI--
 nocopy.shm_name=/nocopy-t004
-nocopy.request_scope=1
 nocopy.shm_size=2M
 --FILE--
+<?php
+require __DIR__ . '/serve.inc';
+echo serve(<<<'CODE'
 <?php
 $orig = array_map(fn($i) => "orig-$i", range(1, 500));
 nocopy_put('k', $orig);
@@ -16,6 +18,7 @@ for ($i = 0; $i < 200; $i++) {       // far more than the arena holds: segments 
 }
 var_dump($held === $orig);                  // the pinned segment was never reused
 var_dump(nocopy_stats()['pinned_segments']); // ...and exactly that one is held back
+CODE);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t004*')); ?>

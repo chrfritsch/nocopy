@@ -6,10 +6,12 @@ session
 --INI--
 nocopy.shm_name=/nocopy-t012
 nocopy.shm_size=4M
-nocopy.request_scope=1
 session.use_cookies=0
 session.cache_limiter=
 --FILE--
+<?php
+require __DIR__ . '/serve.inc';
+echo serve(<<<'CODE'
 <?php
 class Handler implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {
     function create_sid(): string { return 'sid'; }
@@ -35,6 +37,7 @@ session_start();
 $_SESSION['a'] = new Evil;
 $_SESSION['b'] = nocopy_get('big');
 echo "done\n";
+CODE, ['session.use_cookies' => '0', 'session.cache_limiter' => '']);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t012*')); ?>

@@ -19,6 +19,12 @@ if (extension_loaded('nocopy') && !defined('NATIVE')) {
 // usage: php [-d ...] run.php <group>   groups: read, write, parallel, mixed, contend, ttl
 // emits one JSON line per measurement: {"name":..., "v":..., "unit":...}
 
+/** Ends a forked child; under php -S (zero.php) exit() would send the parent's response. */
+function child_exit(): never {
+    if (PHP_SAPI === 'cli-server') pcntl_exec('/bin/true');
+    exit(0);
+}
+
 function out(string $name, float $v, string $unit): void {
     echo json_encode(['name' => $name, 'v' => round($v, 3), 'unit' => $unit]), "\n";
 }
@@ -106,7 +112,7 @@ if ($group === 'parallel') {
             $pids = [];
             for ($k = 0; $k < $w; $k++) {
                 $pid = pcntl_fork();
-                if ($pid === 0) { for ($i = 0; $i < $ops; $i++) $x = apcu_fetch($key); exit(0); }
+                if ($pid === 0) { for ($i = 0; $i < $ops; $i++) $x = apcu_fetch($key); child_exit(); }
                 $pids[] = $pid;
             }
             foreach ($pids as $p) pcntl_waitpid($p, $st);
@@ -122,7 +128,7 @@ function forked(int $w, float $secs, callable $fn): float {
     $pids = [];
     for ($k = 0; $k < $w; $k++) {
         $pid = pcntl_fork();
-        if ($pid === 0) { $end = hrtime(true) + $secs * 1e9; $n = $fn($end, $k); file_put_contents($tmp, "$n\n", FILE_APPEND | LOCK_EX); exit(0); }
+        if ($pid === 0) { $end = hrtime(true) + $secs * 1e9; $n = $fn($end, $k); file_put_contents($tmp, "$n\n", FILE_APPEND | LOCK_EX); child_exit(); }
         $pids[] = $pid;
     }
     foreach ($pids as $p) pcntl_waitpid($p, $st);
@@ -146,7 +152,7 @@ if ($group === 'contend') {
         $pids = [];
         for ($k = 0; $k < $writers; $k++) {
             $pid = pcntl_fork();
-            if ($pid === 0) { while (!apcu_fetch('stop')) for ($i = 0; $i < 100; $i++) apcu_store("wr$k", $i); exit(0); }
+            if ($pid === 0) { while (!apcu_fetch('stop')) for ($i = 0; $i < 100; $i++) apcu_store("wr$k", $i); child_exit(); }
             $pids[] = $pid;
         }
         out("4 readers fetch int, $writers writers", forked(4, 1.0, function ($end) {
@@ -185,11 +191,11 @@ if ($group === 'mixed') {
     apcu_store('hot', $a);
     apcu_store('stop', 0);
     $writer = pcntl_fork();
-    if ($writer === 0) { $n = 0; while (!apcu_fetch('stop')) { apcu_store('hot', $a); $n++; } exit(0); }
+    if ($writer === 0) { $n = 0; while (!apcu_fetch('stop')) { apcu_store('hot', $a); $n++; } child_exit(); }
     $ops = 3000; $t = hrtime(true); $pids = [];
     for ($k = 0; $k < 4; $k++) {
         $pid = pcntl_fork();
-        if ($pid === 0) { for ($i = 0; $i < $ops; $i++) $x = apcu_fetch('hot'); exit(0); }
+        if ($pid === 0) { for ($i = 0; $i < $ops; $i++) $x = apcu_fetch('hot'); child_exit(); }
         $pids[] = $pid;
     }
     foreach ($pids as $p) pcntl_waitpid($p, $st);

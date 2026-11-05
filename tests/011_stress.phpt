@@ -5,8 +5,10 @@ nocopy
 --INI--
 nocopy.shm_name=/nocopy-t011
 nocopy.shm_size=4M
-nocopy.request_scope=1
 --FILE--
+<?php
+require __DIR__ . '/serve.inc';
+echo serve(<<<'CODE'
 <?php
 mt_srand(42);
 $model = [];
@@ -42,6 +44,7 @@ foreach ($held as [$a, $b]) if ($a !== $b) $bad++;       // never overwritten wh
 foreach ($model as $k => $v) if (($g = nocopy_get($k)) !== $v && ($g !== null || nocopy_stats()['expunges'] === $at[$k])) $bad++;
 $s = nocopy_stats();
 var_dump($bad, $s['entries'] <= count($model), $s['used'] <= $s['size']);
+CODE);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t011*')); ?>
