@@ -12,6 +12,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 |---|---|---|
 | `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests), with a Valkey server for the 05x tests | `nocopy-linux:$PHP` |
 | `./dev novalkey [tests …]` | same, built with `--disable-nocopy-valkey` | `nocopy-linux:$PHP` |
+| `./dev asan [tests …]` | same, built with AddressSanitizer + UBSan (libasan preloaded into the uninstrumented php, `USE_ZEND_ALLOC=0`, no leak check) | `nocopy-linux:$PHP` |
 | `./dev zts [tests …]` | suite on thread-safe PHP 8.4 with ext-parallel | `nocopy-zts:8.4` |
 | `./dev stress [loops=30]` | concurrency tests (011, 015, 018, 021, 022) in a loop on a release build, stops at the first failure or hang | `nocopy-linux:$PHP` |
 | `./dev c [seconds=3]` | the arena alone (`tests/c/`) from 8 threads, plain and ThreadSanitizer, then the repair test | `nocopy-linux:$PHP` |
@@ -20,7 +21,8 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev symfony [version=8.*]` | Symfony bundle smoke test, alone and next to APCu; installs `symfony/framework-bundle` into `.cache/` | `nocopy-linux:$PHP` |
 | `./dev apcu` | APCu's own test suite against the polyfill (23 known failures) | `nocopy-linux:$PHP` |
 | `./dev drupal` | Drupal module PHPUnit tests in 4 modes: shared copy, zero-copy, Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
-| `./dev ci` | `test novalkey stress c shm zts frankenphp symfony`, stops at the first failure | |
+| `./dev tidy` | clang-tidy over the extension's C sources, checks in `.clang-tidy`; any finding fails | `nocopy-linux:$PHP` |
+| `./dev ci` | `tidy test novalkey asan stress c shm zts frankenphp symfony`, stops at the first failure | |
 
 ## Benchmarks
 
@@ -46,8 +48,8 @@ usage in their headers and in [Develop, test and benchmark](../how-to/develop.md
 
 | Path | Role |
 |---|---|
-| `docker/Dockerfile` | `nocopy-linux`: official `php:<PHP>-fpm` + nginx, Valkey, git, OpenSSL headers, pcntl, APCu and igbinary (built, not loaded) |
+| `docker/Dockerfile` | `nocopy-linux`: official `php:<PHP>-fpm` + nginx, Valkey, git, OpenSSL headers, clang-tidy, pcntl, APCu and igbinary (built, not loaded) |
 | `docker/Dockerfile.zts` | `nocopy-zts`: `php:8.4-zts` + ext-parallel |
 | `docker/Dockerfile.drupal` | `nocopy-drupal`: `nocopy-linux:8.5` + Drupal's extensions, MariaDB, composer |
-| `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` (`NOCOPY_CONFIGURE` for configure flags) |
+| `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` with `-Wall -Wextra -Werror` (`NOCOPY_CONFIGURE` for configure flags, `NOCOPY_ASAN=1` for sanitizers) |
 | `docker/*.sh` | the in-container scripts the commands above run |

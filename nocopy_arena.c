@@ -860,7 +860,11 @@ static void *map_at(int fd, size_t size, uintptr_t base)
 }
 
 /* Far from PIE binaries, heaps, mmap bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
-static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL};
+static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL,
+#ifdef __SANITIZE_ADDRESS__
+	(uintptr_t) 0x300000000000ULL, /* both above are ASan shadow on aarch64 */
+#endif
+};
 
 typedef enum { OPEN_OK, OPEN_RETRY, OPEN_FAIL } open_result;
 
@@ -963,7 +967,7 @@ static void collect(const char *base, nocopy_named *out)
 	struct dirent *de;
 	while ((de = readdir(d))) {
 		const char *n = de->d_name, *x = n + bl + 1;
-		if (strncmp(n, base + 1, bl) != 0 || n[bl] != '.' || strlen(x) != 8 || strspn(x, "0123456789abcdef") != 8 || strcmp(n, out->name + 1) == 0) {
+		if (strncmp(n, base + 1, bl) != 0 /* NOLINT(bugprone-not-null-terminated-result): stops at NUL */ || n[bl] != '.' || strlen(x) != 8 || strspn(x, "0123456789abcdef") != 8 || strcmp(n, out->name + 1) == 0) {
 			continue;
 		}
 		char other[sizeof out->other];

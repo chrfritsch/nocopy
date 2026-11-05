@@ -24,7 +24,8 @@ foreach (['server' => 'subjectAltName=DNS:localhost', 'client' => 'extendedKeyUs
 }
 file_put_contents("$d/bad.key", "not a key\n");
 $vs = trim(shell_exec('command -v valkey-server || command -v redis-server'));
-shell_exec("$vs --port 6391 --tls-port 6390 --tls-cert-file $d/server.crt --tls-key-file $d/server.key --tls-ca-cert-file $d/ca.crt --tls-auth-clients yes --save '' --daemonize yes --pidfile $d/vk.pid");
+// env -u: ./dev asan preloads libasan, valkey crashes under it
+shell_exec("env -u LD_PRELOAD $vs --port 6391 --tls-port 6390 --tls-cert-file $d/server.crt --tls-key-file $d/server.key --tls-ca-cert-file $d/ca.crt --tls-auth-clients yes --save '' --daemonize yes --pidfile $d/vk.pid");
 usleep(300000);
 
 function child(string $url, array $ini, string $code): string
