@@ -1,8 +1,0 @@
-<?php
-
-/**
- * Drops the journal: the cache is now always shared by every process of the site.
- */
-function nocopy_update_11001(): void {
-  \Drupal::database()->schema()->dropTable('nocopy_journal');
-}

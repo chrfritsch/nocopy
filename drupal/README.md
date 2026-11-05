@@ -74,8 +74,6 @@ The status report (admin/reports/status) shows whether this PHP shares the cache
 It uses `cache.backend.nocopy_fast`, which needs no Valkey (chainedfast already checks the database on every request) and falls back to
 the database alone where the extension is not loaded or `nocopy.shm_name` is not set, like core's APCu fast layer. Works on several web servers.
 
-**Upgrading from a version with the journal:** `drush updb` drops the `nocopy_journal` table; `$settings['nocopy_shared']` is no longer read.
-
 ## Trade-offs
 
 - **Without `nocopy.valkey`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.

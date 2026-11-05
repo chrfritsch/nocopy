@@ -15,38 +15,29 @@ function apcu_enabled(): bool
 
 function apcu_store(array|string|int $key, mixed $value = null, int $ttl = 0): array|bool
 {
-    if ($ttl < 0) {
-        throw new ValueError('apcu_store(): Argument #3 ($ttl) must be greater than or equal to 0');
-    }
-    if (!is_array($key)) {
-        if (func_num_args() < 2) {
-            throw new ArgumentCountError('apcu_store() expects at least 2 arguments, 1 given');
-        }
-        return nocopy_put((string) $key, $value, $ttl, true);
-    }
-    $failed = [];
-    foreach ($key as $k => $v) {
-        if (!nocopy_put((string) $k, $v, $ttl, true)) {
-            $failed[$k] = -1;
-        }
-    }
-    return $failed;
+    return apcu_put('apcu_store', 'nocopy_put', $key, $value, $ttl, func_num_args());
 }
 
 function apcu_add(array|string|int $key, mixed $value = null, int $ttl = 0): array|bool
 {
+    return apcu_put('apcu_add', 'nocopy_add', $key, $value, $ttl, func_num_args());
+}
+
+/** @internal apcu_store/apcu_add with $put as the store. */
+function apcu_put(string $fn, callable $put, array|string|int $key, mixed $value, int $ttl, int $argc): array|bool
+{
     if ($ttl < 0) {
-        throw new ValueError('apcu_add(): Argument #3 ($ttl) must be greater than or equal to 0');
+        throw new ValueError("$fn(): Argument #3 (\$ttl) must be greater than or equal to 0");
     }
     if (!is_array($key)) {
-        if (func_num_args() < 2) {
-            throw new ArgumentCountError('apcu_add() expects at least 2 arguments, 1 given');
+        if ($argc < 2) {
+            throw new ArgumentCountError("$fn() expects at least 2 arguments, 1 given");
         }
-        return nocopy_add((string) $key, $value, $ttl, true);
+        return $put((string) $key, $value, $ttl, true);
     }
     $failed = [];
     foreach ($key as $k => $v) {
-        if (!nocopy_add((string) $k, $v, $ttl, true)) {
+        if (!$put((string) $k, $v, $ttl, true)) {
             $failed[$k] = -1;
         }
     }
@@ -96,9 +87,7 @@ function apcu_inc(string $key, int $step = 1, mixed &$success = null, int $ttl =
 
 function apcu_dec(string $key, int $step = 1, mixed &$success = null, int $ttl = 0): int|false
 {
-    $r = nocopy_inc($key, -$step, $ttl);
-    $success = $r !== false;
-    return $r;
+    return apcu_inc($key, -$step, $success, $ttl);
 }
 
 function apcu_cas(string $key, int $old, int $new): bool
