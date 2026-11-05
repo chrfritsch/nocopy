@@ -6,11 +6,33 @@
 #include "nocopy_arena.h"
 
 extern size_t nocopy_seg_size;
+extern uint32_t nocopy_fair_segs; /* nsegs / nshards: a division on every write cost store int ~3 ns */
 extern uint32_t *nocopy_ghosts[NOCOPY_MAX_SHARDS]; /* per shard, as many as slots: tags of recently evicted keys (S3-FIFO ghost) */
 
 static inline char *seg_start(uint32_t s) { return nocopy_seg_base + ((size_t) s << nocopy_seg_shift); }
 static inline nocopy_slot slot_make(const nocopy_entry *e) { return (uint64_t) nocopy_slot_tag(e->h) << 32 | (uint32_t) (((const char *) e - (const char *) nocopy_a) >> 3); }
 static inline nocopy_slot *tab_of(const nocopy_shard *sh) { return nocopy_tabs[sh->idx]; }
+static inline bool owns(const nocopy_shard *sh, uint32_t s) { return sh->own[s >> 6] >> (s & 63) & 1; }
+/* Segments per shard if memory were split evenly: what a shard may reclaim from others, and the largest entry. */
+static inline uint32_t nocopy_fair(void) { return nocopy_fair_segs; }
+
+/* The first segment >= s that sh owns, or UINT32_MAX. */
+static inline uint32_t own_next(const nocopy_shard *sh, uint32_t s)
+{
+	if (s >= NOCOPY_MAX_SEGS) {
+		return UINT32_MAX;
+	}
+	uint32_t w = s >> 6;
+	uint64_t b = sh->own[w] & (~(uint64_t) 0 << (s & 63));
+	while (!b) {
+		if (++w == NOCOPY_SEG_WORDS) {
+			return UINT32_MAX;
+		}
+		b = sh->own[w];
+	}
+	return w * 64 + (uint32_t) __builtin_ctzll(b);
+}
+#define SH_SEGS(sh, s) for (uint32_t s = own_next(sh, 0); s != UINT32_MAX; s = own_next(sh, s + 1))
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
  * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */

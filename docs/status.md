@@ -36,9 +36,9 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 3. **Eviction tuning:** victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
-4. **Memory balance:** a shard without writes expires only under memory pressure; a hot shard cannot borrow from idle ones;
-   RSS drifts to `nocopy.shm_size`. Candidate: move segments toward the shard with the most `ghost_hits` (Cliffhanger,
-   CacheLib's MarginalHits), only once a benchmark shows shards out of balance; it breaks the fixed-slice invariant.
+4. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).
+   Open: a shard without writes expires only under memory pressure; RSS drifts to `nocopy.shm_size`. Steering segments
+   by `ghost_hits` (Cliffhanger, CacheLib's MarginalHits) instead of an even share: only with a workload that needs it.
 5. **Valkey:** Cluster (libvalkey's `cluster.c`, vendored next to the rest), Sentinel, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
    to save round trips.
 

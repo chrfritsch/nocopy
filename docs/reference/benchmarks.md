@@ -103,5 +103,5 @@ req/s). A web save on server A and a Drush save both show up on server B in both
 
 ## Hit ratio
 
-`bench/hitratio.php` measures read-through hit ratios under Zipf and loop workloads; results back the eviction choices in
+`bench/hitratio.php` measures read-through hit ratios under Zipf and loop workloads (optionally next to a few hot big values, which load some shards more than others); results back the eviction choices in
 [Design decisions](../explanation/design-decisions.md#eviction).

@@ -36,12 +36,17 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 - Slot: 64 bits = `{ offset/8 (32 bit), nocopy_slot_tag(hash) }`; 0 empty. The tag is the hash times an odd constant, top 32 bits; its low bits are the home slot, all 32 the probe filter: a probe compares them first and only dereferences on a match.
   Not the raw hash: PHP's DJBX33A gives keys like `prefix.N` regular low bits, and as home slots they formed probe runs of hundreds at 3/4 fill (simulated: hit 215 / miss 1247 probes vs 2 / 8).
 
-## Shards: fixed slices
+## Shards and the segment pool
 
 The key hash (Fibonacci mix of the high bits) picks one of up to 8 shards. Shards exist only while each one keeps >= 8 MB and >= 16 segments: 1 shard up to 8 MB, 2 at 16 MB, 4 at 32 MB (default), 8 from 64 MB.
-A shard owns, for the arena's life: its lock (alone on its cache line), a fixed slot table, a fixed contiguous slice of segments `[lo, hi)`, one open segment per TTL bucket, its expiry cursor, live bytes and `nlive`.
-Every write takes only its key's shard lock and only ever touches that shard's slots and segments: there is no shared pool and no cross-shard work, so a walk over a segment cannot race another shard reusing it.
-Price: an entry must fit in one slice (larger ones are refused), and a shard full of data cannot borrow memory from an idle one (keys hash evenly, so this matters only for a few huge keys).
+A shard owns, for the arena's life: its lock (alone on its cache line), a fixed slot table, one open segment per TTL bucket, its expiry cursor, live bytes and `nlive`; and, while it holds them, the segments it took from the pool.
+Every write takes only its key's shard lock and only touches that shard's slots and segments.
+- Pool: `owner[s]` (header, one byte per segment) is the shard index + 1, 0 while the segment is free. A shard claims with a CAS 0 -> its id (under its own lock) and releases with a store of 0 after zeroing the segment (`seg_free`, from `reclaim()`), so a segment changes shard only through the pool, zeroed, and its old shard never walks it again.
+  The shard's `own` bitmap and `nown` index its segments; `owner[]` is the truth (`shard_repair` rebuilds both from it and returns segments claimed but never set up, or freed halfway).
+- `take_run` scans `owner[]` from the shard's home range (`idx * nsegs / nshards`): balanced shards stay contiguous, as with fixed slices. A plain take leaves one free segment per shard, for merges (`reserve`).
+- Balance: a shard below 15/16 of its share (`nsegs / nshards`) that finds the pool dry has the shard holding the most evict once (`rebalance`: drop own lock, lock that one, `reclaim` + `nocopy_merge`, unlock, relock) before it merges its own. Above its share it merges its own, as before.
+  So a hot shard borrows what others do not use and gives it back when they need it; idle memory is never taken from a shard that is not over its share.
+Price: an entry must still fit in a shard's share (larger ones are refused; fragmentation would make bigger runs fail anyway).
 
 Locks: test-and-test-and-set, inline fast path (`nocopy_lock`), slow path `nocopy_lock_wait` yields after 128 spins. The lock word is the holder's owner id = pid | process start time << 32.
 A waiter that has yielded ~1000 times checks `owner_dead(holder)` (gone, a zombie, or the pid now belongs to a newer process: start time differs; Linux `/proc/<pid>/stat`, macOS `sysctl(KERN_PROC_PID)`)
@@ -145,7 +150,8 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 ## Invariants worth remembering
 
 - Never allocate (emalloc, zvals) while holding a shard lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker. `nocopy_rebase` runs under the lock: it only rewrites pointers.
-- Never take a second shard lock while holding one, except `nocopy_clear` (all, in index order).
+- Never take a second shard lock while holding one, except `nocopy_clear` (all, in index order). `rebalance` drops its own first: `nocopy_alloc` may unlock and relock, so nothing before it in a write may rely on shard state.
+- A segment changes shard only through the pool: zeroed, `owner[s] = 0` (release), claimed by CAS. Walk a shard's segments by `own` (`SH_SEGS`), never by index range.
 - Arena strings are `IS_STR_INTERNED` but never `IS_STR_PERMANENT`: that flag promises process lifetime and PCRE then keeps the pointer as a cache key.
 - Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `nocopy_hold` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).

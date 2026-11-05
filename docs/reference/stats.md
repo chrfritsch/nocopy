@@ -17,7 +17,7 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | `evacuated_bytes` | Bytes moved by compaction and eviction rounds |
 | `segment_size` | Bytes per segment (a power of two, 64 KB-2 MB) |
 | `segments` | Segments in the arena |
-| `free_segments` | Segments ready for new writes |
+| `free_segments` | Segments in the shared pool, ready for any shard's writes |
 | `dead_segments` | Segments without live entries, not yet reused (a reader may still pin them) |
 | `pinned_segments` | Segments some process currently reads from |
 | `shards` | Independent parts with their own lock (1-8) |

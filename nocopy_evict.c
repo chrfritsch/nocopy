@@ -19,14 +19,14 @@ bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget)
 	if (sh->exp_idle == now) {
 		return false;
 	}
-	uint32_t n = sh->hi - sh->lo;
-	if (sh->exp_next < sh->lo || sh->exp_next >= sh->hi) {
-		sh->exp_next = sh->lo;
+	uint32_t n = nocopy_a->nsegs;
+	if (sh->exp_next >= n) {
+		sh->exp_next = 0;
 	}
 	for (uint32_t seen = 0; seen < n; seen++) {
 		uint32_t s = sh->exp_next;
 		nocopy_seg *g = &nocopy_a->segs[s];
-		if ((g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp < now) {
+		if (owns(sh, s) && (g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp < now) {
 			if (sh->exp_gen != g->gen) { /* freed and reused since the cursor stopped here: entry boundaries moved */
 				sh->exp_gen = g->gen;
 				sh->exp_off = 0;
@@ -45,7 +45,7 @@ bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget)
 			}
 		}
 		sh->exp_off = 0;
-		sh->exp_next = s + 1 < sh->hi ? s + 1 : sh->lo;
+		sh->exp_next = s + 1 < n ? s + 1 : 0;
 	}
 	sh->exp_idle = now;
 	return did;
@@ -94,7 +94,10 @@ static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 {
 	uint32_t nv = 0;
 	*live = 0;
-	for (uint32_t s = sh->lo; s < sh->hi && nv < MERGE_N; s++) {
+	SH_SEGS(sh, s) {
+		if (nv == MERGE_N) {
+			break;
+		}
 		size_t l = nocopy_a->segs[s].live;
 		if (mergeable(s) && l <= nocopy_seg_size / 4 && *live + l <= nocopy_seg_size) {
 			*live += l;
@@ -110,7 +113,7 @@ static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared, u
 {
 	uint32_t nv = 0, run = UINT32_MAX;
 	*spared = false;
-	for (uint32_t s = sh->lo; s < sh->hi; s++) {
+	SH_SEGS(sh, s) {
 		nocopy_seg *g = &nocopy_a->segs[s];
 		if (g->state != SEG_SEALED || g->pending) {
 			continue;

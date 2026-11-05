@@ -48,8 +48,9 @@ both modes. Store arrays to get the gain.
 ## Writes, shards and segments
 
 Writes append to **segments** (64 KB-2 MB), grouped by TTL so entries that expire together sit together. A key's hash
-picks one of up to 8 **shards**, each with its own lock, slot table and slice of segments: writers to different shards
-never wait for each other, and readers never lock. If a writer dies mid-write (kill -9, OOM killer), the next writer
+picks one of up to 8 **shards**, each with its own lock and slot table, taking segments from a shared pool: writers to
+different shards never wait for each other, readers never lock, and a busy shard can use what the others leave free
+(and gives it back when they need it). If a writer dies mid-write (kill -9, OOM killer), the next writer
 detects it and repairs that shard.
 
 ## When the cache is full

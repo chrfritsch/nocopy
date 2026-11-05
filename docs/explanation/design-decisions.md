@@ -98,6 +98,22 @@ loads and all hits on scans.
 Not Redis's `last_delete_all` timestamp: that compares clocks of different servers. `invalidateAll()` deletes (as Redis
 does by default), so each call reads one bin key instead of two.
 
+## Memory balance
+
+**Shards take segments from a shared pool** (was: a fixed slice each, nothing lent). A shard below 15/16 of its share whose
+pool is dry has the shard holding the most evict once for it; above its share it merges its own. `bench/hitratio.php zipf <fp> 0 0 <big> <mb>`
+(hot big values land on few shards), 32M / 64M: 6 x 3 MB 90.8 -> 95.7 / 95.6 -> 97.8, 3 x 5 MB 92.2 -> 97.6 / 93.5 -> 98.1,
+10 x 2 MB at fp 0.8 92.2 -> 97.9 / 97.7 -> 99.5, 6 x 3 MB at fp 1.5 86.7 -> 88.7 / 91.2 -> 92.1. Without big values (4M / 32M / 64M):
+zipf 92.2 -> 92.2 / 93.9 -> 94.1 / 93.1 -> 93.7, loop 1.1x 49.9 -> 49.8 / 50.0 -> 60.8 / 67.6 -> 72.5, 20% overwrites 84.0 -> 84.1 / 87.1 -> 87.4 / 85.1 -> 85.4;
+zipf + 0.5 one-hit wonders 88.0 -> 88.0 / 89.4 -> 89.5 / 91.6 -> 91.3 (the price: shards drift around their share).
+The 15/16 slack: rebalancing at any deficit cost the one-hit-wonder load 0.6 points at 32M and 64M; 7/8 lost most of the
+6 x 3 MB fp 1.5 gain (88.6 -> 87.1 at 32M), 3/4 cost 64M 1.1 points; 15/16 was best or tied in all four.
+`take_run` scans from the shard's home range: first-fit from segment 0 interleaved the shards, whose `nocopy_seg`s
+(56 B) then shared cache lines: parallel stores x4-x16 -44 to -60%. The fast path of `nocopy_seg_alloc` is split from
+taking a segment (its registers lengthened the prologue: +5 instructions a write); a write now runs 9 fewer instructions
+than before (cachegrind), `ab.sh` within noise. Price: a write that needs a segment scans `owner[]` (256 bytes) and may
+drop its lock to rebalance; an entry is still limited to a shard's share.
+
 ## Single flight
 
 **Leases in a fixed per-shard table, not in the cache.** As cache entries they used slots, showed up in counts, were wiped by

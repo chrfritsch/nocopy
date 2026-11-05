@@ -12,7 +12,7 @@ printf("%.1f of %.1f MB used, %d entries\n", $s['used'] / 1e6, $s['size'] / 1e6,
 The 2,000-node Drupal benchmark site used 11 MB with every cache bin in nocopy. The whole size is reserved in `/dev/shm`
 when the cache is created (raise Docker's `--shm-size` to match).
 
-Size also decides the shard count, and an entry must fit into one shard:
+Size also decides the shard count, and an entry must fit into one shard's share (shards borrow free memory from each other, but a single entry does not):
 
 | `nocopy.shm_size` | shards | largest entry (measured) |
 |---|---|---|

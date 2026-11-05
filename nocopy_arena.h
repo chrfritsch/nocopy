@@ -61,11 +61,11 @@ typedef struct {
 	int32_t slot;
 } nocopy_lease;
 
-/* A shard owns its lock, a fixed slot table and a fixed slice of segments [lo, hi): writers of one shard never touch another's. */
+/* A shard owns its lock, a fixed slot table and the segments it took from the pool (own): writers of one shard never touch another's. */
 typedef struct {
 	uint64_t lock __attribute__((aligned(64))); /* holder's owner id; alone on its line */
 	int32_t cur[NOCOPY_TTL_BUCKETS] __attribute__((aligned(64))); /* open segment per TTL bucket, or -1 */
-	uint32_t lo, hi, nfree, ndead;
+	uint32_t nown, ndead; /* nown: read racily by other shards (rebalance) */
 	uint32_t idx;       /* own index: sh - shards would divide by sizeof(nocopy_shard) */
 	uint64_t last_seq, inserts; /* a global atomic counter here cost 9x at 8 parallel writers */
 	bool hint;          /* a segment died: worth a reclaim pass */
@@ -78,6 +78,7 @@ typedef struct {
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4) */
 	time_t wip_checked;  /* last look for dead writers' unfinished entries */
 	nocopy_lease leases[NOCOPY_LEASES];
+	uint64_t own[NOCOPY_SEG_WORDS]; /* its segments; owner[] is the truth, this the index. Here: off the write path's lines */
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
 } nocopy_shard;
 
@@ -106,6 +107,7 @@ typedef struct {
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];
+	uint8_t owner[NOCOPY_MAX_SEGS] __attribute__((aligned(64))); /* shard index + 1; 0: in the pool (free, zeroed) */
 	char user[128] __attribute__((aligned(64))); /* the user's process-independent data (nocopy.c: the shared empty array) */
 	char tables[] __attribute__((aligned(64)));
 } nocopy_arena;
