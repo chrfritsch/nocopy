@@ -18,14 +18,14 @@ use Drupal\Core\Cache\CacheTagsChecksumPreloadInterface;
  */
 class NocopyBackend implements CacheBackendInterface {
 
-  // Positions in the stored array.
-  private const DATA = 0, CREATED = 1, EXPIRE = 2, TAGS = 3, CHECKSUM = 4;
+  // Positions in the stored array. VERSION: the bin's version when written, so deleteAll() needs no new keys.
+  private const DATA = 0, CREATED = 1, EXPIRE = 2, TAGS = 3, CHECKSUM = 4, VERSION = 5;
 
   // Invalidated items outlive their expiry by this long for $allow_invalid readers, then nocopy may drop them.
   private const TTL_SLACK = 3600;
 
   // With nocopy.valkey: permanent items expire after a year, so Valkey's volatile-* eviction can drop them
-  // but never tag tokens, bin state or these small bins (no TTL).
+  // but never tag tokens, bin versions or these small bins (no TTL).
   private const PERM_TTL = 31536000, PERMANENT_BINS = ['container', 'bootstrap', 'config', 'discovery'];
 
   // cid => TRUE: deleted inside a transaction, removed after the commit (a concurrent request could refill them from uncommitted data).
@@ -58,27 +58,24 @@ class NocopyBackend implements CacheBackendInterface {
     self::$shared = TRUE;
   }
 
-  protected function binKey(string $name): string {
-    return $this->sitePrefix . '::' . $this->bin . '::' . $name;
+  protected function key(string $cid): string {
+    return $this->sitePrefix . '::' . $this->bin . '::' . $cid;
   }
 
-  // [version, invalidated_at], read on every call: another request may have cleared the bin.
-  // Either key lost (new bin, eviction): start a fresh version. That only costs misses, a default could revive deleted items.
-  protected function state(): array {
-    $version = nocopy_get($this->binKey('version'), $hit);
-    $invalidated = nocopy_get($this->binKey('invalidated_at'), $invalidatedHit);
-    if (!$hit || !$invalidatedHit) {
+  // Read on every call: another request may have cleared the bin.
+  // Lost (new bin, eviction): a fresh version. That only costs misses, a default could revive deleted items.
+  protected function version(): string {
+    $version = nocopy_get($this->versionKey(), $hit);
+    if (!$hit) {
       $version = bin2hex(random_bytes(6));
-      nocopy_put($this->binKey('version'), $version);
-      nocopy_put($this->binKey('invalidated_at'), [$version, 0.0]);
-      return [$version, 0.0];
+      nocopy_put($this->versionKey(), $version);
     }
-    // invalidateAll() of an older version does not apply after deleteAll().
-    return [$version, $invalidated[0] === $version ? $invalidated[1] : 0.0];
+    return $version;
   }
 
-  protected function key(string $cid, ?string $version = NULL): string {
-    return $this->binKey(($version ?? $this->state()[0]) . '::' . $cid);
+  // One colon: no cid key can match it.
+  public function versionKey(): string {
+    return $this->sitePrefix . '::' . $this->bin . ':version';
   }
 
   public function get($cid, $allow_invalid = FALSE) {
@@ -88,15 +85,15 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function getMultiple(&$cids, $allow_invalid = FALSE) {
     $raw = [];
-    [$version, $invalidatedAt] = $this->state();
+    $version = $this->version();
     $keys = [];
     foreach ($cids as $cid) {
-      $keys[$this->key((string) $cid, $version)] = $cid;
+      $keys[$this->key((string) $cid)] = $cid;
     }
     // With nocopy.valkey: every local miss in one round trip.
     $found = nocopy_get_multiple(array_keys($keys));
     foreach ($keys as $key => $cid) {
-      if (is_array($found[$key] ?? NULL) && !isset($this->delayedDeletions[$cid])) {
+      if (($found[$key][self::VERSION] ?? NULL) === $version && !isset($this->delayedDeletions[$cid])) {
         $raw[$cid] = $found[$key];
       }
     }
@@ -111,7 +108,7 @@ class NocopyBackend implements CacheBackendInterface {
     }
     $cache = [];
     foreach ($raw as $cid => $item) {
-      if ($prepared = $this->prepareItem($cid, $item, $allow_invalid, $invalidatedAt)) {
+      if ($prepared = $this->prepareItem($cid, $item, $allow_invalid)) {
         $cache[$cid] = $prepared;
       }
     }
@@ -119,7 +116,7 @@ class NocopyBackend implements CacheBackendInterface {
     return $cache;
   }
 
-  protected function prepareItem(string|int $cid, array $item, bool $allow_invalid, float $invalidatedAt): object|false {
+  protected function prepareItem(string|int $cid, array $item, bool $allow_invalid): object|false {
     $cache = new \stdClass();
     $cache->cid = $cid;
     $cache->data = $item[self::DATA];
@@ -128,23 +125,17 @@ class NocopyBackend implements CacheBackendInterface {
     $cache->tags = $item[self::TAGS] === '' ? [] : explode(' ', $item[self::TAGS]);
     $cache->checksum = $item[self::CHECKSUM];
     $cache->valid = ($cache->expire == CacheBackendInterface::CACHE_PERMANENT || $cache->expire >= $this->time->getRequestTime())
-      && $cache->created > $invalidatedAt
       && $this->checksumProvider->isValid($cache->checksum, $cache->tags);
     return $allow_invalid || $cache->valid ? $cache : FALSE;
   }
 
   public function set($cid, $data, $expire = CacheBackendInterface::CACHE_PERMANENT, array $tags = []) {
-    $this->store($cid, $data, $expire, $tags);
+    $this->setMultiple([$cid => ['data' => $data, 'expire' => $expire, 'tags' => $tags]]);
   }
 
-  protected function store($cid, $data, $expire, array $tags): void {
-    $this->put((string) $cid, $this->item($data, $expire, $tags));
-  }
-
-  protected function item($data, $expire, array $tags): array {
-    assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
+  protected function item($data, $expire, array $tags, string $version): array {
     $tags = array_unique($tags);
-    return [$data, round(microtime(TRUE), 3), $expire, implode(' ', $tags), $this->checksumProvider->getCurrentChecksum($tags)];
+    return [$data, round(microtime(TRUE), 3), $expire, implode(' ', $tags), $this->checksumProvider->getCurrentChecksum($tags), $version];
   }
 
   protected function ttl($expire): int {
@@ -154,26 +145,16 @@ class NocopyBackend implements CacheBackendInterface {
     return max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }
 
-  protected function put(string $cid, array $item): void {
-    $ttl = $this->ttl($item[self::EXPIRE]);
-    $key = $this->key($cid);
-    try {
-      nocopy_put($key, $item, $ttl);
-    }
-    catch (\TypeError | \ValueError) {
-      // Objects or too deep: stored serialized.
-      nocopy_put($key, $item, $ttl, TRUE);
-    }
-  }
-
   // One nocopy_put_multiple() per TTL: with nocopy.valkey one pipeline each. Tags first, in one lookup.
+  // $serialize only serializes items holding objects; the rest stay zero-copy.
   public function setMultiple(array $items) {
     $tags = array_merge(...array_map(fn ($item) => $item['tags'] ?? [], array_values($items)));
     assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
     $this->checksumProvider->getCurrentChecksum($tags);
+    $version = $this->version();
     $byTtl = [];
     foreach ($items as $cid => $item) {
-      $entry = $this->item($item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? []);
+      $entry = $this->item($item['data'], $item['expire'] ?? CacheBackendInterface::CACHE_PERMANENT, $item['tags'] ?? [], $version);
       $byTtl[$this->ttl($entry[self::EXPIRE])][$this->key((string) $cid)] = $entry;
     }
     foreach ($byTtl as $ttl => $entries) {
@@ -212,9 +193,9 @@ class NocopyBackend implements CacheBackendInterface {
     }
   }
 
-  // Old entries leave through eviction.
+  // Old items stay until rewritten (same key), evicted or expired.
   public function deleteAll() {
-    nocopy_put($this->binKey('version'), bin2hex(random_bytes(6)));
+    nocopy_put($this->versionKey(), bin2hex(random_bytes(6)));
   }
 
   public function invalidate($cid) {
@@ -223,19 +204,21 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function invalidateMultiple(array $cids) {
     $past = $this->time->getRequestTime() - 1;
+    $version = $this->version();
     foreach ($cids as $cid) {
-      $item = nocopy_get($this->key((string) $cid));
-      if (is_array($item)) {
+      $key = $this->key((string) $cid);
+      $item = nocopy_get($key);
+      if (($item[self::VERSION] ?? NULL) === $version) {
         $item[self::EXPIRE] = $past;
-        $this->put((string) $cid, $item);
+        nocopy_put($key, $item, $this->ttl($past), TRUE);
       }
     }
   }
 
+  // As a deleteAll(), like the Redis module: deprecated, and one marker less to read on every call.
   public function invalidateAll() {
     @trigger_error("CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622", E_USER_DEPRECATED);
-    // Rounded like 'created', so every item created up to now compares <=.
-    nocopy_put($this->binKey('invalidated_at'), [$this->state()[0], round(microtime(TRUE), 3)]);
+    $this->deleteAll();
   }
 
   public function garbageCollection() {

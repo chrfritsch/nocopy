@@ -1,6 +1,6 @@
 {
     "name": "chrfritsch/nocopy-drupal",
-    "description": "Drupal cache backend and cache tag checksums on the nocopy PHP extension (zero-copy shared memory), for single-server sites.",
+    "description": "Drupal cache backend and cache tag checksums on the nocopy PHP extension (zero-copy shared memory, optionally shared across servers through Valkey).",
     "type": "drupal-module",
     "license": "MIT",
     "require": {

@@ -43,6 +43,17 @@ class NocopySharedTest extends KernelTestBase {
     $this->assertInstanceOf(NocopyCacheTagsChecksum::class, new NocopyCacheTagsChecksum($this->root, 'sites/x'));
   }
 
+  public function testRequirementsReportSharing(): void {
+    $r = \Drupal::moduleHandler()->invokeAll('runtime_requirements')['nocopy'];
+    $this->assertStringContainsString($this->shared() ? 'Shared with ' . nocopy_shared_with() : 'No shared cache', (string) $r['value']);
+  }
+
+  public function testPrefixSetting(): void {
+    $this->setSetting('nocopy_prefix', 'mysite');
+    $factory = new NocopyBackendFactory($this->root, 'sites/x', \Drupal::service('cache_tags.invalidator.checksum'), \Drupal::service('datetime.time'), TRUE);
+    $this->assertSame('mysite.backend::fast:version', $factory->get('fast')->versionKey());
+  }
+
   public function testFastLayerRunsEverywhere(): void {
     $factory = new NocopyBackendFactory($this->root, 'sites/x', \Drupal::service('cache_tags.invalidator.checksum'), \Drupal::service('datetime.time'), TRUE);
     $b = $factory->get('fast');

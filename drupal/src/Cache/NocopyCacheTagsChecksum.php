@@ -13,8 +13,8 @@ use Drupal\Core\Site\Settings;
 /**
  * Cache tag checksums in nocopy: one random token per tag, fresh on every invalidation and whenever missing.
  *
- * Tokens instead of counters: there is no atomic increment, and a fresh random value differs from every
- * earlier one whoever wins a race, after eviction or after a restart. 2^48 keeps sums of up to 32,768 tags in int.
+ * Tokens instead of counters: an evicted counter restarts at 0 and could match an old checksum again; a fresh random
+ * value differs from every earlier one, after eviction or a restart. 2^48 keeps sums of up to 32,768 tags in int.
  */
 class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsInvalidatorInterface, CacheTagsChecksumPreloadInterface {
 
@@ -24,7 +24,7 @@ class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsIn
 
   public function __construct(string $root, string $sitePath) {
     NocopyBackend::requireShared();
-    $this->prefix = Settings::getApcuPrefix('nocopy_tags', $root, $sitePath);
+    $this->prefix = ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.tags' : Settings::getApcuPrefix('nocopy_tags', $root, $sitePath);
   }
 
   public function getTagKey(string $tag): string {

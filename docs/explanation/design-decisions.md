@@ -56,6 +56,11 @@ loads and all hits on scans.
 
 **No `nocopy.ttl` default:** it expired Drupal's cache tag tokens. Callers pass `$ttl`.
 
+**Drupal bin version in the item, not the key:** a versioned key orphaned every item on `deleteAll()`, and with
+`nocopy.valkey` the TTL-less small bins (config, discovery, ...) then stayed in Valkey for good after each `drush cr`.
+Not Redis's `last_delete_all` timestamp: that compares clocks of different servers. `invalidateAll()` deletes (as Redis
+does by default), so each call reads one bin key instead of two.
+
 ## Single flight
 
 **Leases in a fixed per-shard table, not in the cache.** As cache entries they used slots, showed up in counts, were wiped by

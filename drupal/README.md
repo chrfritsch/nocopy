@@ -63,6 +63,12 @@ Give Valkey a `maxmemory` and `maxmemory-policy volatile-lfu`: permanent items g
 cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) have none and stay. Invalidated items are not
 deleted (as in core), so without a limit Valkey only grows.
 
+**Key prefix:** derived like core's APCu prefix, from the app root, `deployment_identifier` and the Drupal version, so it
+changes with each deploy and core update. With `nocopy.valkey` the old tag tokens and small bins then stay in Valkey (no TTL).
+Set a fixed one when every server uses the same docroot: `$settings['nocopy_prefix'] = 'mysite';`.
+
+The status report (admin/reports/status) shows whether this PHP shares the cache, its memory use and evictions.
+
 **Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
 It uses `cache.backend.nocopy_fast`, which needs no Valkey (chainedfast already checks the database on every request) and falls back to

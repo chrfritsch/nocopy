@@ -90,7 +90,7 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
     $b = $this->createCacheBackend('fresh_bin');
     $b->set('k', 'old');
     $b->deleteAll();
-    nocopy_delete($this->prefix . '::fresh_bin::version');
+    nocopy_delete($b->versionKey());
     $this->assertFalse($b->get('k'));
   }
 
@@ -119,14 +119,23 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
     $this->assertSame('v', $b->get('kept')->data);
   }
 
+  public function testDeleteAllRefillReusesKey(): void {
+    $b = $this->createCacheBackend('reuse_bin');
+    $b->set('k', 'old');
+    $b->deleteAll();
+    $this->assertFalse($b->get('k'));
+    $b->set('k', 'new');
+    $this->assertSame('new', nocopy_get($this->prefix . '::reuse_bin::k')[0]);
+  }
+
+  // invalidateAll() deletes, like the Redis module's default.
   #[IgnoreDeprecations]
-  public function testInvalidatedItemsStayInvalidWhenMarkerIsLost(): void {
+  public function testInvalidateAll(): void {
     $b = $this->getCacheBackend();
     $b->set('k', 'v');
     $this->expectUserDeprecationMessage('CacheBackendInterface::invalidateAll() is deprecated in drupal:11.2.0 and is removed from drupal:12.0.0. Use CacheBackendInterface::deleteAll() or cache tag invalidation instead. See https://www.drupal.org/node/3500622');
     $b->invalidateAll();
-    nocopy_delete($this->prefix . '::' . $this->getTestBin() . '::invalidated_at');
-    $this->assertFalse($b->get('k'));
+    $this->assertFalse($b->get('k', TRUE));
   }
 
 }

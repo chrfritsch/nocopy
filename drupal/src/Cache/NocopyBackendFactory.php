@@ -15,7 +15,7 @@ class NocopyBackendFactory implements CacheFactoryInterface {
   protected string $sitePrefix;
 
   public function __construct(string $root, string $sitePath, protected CacheTagsChecksumInterface $checksumProvider, protected TimeInterface $time, protected bool $fastLayer = FALSE) {
-    $this->sitePrefix = Settings::getApcuPrefix('nocopy_backend', $root, $sitePath);
+    $this->sitePrefix = ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.backend' : Settings::getApcuPrefix('nocopy_backend', $root, $sitePath);
   }
 
   public function get($bin) {
