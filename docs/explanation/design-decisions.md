@@ -42,7 +42,8 @@ raise `nocopy.entries_hint`.
 
 **Kept copies** (`nocopy.local_size`, 8M default): 1k rows 68 µs -> 12.8 ns, 10k rows 711 µs -> 12.8 ns, 10 KB string
 182 -> 12.8 ns; small values at most 0.8 ns slower. **Kept on the second fetch only** (a doorkeeper): keeping every copy
-made 100k distinct strings 37 -> 64 ns. Over budget the table flushes completely, a known ceiling.
+made 100k distinct strings 37 -> 64 ns. Over budget, a SIEVE hand evicts copies not used since it last passed (was: a full flush). `bench/local.php`, 3000 arrays
+of 20 rows under Zipf: local_size 4M 320-371 -> 233-242 ns, 1M 423-429 -> 333-366 ns; within budget and on loops unchanged.
 
 ## Eviction
 

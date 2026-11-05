@@ -27,11 +27,12 @@ var_dump(nocopy_get('rows'));
 nocopy_delete('rows');
 var_dump(nocopy_get('rows'));
 
-// more than the budget: flushes, values stay right
+// more than the budget: evicts, values stay right, also kept copies userland still holds
 for ($i = 0; $i < 300; $i++) nocopy_put("k$i", array_fill(0, 20, $i));
+nocopy_get('k0'); $held = nocopy_get('k0');
 $bad = 0;
 for ($r = 0; $r < 3; $r++) for ($i = 0; $i < 300; $i++) $bad += nocopy_get("k$i") !== array_fill(0, 20, $i);
-var_dump($bad);
+var_dump($bad, $held === array_fill(0, 20, 0));
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t041*')); ?>
@@ -57,3 +58,4 @@ array(3) {
 }
 NULL
 int(0)
+bool(true)

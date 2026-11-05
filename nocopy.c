@@ -447,20 +447,31 @@ static void local_flush(void)
 	NOCOPY_G(local_bytes) = 0;
 }
 
-/* ponytail: over budget flushes everything; per-slot eviction if working sets near the budget thrash */
+static void local_drop(nocopy_local *l)
+{
+	NOCOPY_G(local_bytes) -= l->size;
+	zval_ptr_dtor(&l->v);
+	l->e = NULL;
+}
+
+/* Over budget: SIEVE evicts copies not used since the hand last passed (2 rounds at most: the first clears every bit). */
 static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 {
 	if (l->e) {
-		NOCOPY_G(local_bytes) -= l->size;
-		zval_ptr_dtor(&l->v);
-		l->e = NULL; /* or the flush below releases it again */
+		local_drop(l);
 	}
-	if (NOCOPY_G(local_bytes) + e->size > local_size) {
-		local_flush();
+	for (uint32_t n = 0; NOCOPY_G(local_bytes) + e->size > local_size && n < 2 * NOCOPY_LOCAL; n++) {
+		nocopy_local *h = &NOCOPY_G(local)[NOCOPY_G(local_hand)++ % NOCOPY_LOCAL];
+		if (h->visited) {
+			h->visited = false;
+		} else if (h->e) {
+			local_drop(h);
+		}
 	}
 	l->e = e;
 	l->seq = e->seq;
 	l->size = e->size;
+	l->visited = false;
 	ZVAL_COPY(&l->v, copy);
 	NOCOPY_G(local_bytes) += e->size;
 }
@@ -695,6 +706,7 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 			nocopy_local *l = local_slot(e, v);
 			if (l && l->e == e && l->seq == e->seq) {
 				ZVAL_COPY(rv, &l->v); /* same version as last time: share it, COW keeps it intact */
+				l->visited = true;
 			} else {
 				nocopy_keys *keys = &NOCOPY_G(keys);
 				if (Z_TYPE_P(v) == IS_ARRAY) {

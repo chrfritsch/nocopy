@@ -32,6 +32,7 @@ typedef struct {
 	uint64_t seq;
 	size_t size;
 	zval v;
+	bool visited; /* SIEVE: used since the hand last passed */
 } nocopy_local;
 
 /* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
@@ -53,6 +54,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_keys keys;
 	nocopy_local *local; /* request memory, NULL until the first copy-mode fetch */
 	size_t local_bytes;
+	uint32_t local_hand; /* SIEVE hand over local */
 	bool local_ok; /* between RINIT and RSHUTDOWN */
 	nocopy_vk vk;
 ZEND_END_MODULE_GLOBALS(nocopy)
