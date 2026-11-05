@@ -1,0 +1,90 @@
+# Develop, test and benchmark
+
+Everything runs in Docker through `./dev`; you need no PHP, compiler or Valkey on your machine. CI runs the same commands.
+New here? Do the [first change tutorial](../tutorials/first-change.md) first. All commands: [`./dev` reference](../reference/dev-commands.md).
+
+## Run tests
+
+```sh
+./dev test                                   # full .phpt suite, PHP 8.5
+./dev test tests/018_shift_under_readers.phpt
+PHP=8.4 ./dev test                           # another PHP version
+```
+
+Each run copies the sources into the container and builds from clean, so stale objects cannot fool you and your checkout
+stays untouched (it is mounted read-only). A failed test prints its diff: `-` expected, `+` actual.
+
+## Pick the checks for your change
+
+| You changed | Run |
+|---|---|
+| anything in C | `./dev test`, `./dev novalkey` (the core must build without the Valkey tier) |
+| locking, pins, reclamation, slot tables, eviction | also `./dev stress 30` and `./dev c 5` |
+| `nocopy_valkey.c` | also `./dev shm` (php-fpm + FrankenPHP with Valkey, listener restarts) |
+| thread handling, FrankenPHP | `./dev zts`, `./dev frankenphp` |
+| `nocopy.stub.php` (function signatures) | `./dev stub` to regenerate `nocopy_arginfo.h`, commit both |
+| `apcu/apcu.php` | `./dev apcu` (23 known failures, listed in `scripts/apcu-suite.sh`) |
+| `symfony/` | `./dev symfony`, and `./dev symfony 6.4.*` for the oldest supported |
+| `drupal/` | `./dev drupal` (PHPUnit in 4 cache modes) |
+| before a pull request | `./dev ci` |
+
+A single run of a concurrency test catches a race only sometimes: that is what the loops are for. Read the invariants in
+[Architecture](../explanation/architecture.md) before touching locking or the read path.
+
+## Write a test
+
+Add `tests/0NN_what_it_checks.phpt` (next free number). Rules:
+
+- Its own `nocopy.shm_name=/nocopy-tNNN` in `--INI--`, and `--CLEAN--` removing `/dev/shm/nocopy-tNNN*`: tests run in parallel.
+- Tests that need memory pressure use a small `nocopy.shm_size` (2M-4M, one shard).
+- Valkey tests require `valkey_skip.inc` in `--SKIPIF--` (they skip without a server) and set `nocopy.valkey=127.0.0.1:6379`
+  with their own `nocopy.valkey_prefix=tNNN:`; `valkey.inc` has helpers.
+- Forked processes: `pcntl_fork()`; threads (ZTS only): ext-parallel.
+
+## Try things by hand
+
+```sh
+./dev shell
+```
+
+Bash in the image with your current sources built and loaded, `/src` = the repository, APCu and igbinary available but not
+loaded. `php -a` for an interactive PHP shell.
+
+## Benchmark
+
+Claims about speed need numbers. On a quiet machine:
+
+```sh
+./dev bench          # micro benchmarks: APCu vs nocopy copy vs nocopy zero-copy, medians of 3
+./dev stampede       # concurrent recomputation of an expiring key
+```
+
+To compare two versions of the code (e.g. `main` and your change), run both trees interleaved in one container so noise
+hits both alike:
+
+```sh
+git worktree add ../nocopy-main main
+docker run --rm --shm-size=1g -v "$PWD/../nocopy-main":/a:ro -v "$PWD":/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh 3 "read write"
+```
+
+Hit ratio under a key distribution, in `./dev shell`:
+
+```sh
+php -d nocopy.shm_name=/hr -d nocopy.shm_size=4M bench/hitratio.php zipf 1.5 0
+```
+
+Full-stack: `./dev drupal-bench` (Drupal 11 behind nginx + php-fpm + MariaDB, 8 cache configs, long; writes to
+`bench/results-drupal/`), and `docker/fpm-bench.sh` for a Symfony app (see its header).
+
+Record what you decided and why, with the numbers, in [Design decisions](../explanation/design-decisions.md).
+
+## Without Docker
+
+On Linux with PHP dev headers: `phpize && ./configure && make && make test TESTS=tests`. A debug build of PHP catches more.
+The arena alone: `tests/c/run.sh` (needs a C compiler with ThreadSanitizer).
+
+## Gotchas
+
+- Docker's `/dev/shm` is 64 MB unless you pass `--shm-size`; `./dev bench` and `./dev drupal-bench` do.
+- A container started right after you saved a file on macOS sometimes sees a truncated source file: rerun.
+- Don't edit `./dev` while a `./dev` command runs: the shell reads the script as it goes.

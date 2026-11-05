@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./dev test
       - run: ./dev novalkey
-      # release build, loop: races show up only sometimes (see ARCHITECTURE.md invariants)
+      # release build, loop: races show up only sometimes (docs/explanation/architecture.md, invariants)
       - run: ./dev stress 30
       - run: ./dev c 5
       - run: ./dev shm

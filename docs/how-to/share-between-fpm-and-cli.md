@@ -1,0 +1,56 @@
+# Share one cache between php-fpm and the CLI
+
+Goal: web requests, Drush/artisan/console commands, cron and queue workers on one server all read and write the same cache,
+and the cache survives php-fpm restarts.
+
+## 1. Set the same name everywhere
+
+In a `conf.d` file read by php-fpm **and** by the CLI:
+
+```ini
+extension=nocopy.so
+nocopy.shm_name=/nocopy
+nocopy.shm_size=128M
+```
+
+Two sites on one server that must not see each other's keys need different names (`/nocopy-shop`, `/nocopy-blog`).
+
+## 2. Run everything as one user
+
+The shared memory is created with mode `0600` by the first process that needs it, so every process must run as that user.
+Usually php-fpm's master starts as root and creates it before dropping to `www-data` for its workers (they inherit the
+mapping). Then run CLI commands as the same user that starts php-fpm:
+
+```sh
+sudo -u root php bin/console cache:warmup     # whoever started php-fpm
+```
+
+A process running as another user cannot attach: it warns `no permission` and has no cache. Do not widen the mode: anyone
+who can write the cache controls what php-fpm reads.
+
+## 3. Load the same build
+
+The object's name includes a hash of the loaded `nocopy.so`. php-fpm and the CLI share only if they load the same file:
+point both at the same path, and restart php-fpm after replacing it.
+
+## 4. Verify
+
+```sh
+php -r 'var_dump(nocopy_shared_with()); nocopy_put("probe", getmypid());'
+```
+
+Then fetch `probe` in a web request (`var_dump(nocopy_get('probe'))`): it shows the CLI's pid. Both sides' `nocopy_shared_with()`
+must return `host`, and `nocopy_stats()['shm_name']` the same name.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `nocopy.shm_name is not set` | this process reads another php.ini without the setting (`php --ini` shows which) |
+| `no permission to open it (another user created it)` | the process runs as a different user than the creator |
+| `… the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache` | php-fpm still runs an older `nocopy.so`: restart it |
+| `not enough room in /dev/shm (Docker: --shm-size)` | `/dev/shm` smaller than `nocopy.shm_size` |
+| `not a name like /nocopy …` | the name needs one leading slash, at most 40 characters |
+| CLI and web disagree although names match | different containers: they cannot share |
+
+To share between servers, see [Valkey](valkey.md). Background: [Sharing: by name and through Valkey](../explanation/sharing.md).

@@ -1,3 +1,10 @@
+# Architecture
+
+The internals: data layout, locking, eviction, the read path, the Valkey tier and the invariants every change must keep.
+Start with [How nocopy works](how-it-works.md) for the overview; this page is for people changing the C code.
+
+## Layers
+
 Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
@@ -6,7 +13,7 @@ Layers, each using only the one below it:
 - `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
-`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
+`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
 Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
 - Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
@@ -117,7 +124,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 ## Valkey tier (`nocopy_valkey.c`)
 
 `nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` hands `nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`, the multi variants,
-`compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy.c`); `nocopy_valkey.c` owns the routing, the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
+`compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy.c`); `nocopy_valkey.c` owns the routing, the connection and every command. Spec: [`valkey-design.md`](../superpowers/specs/2026-11-04-valkey-design.md).
 - TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): one `SSL_CTX` from MINIT, shared by forks and threads; our own BIO (`send(MSG_NOSIGNAL)`: OpenSSL's socket BIO would SIGPIPE the worker);
   `io_read`/`io_write` map WANT_READ/WANT_WRITE to the poll event; a forked child `SSL_free`s its copy without close_notify; the listener polls with 0 ms while `SSL_pending`. Errors leave nothing in OpenSSL's per-thread queue (PHP's openssl functions read it).
 - A command connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).
@@ -148,4 +155,4 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 - `seg_carve()` sets an entry's size before `used` covers it, so `shard_repair` can always walk a segment. Entry sizes are multiples of 8 (slots hold offset/8).
 - The slot table never holds more than `cap` (3/4) entries: probes and backward shifts rely on an empty slot ending every run.
 - Tests that must see pressure use a small `nocopy.shm_size` (2M-4M, one shard). 015 (16M, 2 shards, 8 processes) and 018 (deletes shifting keys under readers) are the concurrency tests:
-  run `docker/stress.sh` after touching locking, reclamation or the slot table; a single pass catches races only sometimes. 018 fails reliably if `nocopy_find` stops retrying misses.
+  run `./dev stress 30` after touching locking, reclamation or the slot table; a single pass catches races only sometimes. 018 fails reliably if `nocopy_find` stops retrying misses.

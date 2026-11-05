@@ -1,7 +1,8 @@
 # nocopy
 
 PHP extension (C): zero-copy shared-memory cache, APCu-compatible via a PHP polyfill. Read before changing things:
-`README.md` (usage), `ARCHITECTURE.md` (how it works, invariants), `HANDOVER.md` (state, decisions with numbers, rejected ideas, open items).
+`docs/` (Diátaxis: tutorials, how-to, reference, explanation; index `docs/README.md`). Before C changes: `docs/explanation/architecture.md` (invariants)
+and `docs/explanation/design-decisions.md` (what was measured and rejected). State and roadmap: `docs/status.md`.
 
 ## Build and test
 
@@ -26,5 +27,6 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 
 - Commit straight to `main`.
 - Code comments: one short line, or none.
-- Performance claims need numbers (`./dev bench`, A/B via `docker/ab.sh`); record decisions and rejections with numbers in `HANDOVER.md`.
+- Performance claims need numbers (`./dev bench`, A/B via `docker/ab.sh`); record decisions and rejections with numbers in `docs/explanation/design-decisions.md`.
 - Tests give every arena its own `nocopy.shm_name` and remove `/dev/shm/<name>.*` afterwards.
+- Docs: keep them in the Diátaxis quadrant they belong to; update the reference pages (functions, configuration, stats, dev-commands) with any API, INI or `./dev` change, and `docs/status.md` after verifying runs or finishing roadmap items.
