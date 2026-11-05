@@ -54,7 +54,8 @@ cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/s
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
-echo '<?php apcu_store("probe", new ArrayObject(array_fill(0, 1000, str_repeat("x", 100)))); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
+# with Valkey the listener drops the writer's own fresh copy: refetch until it stays local
+echo '<?php apcu_store("probe", new ArrayObject(array_fill(0, 1000, str_repeat("x", 100)))); for ($i = 0; $i < 200; $i++, usleep(1000)) { apcu_fetch("probe"); foreach (new APCUIterator("/^probe$/") as $e) { echo $e["mem_size"]; break 2; } }' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
 NIDS=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 25" | tr '\n' ' ')
 NODE=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 1 offset 40")

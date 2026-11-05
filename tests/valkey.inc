@@ -27,6 +27,25 @@ function vk(string ...$a)
     return rtrim(substr($l, 1));
 }
 
+// Returns once nocopy's listener has applied every change made in Valkey before the call: a local copy of a marker
+// is dropped only by an invalidation for it, and those arrive in order.
+function settle(): void
+{
+    static $n = 0;
+    $k = ini_get('nocopy.valkey_prefix') . '__settle';
+    vk('SET', $k, (string) ++$n);
+    for ($i = 0; $i < 2000; $i++, usleep(1000)) {
+        $h = nocopy_stats()['hits'];
+        if (nocopy_get('__settle') === $n && nocopy_stats()['hits'] > $h) {
+            break; // held locally
+        }
+    }
+    vk('SET', $k, (string) ++$n);
+    for ($i = 0; $i < 2000 && nocopy_get('__settle') !== $n; $i++) {
+        usleep(1000);
+    }
+}
+
 // A PHP process with its own nocopy memory: another web server on the same Valkey.
 function other_server(string $prefix, string $code): string
 {

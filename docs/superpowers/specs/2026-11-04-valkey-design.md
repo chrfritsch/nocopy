@@ -32,6 +32,12 @@ Works without it (managed Valkey cannot load modules). Where loaded (detected at
 and CAS without Lua, a server-side prefix clear instead of SCAN+UNLINK, maybe Drupal tag checksums. The client keeps every Valkey
 command in a few functions in `nocopy_valkey.c`, so the module only swaps their bodies.
 
+## Revised 2026-11-05: one listener per arena
+The tracking connection moved from every worker to one listener process per arena (ARCHITECTURE "Valkey tier"): servers x workers pushes
+became servers pushes, and workers' connections carry no tracking (a reconnect no longer clears). The listener applies pushes as they arrive,
+not at the next request. It clears the arena on every (re)connect; with `nocopy.shm_name` it outlives the servers, so restarts stay warm.
+The two ceilings below on BCAST fan-out and a fresh worker's stale read are gone; the output-buffer one applies to the listener only.
+
 ## Ceilings
 - BCAST: every write is pushed to every worker connection of every server (servers x workers messages). Fine for cache traffic, not for
   write-heavy counters.

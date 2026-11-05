@@ -207,9 +207,10 @@ Readers attached this way still get zero-copy values (fpm, FrankenPHP classic mo
 
 With `nocopy.valkey` set, every write goes to Valkey and to the local arena, every local miss is fetched from Valkey and kept locally,
 and deletes, `apcu_inc/dec/cas` and `apcu_clear_cache` run in Valkey. `nocopy_get_multiple()` and `apcu_fetch(array)` fetch all local misses
-in one `MGET`; `nocopy_put_multiple()` and `apcu_store(array)` send their `SET`s in one pipeline. Each worker has one connection with client-side tracking
-(`CLIENT TRACKING ON BCAST PREFIX <prefix> NOLOOP`): a change made anywhere else, including expiry and eviction in Valkey, drops the local copy
-at the next nocopy call of a request. Local hits stay zero-copy and cost no round trip. So several servers share one cache, a php-fpm restart
+in one `MGET`; `nocopy_put_multiple()` and `apcu_store(array)` send their `SET`s in one pipeline. Each worker has a plain command connection;
+one listener process per local cache (`nocopy-valkey` in `ps`) holds the only tracking connection (`CLIENT TRACKING ON BCAST PREFIX <prefix>`):
+a change made anywhere, including expiry and eviction in Valkey, drops the local copy as soon as it arrives, once per server instead of once
+per worker. Local hits stay zero-copy and cost no round trip. So several servers share one cache, a php-fpm restart
 or a new server starts warm, and CLI processes (Drush, cron, workers) see web writes and the other way round.
 
 Drupal 11, 2,000 nodes, php-fpm 8 workers, all bins and tags shared (one run, `bench/results-drupal/valkey`). The baseline is the
@@ -226,15 +227,21 @@ usual shared setup: drupal/redis with phpredis on the same Valkey, APCu chainedf
 A web save on server A and a Drush save both show up on server B in both shared setups. Anonymous traffic beats the single-server
 mode because Valkey replaces the journal query that every request paid.
 
+- The listener is started by the first process that needs it (and again by the next one if it dies: no heartbeat for 1 s). It pings
+  Valkey every second; when its connection is lost or silent, nothing local is served until it is back, and it clears the local cache on
+  every (re)connect, since it cannot know what it missed. With `nocopy.shm_name` it outlives the servers: the local cache stays in sync and
+  warm across php-fpm or FrankenPHP restarts, and it exits when the segment is removed (`rm /dev/shm/<name>.*`). Without, it exits with the
+  last process of the server.
 - Valkey unreachable: nocopy serves no local data (it could be stale), fetches miss and writes return `false`, with one warning per attempt,
-  retried every 0.5-1.5 s (jittered) per worker. After a lost connection the local arena is cleared on reconnect; a connection found closed at
-  the start of a request is reopened at once. Each connection subscribes to one idle channel, so Valkey's `timeout` does not close idle
-  workers (and clear the arena), and uses TCP keepalive (60 s) against load balancers that drop idle connections.
+  retried every 0.5-1.5 s (jittered) per worker. A connection found closed at the start of a request is reopened at once. Each connection
+  subscribes to one idle channel, so Valkey's `timeout` does not close it, and uses TCP keepalive (60 s) against load balancers that drop idle
+  connections. In `CLIENT LIST` the listener is `name=nocopy-listener`, workers `name=nocopy`.
 - Works on any Valkey (or Redis 6.2+) with RESP3, managed services included. An optional nocopy module for Valkey is planned to save round trips.
 - Local only: `APCUIterator`, `apcu_cache_info`, `nocopy_stats()`, and the single flight of `nocopy_remember`/`apcu_entry` (per server).
 - Valkey evicts by its own `maxmemory-policy`; an evicted key is a miss everywhere. The Drupal module is built for `volatile-lfu` ([details](drupal/README.md)).
 - Values are stored with `nocopy.serializer` (integers as plain numbers), so all servers need the same serializer.
-- Every change is pushed to every worker connection of every server: meant for cache traffic, not for counters hammered on every request.
+- Every change is pushed to every server's listener, the writer's own server included (its local copy is refetched once): meant for cache
+  traffic, not for counters hammered on every request.
 
 ## How it works
 

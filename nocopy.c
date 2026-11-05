@@ -919,24 +919,27 @@ void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 			zend_symtable_update(out, Z_STR_P(k), &t);
 		} else {
 			miss[n++] = Z_STR_P(k); /* borrowed: keys outlives this call */
+			ZVAL_NULL(&t);
+			zend_symtable_update(out, Z_STR_P(k), &t); /* keeps the requested order; removed if not found */
 		}
 	} ZEND_HASH_FOREACH_END();
 	if (n) {
 		zend_string **raw = ecalloc(n, sizeof *raw);
 		uint64_t gen = __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST);
-		if (nocopy_vk_mget(n, miss, raw) == 1) {
-			for (uint32_t i = 0; i < n; i++) {
-				if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], &t, NULL, NULL)) {
-					zend_symtable_update(out, miss[i], &t);
-				}
-				if (raw[i]) {
-					zend_string_release(raw[i]);
-				}
+		bool got = nocopy_vk_mget(n, miss, raw) == 1;
+		for (uint32_t i = 0; i < n; i++) {
+			if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], &t, NULL, NULL)) {
+				zend_symtable_update(out, miss[i], &t);
+			} else {
+				zend_symtable_del(out, miss[i]);
 			}
-			if (__atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
-				for (uint32_t i = 0; i < n; i++) {
-					nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
-				}
+			if (raw[i]) {
+				zend_string_release(raw[i]);
+			}
+		}
+		if (got && __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST) != gen) {
+			for (uint32_t i = 0; i < n; i++) {
+				nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
 			}
 		}
 		efree(raw);
@@ -1417,6 +1420,7 @@ PHP_FUNCTION(nocopy_stats)
 	} else {
 		add_assoc_null(return_value, "shm_name");
 	}
+	add_assoc_long(return_value, "valkey_listener", nocopy_vk_listener());
 }
 
 /* ---- FrankenPHP worker mode ---- */
@@ -1675,7 +1679,7 @@ static void atfork_child(void)
 	if (nocopy_a) {
 		nocopy_after_fork(&NOCOPY_G(ctx));
 	}
-	nocopy_vk_close(&NOCOPY_G(vk), true);
+	nocopy_vk_close(&NOCOPY_G(vk));
 }
 
 static PHP_GINIT_FUNCTION(nocopy)
@@ -1696,7 +1700,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 		nocopy_release(&nocopy_globals->ctx);
 	}
 	pefree(nocopy_globals->keys.slot, 1);
-	nocopy_vk_close(&nocopy_globals->vk, false);
+	nocopy_vk_close(&nocopy_globals->vk);
 }
 
 PHP_MINIT_FUNCTION(nocopy)
@@ -1746,6 +1750,7 @@ PHP_MINIT_FUNCTION(nocopy)
 	}
 	if (nocopy_a) {
 		arena_empty_init();
+		nocopy_vk_minit(shm_attached[0]);
 	}
 	detour = nocopy_vk_on || !nocopy_a;
 	pthread_atfork(NULL, NULL, atfork_child);

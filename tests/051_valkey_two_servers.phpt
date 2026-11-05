@@ -15,10 +15,10 @@ apcu_clear_cache();
 nocopy_put('k', ['v' => 1]);
 var_dump(nocopy_get('k'));
 echo other_server('t051:', 'echo json_encode(nocopy_get("k")); nocopy_put("k", ["v" => 2]); nocopy_put("only_b", "b");'), "\n";
-nocopy_get('unrelated');
+settle();
 var_dump(nocopy_get('k'), nocopy_get('only_b'));
 echo other_server('t051:', 'var_dump(nocopy_delete("k"));');
-nocopy_get('unrelated');
+settle();
 var_dump(nocopy_get('k'));
 ?>
 --EXPECT--

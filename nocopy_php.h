@@ -40,8 +40,7 @@ typedef struct {
 	char *buf;       /* replies and pushes, persistent memory */
 	size_t len, pos, cap;
 	int64_t retry_at; /* ms, monotonic: after a failure, no new attempt before */
-	bool ever;       /* had a connection: the next one clears the local arena (missed invalidations) */
-	bool synced;     /* pushes applied in this request */
+	bool synced;     /* connected and the listener live, checked in this request */
 } nocopy_vk;
 
 ZEND_BEGIN_MODULE_GLOBALS(nocopy)
@@ -120,7 +119,9 @@ ZEND_INI_MH(nocopy_vk_on_timeout);
 void nocopy_vk_mshutdown(void);
 bool nocopy_vk_ready(void); /* connected and this request's pushes applied; false: serve no local data */
 void nocopy_vk_new_request(void);
-void nocopy_vk_close(nocopy_vk *v, bool forked);
+void nocopy_vk_close(nocopy_vk *v);
+void nocopy_vk_minit(bool named); /* after the arena: the anonymous arena's lifeline for its listener */
+uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
 int nocopy_vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals); /* one round trip; vals[i]: a copy, NULL if missing */
 typedef struct {
 	const char *k, *v;

@@ -25,7 +25,7 @@ var_dump(vk('EXISTS', 't050:n'), apcu_fetch('t'));
 nocopy_put('k', 'old');
 nocopy_get('k');
 vk('SET', 't050:k', '7');
-nocopy_get('unrelated'); // any round trip applies the invalidations in front of its reply
+settle();
 var_dump(nocopy_get('k'));
 ?>
 --EXPECT--

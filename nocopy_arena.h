@@ -99,6 +99,9 @@ typedef struct {
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
 	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
+	int64_t vk_beat;  /* Valkey listener: CLOCK_MONOTONIC ms of its last sign of life, 0 never started */
+	uint32_t vk_pid;  /* its pid */
+	uint32_t vk_live; /* it is connected and tracking: local copies may be served */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];
@@ -154,6 +157,8 @@ typedef struct {
 /* Creates or attaches to the arena any process opening base with the same abi (the user's layout id) shares, at the same address.
  * An attacher gets the creator's size. Unused arenas of other builds under base are removed. NULL, or an error (then no arena). */
 const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint64_t abi, size_t *need, nocopy_named *out);
+void nocopy_arena_unhold(void);  /* the Valkey listener maps the arena without counting as its user */
+bool nocopy_arena_current(void); /* false: the named arena's name was removed or names another object now */
 void nocopy_arena_destroy(void);
 
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */

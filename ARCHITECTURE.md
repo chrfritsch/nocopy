@@ -122,13 +122,18 @@ The sizing INI is always `nocopy.*`. An alias applies its value to the `nocopy.*
 
 `nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` routes `nocopy_store`/`fetch`/`drop`/`info`/`add_long`/`cas_long`,
 `compute` and `nocopy_clear_all` through it (`vk_*`); `nocopy_valkey.c` owns the connection and every command. Spec: `docs/superpowers/specs/2026-11-04-valkey-design.md`.
-- One connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH]`, `CLIENT TRACKING ON BCAST PREFIX p NOLOOP`.
-  Any error or timeout closes it (the reply stream would be out of step); a new attempt waits a second. A reconnect after a lost connection clears the arena.
-- `nocopy_vk_ready()` once per request (`synced`, reset in RINIT and per FrankenPHP request): connect if needed, then drain the socket without blocking and apply pushes.
-  Every reply read also applies the pushes queued in front of it. While not ready nothing local is served.
+- A command connection per worker (`NOCOPY_G(vk)`, persistent buffer), lazy, non-blocking socket + `poll` with `nocopy.valkey_timeout`. Handshake: `HELLO 3 [AUTH] SETNAME nocopy`, `SUBSCRIBE` to an idle channel (exempt from Valkey's `timeout`).
+  No tracking: a reconnect needs no clear. Any error or timeout closes it (the reply stream would be out of step); a new attempt waits 0.5-1.5 s.
+- One listener per arena: a process of its own (double fork, `setsid`, signals reset, every inherited fd closed, stdio on /dev/null, `nocopy-valkey`), running only C:
+  one connection with `CLIENT TRACKING ON BCAST PREFIX p NOLOOP`, `poll` at 100 ms, applies pushes, `PING` every second (no answer within max(1 s, timeout): reconnect).
+  Header: `vk_beat` (monotonic ms, every poll round), `vk_pid`, `vk_live` (connected). Every (re)connect bumps `inval_gen` and clears the arena: what it missed is unknown.
+- `nocopy_vk_ready()` once per request (`synced`, reset in RINIT and per FrankenPHP request): command connection up, and the listener live (`vk_live` and a beat under 1 s old).
+  No beat for 1 s: the first worker to swap `vk_beat` (CAS) spawns a new listener; workers wait up to the timeout for `vk_live`. A listener whose `vk_pid` is not its own exits. While not ready nothing local is served.
+- Lifetime: anonymous arena, a pipe from MINIT whose write end every process of the arena holds (fork, CLOEXEC): EOF when the last is gone. Named arena: the listener drops its shared flock (so the segment can still be collected)
+  and exits when `/dev/shm/<name>` no longer is its object (`nocopy_arena_current`, `stat`: fpm workers run as another user than the segment's owner).
 - Push `invalidate [keys]`: `inval_gen++` (seq_cst) first, then `nocopy_drop_local` per key; a null list (FLUSHALL) clears the arena.
-- Fill guard: `vk_fetch` reads `inval_gen` before its `GET` and drops the copy it just stored if the counter moved. A drainer bumps before it drops, so either the filler sees the bump or the drop comes after the store.
-- Writes: local first, then `SET` (an invalidation from elsewhere can only remove our copy, never be overtaken by it). `add`: `SET NX` first, local after. Siblings on the same server get our write pushed too (NOLOOP is per connection) and drop their shared copy: one refetch per write per server.
+- Fill guard: `vk_fetch` reads `inval_gen` before its `GET` and drops the copy it just stored if the counter moved. The listener bumps before it drops, so either the filler sees the bump or the drop comes after the store.
+- Writes: local first, then `SET` (an invalidation from elsewhere can only remove our copy, never be overtaken by it). `add`: `SET NX` first, local after. The listener gets our own write pushed too and drops the fresh copy: one refetch per write per server.
 - Encoding: integers as decimal (for `INCRBY`); else `0x00, flags, int64 expires, uint32 compute ms` + the serialized value. `PXAT` = (expires + 1) s.
 
 ## Invariants worth remembering

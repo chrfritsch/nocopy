@@ -17,7 +17,7 @@ var_dump(ord(vk('GET', 't055:a')[0]), vk('GET', 't055:n'), vk('PTTL', 't055:a') 
 
 // another server's writes: only in Valkey, not local here
 other_server('t055:', 'nocopy_put("r1", ["x"]); nocopy_put("r2", 9);');
-nocopy_get('unrelated'); // applies their pushes now: arriving during the MGET they would (rightly) drop the fills
+settle();
 vk('CONFIG', 'RESETSTAT');
 $got = nocopy_get_multiple(['a', 'r1', 'gone', 'r2', 'n', 'o']);
 var_dump(array_keys($got), $got['r1'], $got['r2'], $got['o'] instanceof ArrayObject);
@@ -30,7 +30,7 @@ var_dump(preg_match('/cmdstat_mget:/', vk('INFO', 'commandstats')));
 
 // a change elsewhere drops the filled copy
 vk('SET', 't055:r2', '10');
-nocopy_get('unrelated');
+settle();
 var_dump(nocopy_get_multiple(['r2']));
 
 var_dump(apcu_store(['s1' => 1, 's2' => 2]), vk('GET', 't055:s2'), apcu_fetch(['s1', 's2']));
@@ -44,13 +44,13 @@ array(5) {
   [0]=>
   string(1) "a"
   [1]=>
-  string(1) "n"
-  [2]=>
-  string(1) "o"
-  [3]=>
   string(2) "r1"
-  [4]=>
+  [2]=>
   string(2) "r2"
+  [3]=>
+  string(1) "n"
+  [4]=>
+  string(1) "o"
 }
 array(1) {
   [0]=>

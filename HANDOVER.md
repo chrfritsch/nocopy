@@ -248,6 +248,21 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   Drupal: `$settings['nocopy_shared'] = TRUE` drops the journal and is verified in every process (throws unless `nocopy_shared_with()` is host or valkey); this replaces the INI check for Valkey too. Drush must run as the fpm pool's user (mode 0600). e2e (short run): anonymous DB queries per request 5 (nocopy-all, journal) / 0 (shm) / 0 (valkey), logged-in 8/7/7, first request after fpm restart 627/156/167 ms. Store path +2..4 instructions, fetch unchanged within noise.
   Tests 057-060, Drupal `NocopySharedTest` + all 4 modes (copy, request_scope, shm_name, valkey), suite 8.3/8.4/8.5/ZTS 8.4, tests/c TSAN, `stress.sh 15`, `shm-name.sh` fpm + FrankenPHP: all clean.
   Open: no group/mode option (root master + deploy user must match); PID namespaces must match (fixed address is per host, not per container unless /dev/shm is shared); macOS untested (no /dev/shm scan there, `collect` is Linux-only).
+- One Valkey listener per arena (2026-11-05, "fresh start" #2): the tracking connection moved out of every worker into one forked C-only process per arena
+  (ARCHITECTURE "Valkey tier"). Workers keep a plain command connection (no tracking, no drain, a reconnect clears nothing). User's choice: with
+  `nocopy.shm_name` the listener lives as long as the segment (survives server restarts, so the copy stays in sync and warm); anonymous arena: exits with its last process (pipe EOF).
+  Liveness by heartbeat in the header (1 s stale, CAS-elected respawn) and PING every second; every listener (re)connect clears the arena. This fixed a
+  bug of the old design: with shm_name + Valkey a restarted fpm kept serving copies that went stale while it was down.
+  Found on the way: fpm workers run as www-data, the segment is root's 0600, so the listener checks the name with `stat` (shm_open failed, it exited at once);
+  the listener closes every inherited fd (fpm's listen socket would block the next master's bind). `nocopy_get_multiple` now keeps the requested key order.
+  Tests 061 (one listener for many processes, kill -9 -> respawn + clear, segment removed -> exit, fds), 062 (anonymous: fds, exits with its process); 050/051/055/056 use
+  `settle()` (valkey.inc) instead of "any round trip applies pushes". `docker/shm-name.sh` adds a Valkey pass (fpm + FrankenPHP: 1 listener, kept over restart with no GET,
+  kill -9 sees the missed change, churn 0 misses). Suite 8.3/8.4/8.5/ZTS 8.4 (+ Valkey tests on ZTS with redis-server)/amd64, tests/c TSAN, stress 15, Drupal 4 modes: clean.
+  Ceiling: the writer's own server refetches its write once (the listener cannot tell own writes from others). With php-fpm as PID 1 a listener that exits is reaped by
+  fpm, which logs "unknown child" (only after kill or segment removal).
+  Drupal bench, nocopy-valkey, 16 workers (Docker, one run before, two after): anonymous / 12,586 vs 12,920 / 12,588 req/s, logged-in / 1,235 vs 1,358 / 1,273,
+  logged-in node 1,101 vs 1,210 / 972, editor-loop readers 765 vs 812 / 751, first request after fpm restart 166 vs 188 / 184 ms: within run-to-run noise.
+  The gain is structural: 16 tracking connections and 16 copies of every push per server became 1. The bench's serializer probe now refetches (own write dropped).
 
 ## Known gaps / next steps (rough priority)
 

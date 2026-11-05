@@ -1,5 +1,5 @@
-/* nocopy's Valkey tier: one RESP3 connection per worker with client-side tracking (BCAST), and the commands nocopy.c needs.
- * Pushes (another connection changed a key under the prefix) drop the local copy. Every Valkey command lives here. */
+/* nocopy's Valkey tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
+ * whose pushes (a change under the prefix) drop the local copies. Every Valkey command lives here. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -19,6 +19,12 @@
 #include <errno.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <signal.h>
+#include <dirent.h>
+#include <sys/wait.h>
+#ifdef __linux__
+# include <sys/prctl.h>
+#endif
 
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0 /* macOS: SO_NOSIGPIPE on the socket instead */
@@ -132,7 +138,8 @@ static bool vk_fail(nocopy_vk *v)
 	v->fd = -1;
 	v->len = v->pos = 0;
 	v->synced = false;
-	v->retry_at = now_ms() + php_mt_rand_range(500, 1500); /* jitter: after a Valkey restart, workers do not reconnect in step */
+	int64_t now = now_ms();
+	v->retry_at = now + 500 + (int64_t) (((uint64_t) now * 2654435761u ^ (uint64_t) getpid()) % 1001); /* jitter: no reconnects in step */
 	return false;
 }
 
@@ -445,6 +452,29 @@ static bool vk_call(nocopy_vk *v, smart_str *s, vk_reply *r)
 	return vk_send(v, s) && vk_read(v, r);
 }
 
+/* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from Valkey's idle `timeout`.
+ * ponytail: the connection counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of unread pushes. */
+static bool vk_handshake(nocopy_vk *v, bool track, vk_reply *r)
+{
+	smart_str s = {0};
+	head(&s, vk_pass ? 7 : 4);
+	ARG(&s, "HELLO"), ARG(&s, "3");
+	if (vk_pass) {
+		ARG(&s, "AUTH"), arg(&s, vk_user, strlen(vk_user)), arg(&s, vk_pass, strlen(vk_pass));
+	}
+	ARG(&s, "SETNAME"), track ? ARG(&s, "nocopy-listener") : ARG(&s, "nocopy");
+	if (track) {
+		head(&s, 7);
+		ARG(&s, "CLIENT"), ARG(&s, "TRACKING"), ARG(&s, "ON"), ARG(&s, "BCAST"), ARG(&s, "PREFIX"), arg(&s, vk_prefix, vk_plen), ARG(&s, "NOLOOP");
+	}
+	head(&s, 2);
+	ARG(&s, "SUBSCRIBE"), ARG(&s, "__nocopy_keepalive__");
+	smart_str_0(&s);
+	*r = (vk_reply) {0};
+	return vk_send(v, &s) && vk_read(v, r) && r->t != '-' && r->t != '!' && (!track || (vk_read(v, r) && r->t == '+'));
+}
+
+/* A worker's command connection: no tracking, so a reconnect needs no local clear (the listener tracks). */
 static bool vk_connect(nocopy_vk *v)
 {
 	if (now_ms() < v->retry_at) {
@@ -454,33 +484,199 @@ static bool vk_connect(nocopy_vk *v)
 		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to Valkey (%s): %s", vk_path ? vk_path : vk_host, strerror(errno));
 		return vk_fail(v);
 	}
-	smart_str s = {0};
-	head(&s, vk_pass ? 5 : 2);
-	ARG(&s, "HELLO"), ARG(&s, "3");
-	if (vk_pass) {
-		ARG(&s, "AUTH"), arg(&s, vk_user, strlen(vk_user)), arg(&s, vk_pass, strlen(vk_pass));
-	}
-	head(&s, 7);
-	ARG(&s, "CLIENT"), ARG(&s, "TRACKING"), ARG(&s, "ON"), ARG(&s, "BCAST"), ARG(&s, "PREFIX"), arg(&s, vk_prefix, vk_plen), ARG(&s, "NOLOOP");
-	/* Subscribed clients are exempt from Valkey's idle `timeout`, which would otherwise close an idle worker's connection and
-	 * cost a full local clear on its reconnect. Its reply is a push, skipped like the others.
-	 * ponytail: the connection now counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of
-	 * unread pushes; a worker idle through that many invalidations is disconnected and clears on reconnect, as before. */
-	head(&s, 2);
-	ARG(&s, "SUBSCRIBE"), ARG(&s, "__nocopy_keepalive__");
-	smart_str_0(&s);
-	vk_reply r = {0};
-	if (!vk_send(v, &s) || !vk_read(v, &r) || r.t == '-' || r.t == '!' || !vk_read(v, &r) || r.t != '+') {
+	vk_reply r;
+	if (!vk_handshake(v, false, &r)) {
 		php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed%s%.*s", r.t == '-' ? ": " : "", r.t == '-' ? (int) r.len : 0, r.s);
 		return vk_fail(v);
 	}
-	if (v->ever) {
-		/* invalidations may have been missed while disconnected */
-		__atomic_add_fetch(&nocopy_a->inval_gen, 1, __ATOMIC_SEQ_CST);
-		nocopy_clear();
-	}
-	v->ever = true;
 	return true;
+}
+
+/* ---- the listener: one tracking connection per arena, in a process of its own (C only, no PHP state) ---- */
+
+#define BEAT_MS 100   /* the listener's heartbeat */
+#define STALE_MS 1000 /* no heartbeat for this long: the listener is gone, the next worker starts one */
+
+/* Anonymous arena: every process using it holds the write end (fork), so the listener sees EOF once the last one is gone.
+ * A named arena's listener lives as long as the name refers to its object. */
+static int life[2] = {-1, -1};
+
+void nocopy_vk_minit(bool named)
+{
+	if (nocopy_vk_on && !named && pipe(life) == 0) {
+		fcntl(life[0], F_SETFD, FD_CLOEXEC);
+		fcntl(life[1], F_SETFD, FD_CLOEXEC);
+	}
+}
+
+/* Reads and applies what arrived. -1: the connection is gone or out of step, 0: nothing came, 1: something did. */
+static int vk_listen_read(nocopy_vk *v)
+{
+	int got = vk_recv(v, false);
+	if (got < 0) {
+		return -1;
+	}
+	for (;;) {
+		vk_reply r;
+		const char *end = v->buf + v->len, *q = resp_parse(v->buf + v->pos, end, &r);
+		if (!q) {
+			return r.t == '?' ? -1 : got;
+		}
+		v->pos = (size_t) (q - v->buf);
+		if (r.t == '>') {
+			vk_apply(&r, end);
+		} else if (r.t == '-' || r.t == '!') {
+			return -1;
+		}
+	}
+}
+
+static ZEND_NORETURN void vk_listen(void)
+{
+	nocopy_arena *a = nocopy_a;
+	uint32_t me = (uint32_t) getpid();
+	nocopy_vk v = {.fd = -1};
+	struct pollfd p[2] = {{.fd = -1, .events = POLLIN}, {.fd = life[0], .events = POLLIN}};
+	int64_t ping_at = 0, heard_by = 0;
+	for (;;) {
+		int64_t now = now_ms();
+		if (__atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) != me || !nocopy_arena_current()) {
+			_exit(0); /* replaced, or the named arena is gone */
+		}
+		__atomic_store_n(&a->vk_beat, now, __ATOMIC_RELEASE);
+		vk_reply r;
+		if (v.fd < 0 && now >= v.retry_at) {
+			if ((v.fd = vk_dial()) < 0 || !vk_handshake(&v, true, &r)) {
+				vk_fail(&v);
+			} else {
+				__atomic_add_fetch(&a->inval_gen, 1, __ATOMIC_SEQ_CST); /* the fill guard: fills in flight drop their copy */
+				nocopy_clear(); /* what changed before this connection is unknown */
+				__atomic_store_n(&a->vk_live, 1, __ATOMIC_RELEASE);
+				ping_at = now + 1000, heard_by = 0;
+			}
+		}
+		p[0].fd = v.fd;
+		if (poll(p, 2, BEAT_MS) > 0 && p[1].revents) {
+			_exit(0); /* the anonymous arena's last user is gone */
+		}
+		if (v.fd < 0) {
+			continue;
+		}
+		int got = p[0].revents ? vk_listen_read(&v) : 0;
+		bool ok = got >= 0;
+		now = now_ms();
+		if (got > 0) {
+			heard_by = 0; /* anything from Valkey answers the PING */
+		}
+		if (ok && heard_by && now > heard_by) {
+			ok = false; /* a silent connection: PING unanswered */
+		} else if (ok && now >= ping_at) {
+			smart_str s = {0};
+			head(&s, 1);
+			ARG(&s, "PING");
+			smart_str_0(&s);
+			ok = vk_send(&v, &s);
+			ping_at = now + 1000;
+			heard_by = heard_by ? heard_by : now + (vk_timeout_ms > 1000 ? vk_timeout_ms : 1000);
+		}
+		if (!ok) {
+			__atomic_store_n(&a->vk_live, 0, __ATOMIC_RELEASE);
+			vk_fail(&v);
+			v.retry_at = 0; /* the first reconnect at once, then with the pause */
+		}
+	}
+}
+
+/* Nothing of the worker stays open in the listener: a server's listening socket would block its restart. */
+static void close_inherited(void)
+{
+	DIR *d = opendir("/proc/self/fd");
+	if (!d) {
+		d = opendir("/dev/fd");
+	}
+	if (d) {
+		struct dirent *e;
+		while ((e = readdir(d))) {
+			int fd = atoi(e->d_name);
+			if (fd > 2 && fd != dirfd(d) && fd != life[0]) {
+				close(fd);
+			}
+		}
+		closedir(d);
+	} else {
+		for (int fd = 3; fd < 4096; fd++) {
+			if (fd != life[0]) {
+				close(fd);
+			}
+		}
+	}
+	int null = open("/dev/null", O_RDWR);
+	if (null >= 0) {
+		dup2(null, 0), dup2(null, 1), dup2(null, 2);
+		if (null > 2) {
+			close(null);
+		}
+	}
+}
+
+/* Double fork: the listener belongs to no worker (init reaps it), in a session of its own. */
+static void vk_spawn(void)
+{
+	pid_t c = fork();
+	if (c != 0) {
+		while (c > 0 && waitpid(c, NULL, 0) < 0 && errno == EINTR) {
+		}
+		return;
+	}
+	if (fork() != 0) {
+		_exit(0);
+	}
+	setsid();
+	sigset_t none;
+	sigemptyset(&none);
+	sigprocmask(SIG_SETMASK, &none, NULL);
+	for (int sig = 1; sig < NSIG; sig++) {
+		signal(sig, SIG_DFL);
+	}
+#ifdef __linux__
+	prctl(PR_SET_NAME, "nocopy-valkey");
+#endif
+	nocopy_arena_unhold();
+	close_inherited();
+	__atomic_store_n(&nocopy_a->vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
+	vk_listen();
+}
+
+/* The listener is connected; started (and waited for, up to the timeout) when it is not running. */
+static bool listener_live(void)
+{
+	nocopy_arena *a = nocopy_a;
+	int64_t until = 0;
+	for (;;) {
+		int64_t now = now_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
+		bool fresh = beat && now - beat < STALE_MS;
+		if (fresh && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE)) {
+			return true;
+		}
+		if (!fresh && __atomic_compare_exchange_n(&a->vk_beat, &beat, now, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+			__atomic_store_n(&a->vk_live, 0, __ATOMIC_RELEASE); /* the dead one's */
+			vk_spawn();
+		}
+		if (!until) {
+			until = now + vk_timeout_ms;
+		} else if (now >= until) {
+			php_error_docref(NULL, E_WARNING, "nocopy: the Valkey listener is not connected: no invalidations, local copies are not served");
+			return false;
+		}
+		usleep(1000);
+	}
+}
+
+uint32_t nocopy_vk_listener(void)
+{
+	nocopy_arena *a = nocopy_a;
+	int64_t beat = a ? __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE) : 0;
+	return beat && now_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
 }
 
 bool nocopy_vk_ready(void)
@@ -492,7 +688,7 @@ bool nocopy_vk_ready(void)
 	if (v->fd >= 0 && !vk_drain(v)) {
 		v->retry_at = 0; /* found closed with no command in flight: reconnect now, not after the pause */
 	}
-	if ((v->fd < 0 && !vk_connect(v)) || !vk_drain(v)) {
+	if ((v->fd < 0 && !vk_connect(v)) || !listener_live()) {
 		return false;
 	}
 	v->synced = true;
@@ -504,7 +700,7 @@ void nocopy_vk_new_request(void)
 	NOCOPY_G(vk).synced = false;
 }
 
-void nocopy_vk_close(nocopy_vk *v, bool forked)
+void nocopy_vk_close(nocopy_vk *v)
 {
 	if (v->fd >= 0) {
 		close(v->fd); /* in a forked child only its copy */
@@ -512,9 +708,7 @@ void nocopy_vk_close(nocopy_vk *v, bool forked)
 	v->fd = -1;
 	v->len = v->pos = 0;
 	v->synced = false;
-	if (forked) {
-		v->ever = false; /* the parent's connection kept the shared arena in sync */
-	} else if (v->buf) {
+	if (v->buf) {
 		pefree(v->buf, 1);
 		v->buf = NULL;
 		v->cap = 0;

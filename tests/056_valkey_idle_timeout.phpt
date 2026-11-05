@@ -27,7 +27,7 @@ nocopy_put('k', 'old');
 var_dump(cmd('CONFIG', 'SET', 'timeout', '1'));
 sleep(3);
 var_dump(cmd('SET', 't056:k', '7'));
-nocopy_get('unrelated'); // a round trip on the idle connection: applies the push for k
+settle();
 var_dump(nocopy_get('k'));
 var_dump(cmd('CONFIG', 'SET', 'timeout', '0'));
 ?>

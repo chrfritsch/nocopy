@@ -867,6 +867,8 @@ const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need)
 /* The object of a named arena, open for the process's life with a shared flock on it (inherited by forks):
  * an exclusive flock succeeds only while no process maps the object. */
 static int named_fd = -1;
+static char named_name[64];
+static struct stat named_st; /* the listener's, see nocopy_arena_unhold */
 
 static bool same_object(const char *name, int fd)
 {
@@ -1070,6 +1072,7 @@ const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint
 			return err;
 		}
 		if (r == OPEN_OK) {
+			memcpy(named_name, out->name, sizeof named_name);
 #ifdef __linux__
 			collect(base, out);
 #endif
@@ -1077,6 +1080,36 @@ const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint
 		}
 	}
 	return "it was replaced again and again while opening it";
+}
+
+void nocopy_arena_unhold(void)
+{
+	if (named_fd >= 0 && fstat(named_fd, &named_st) == 0) {
+		close(named_fd); /* the flock stays with the other processes sharing the open file */
+		named_fd = -1;
+	}
+}
+
+bool nocopy_arena_current(void)
+{
+	if (!named_name[0]) {
+		return true;
+	}
+	struct stat b;
+#ifdef __linux__
+	char path[80];
+	snprintf(path, sizeof path, "/dev/shm%s", named_name); /* stat needs no permission on the object: fpm workers run as another user */
+	return stat(path, &b) == 0 && b.st_dev == named_st.st_dev && b.st_ino == named_st.st_ino;
+#else
+	int cur = shm_open(named_name, O_RDONLY, 0);
+	bool same = cur >= 0 && fstat(cur, &b) == 0 && b.st_dev == named_st.st_dev && b.st_ino == named_st.st_ino;
+	if (cur >= 0) {
+		close(cur);
+	} else if (errno == EACCES) {
+		return true; /* it exists, not ours to open: assume it is still ours */
+	}
+	return same;
+#endif
 }
 
 void nocopy_arena_destroy(void)
