@@ -2,10 +2,8 @@
 # Inside the image: build /src out of tree in /build, run the own tests (args: extra run-tests options or test paths). Exit 1 on any failure.
 # NOCOPY_CONFIGURE: extra configure flags, e.g. --disable-nocopy-valkey
 set -e
-rm -rf /build && mkdir /build && cd /src
-cp *.c *.h config.m4 /build/
-cd /build && phpize >/dev/null && ./configure $NOCOPY_CONFIGURE >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
-grep -i warning make.err || true
+/src/docker/build.sh
+cd /build
 cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu
 # Valkey tests (05x) need a server on 127.0.0.1:6379; they skip without one
 command -v valkey-server >/dev/null && ! valkey-cli ping >/dev/null 2>&1 && valkey-server --daemonize yes --save '' --appendonly no >/dev/null

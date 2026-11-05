@@ -1,5 +1,6 @@
 name: ci
 on: [push, pull_request]
+# every step is a ./dev command: run the same locally (./dev ci runs the lot)
 jobs:
   test:
     strategy:
@@ -8,18 +9,16 @@ jobs:
         php: ["8.4", "8.5"]
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
+    env:
+      PHP: ${{ matrix.php }}
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg PHP=${{ matrix.php }} -t nocopy-linux docker
-      - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh
-      # single host: the core without nocopy_valkey.c
-      - run: docker run --rm -e NOCOPY_CONFIGURE=--disable-nocopy-valkey -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh
+      - run: ./dev test
+      - run: ./dev novalkey
       # release build, loop: races show up only sometimes (see ARCHITECTURE.md invariants)
-      - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30
-      # the arena alone, from threads: plain and ThreadSanitizer
-      - run: docker run --rm -v "$PWD":/src:ro nocopy-linux /src/tests/c/run.sh 5
-      # nocopy.shm_name: CLI and php-fpm share one cache
-      - run: docker run --rm -v "$PWD":/src:ro nocopy-linux sh /src/docker/shm-name.sh
+      - run: ./dev stress 30
+      - run: ./dev c 5
+      - run: ./dev shm
   zts:
     strategy:
       fail-fast: false
@@ -28,10 +27,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg PHP=8.4 -f docker/Dockerfile.zts -t nocopy-zts docker
-      - run: docker run --rm -v "$PWD":/src:ro nocopy-zts /src/docker/test.sh
-      - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
-      - run: docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh
+      - run: ./dev zts
+      - run: ./dev frankenphp
   symfony:
     strategy:
       fail-fast: false
@@ -41,10 +38,8 @@ jobs:
           - {php: "8.4", symfony: "7.4.*"}
           - {php: "8.5", symfony: "8.*"}
     runs-on: ubuntu-latest
+    env:
+      PHP: ${{ matrix.php }}
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg PHP=${{ matrix.php }} -t nocopy-linux docker
-      - run: |
-          mkdir sf && echo '{"config":{"platform":{"php":"${{ matrix.php }}.0"}}}' > sf/composer.json
-          docker run --rm -v "$PWD/sf":/app -w /app composer:2 require -q '--ignore-platform-req=ext-*' "symfony/framework-bundle:${{ matrix.symfony }}"
-      - run: docker run --rm -v "$PWD":/src:ro -v "$PWD/sf":/sf:ro nocopy-linux /src/docker/symfony.sh
+      - run: ./dev symfony "${{ matrix.symfony }}"

@@ -13,22 +13,25 @@ Last verified (2026-11-05): suite 8.4/8.5/ZTS 8.4, tests/c with TSAN, `stress.sh
 Drupal tests in 4 modes pass; `docker/drupal-bench.sh` (one run, noisy host: stock's logged-in `/` 20-25% under its range) matches the README:
 nocopy-all anonymous `/` 12,229 req/s, 7 statements per logged-in request, first request after an fpm restart 146 ms. Committed results not replaced.
 
-## Run things (Docker; `docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker`)
+## Run things
+
+`./dev help` lists every command; all run in Docker, CI runs the same ones. `./dev ci` = everything CI runs, for one PHP version.
 
 | What | Command |
 |---|---|
-| suite | `docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/test.sh [tests/0xx.phpt]` |
-| race loop / arena from threads | `docker/stress.sh 30` / `tests/c/run.sh 5` (same image) |
-| shared memory + Valkey, fpm and FrankenPHP | `sh /src/docker/shm-name.sh` (same image; FrankenPHP: `dunglas/frankenphp:1-php8.4`) |
-| micro benchmarks vs APCu, A/B of two trees | `docker run --rm --shm-size=1g ... /src/docker/bench.sh`, `/src/docker/ab.sh [reps] [groups]` |
-| Symfony app behind fpm | `docker/fpm-bench.sh` (mount an app with vendor at `/appsrc`; `bench/sfapp` holds src/public/composer.json) |
-| stampede | `docker/stampede.sh` |
-| hit ratio | `php -d extension=… -d nocopy.shm_name=/hr -d nocopy.shm_size=4M bench/hitratio.php zipf 1.5 0` |
-| Drupal tests / benchmark | `docker/drupal-test.sh`, `docker/drupal-bench.sh` (image `docker/Dockerfile.drupal`) |
-| APCu's suite on the polyfill | `PHP=… NOCOPY_SO=… scripts/apcu-suite.sh` (22 known failures, listed in the script) |
+| suite (one test) | `./dev test [tests/0xx.phpt]`, `PHP=8.4 ./dev test`, `./dev novalkey`, `./dev zts` |
+| race loop / arena from threads | `./dev stress 30` / `./dev c 5` |
+| shared memory + Valkey, fpm and FrankenPHP | `./dev shm`, `./dev frankenphp` |
+| try things by hand | `./dev shell` (nocopy loaded, `/src` = repo) |
+| micro benchmarks vs APCu / stampede | `./dev bench`, `./dev stampede` |
+| A/B of two trees | `docker run --rm --shm-size=1g -v <old>:/a:ro -v <new>:/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh [reps] [groups]` |
+| Symfony smoke / app behind fpm | `./dev symfony [6.4.*]` / `docker/fpm-bench.sh` (mount an app with vendor at `/appsrc`; `bench/sfapp` holds src/public/composer.json) |
+| hit ratio | in `./dev shell`: `php -d nocopy.shm_name=/hr -d nocopy.shm_size=4M bench/hitratio.php zipf 1.5 0` |
+| Drupal tests / benchmark | `./dev drupal`, `./dev drupal-bench` |
+| APCu's suite on the polyfill | `./dev apcu` (23 known failures, listed in `scripts/apcu-suite.sh`) |
 
 Gotchas: tests and scripts give every arena its own name and remove `/dev/shm/<name>.*` afterwards; Docker's `/dev/shm` is 64M unless
-`--shm-size`. After changing sources, rebuild from clean (stale `.lo` fooled us twice). A container started right after a host-side write
+`--shm-size`. Every `./dev` run rebuilds from clean (stale `.lo` fooled us twice). A container started right after a host-side write
 sometimes saw a truncated `nocopy.c`: rerun.
 
 ## Decisions and their numbers

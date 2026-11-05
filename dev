@@ -1,0 +1,69 @@
+#!/bin/sh
+# One entry point for building, testing and benchmarking. Everything runs in Docker (Linux), the same commands CI runs.
+set -e
+cd "$(dirname "$0")"
+PHP=${PHP:-8.5}
+[ -t 0 ] && [ -t 1 ] && TTY=-it || TTY=
+
+usage() { cat <<EOF
+Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are built on first use, cached after)
+
+  test [tests/0xx.phpt ...]   build + .phpt suite (Valkey tests included)
+  novalkey [tests ...]        same, built with --disable-nocopy-valkey
+  zts [tests ...]             suite on thread-safe PHP 8.4 (ext-parallel)
+  stress [loops=30]           concurrency tests in a loop, stops at first failure
+  c [seconds=3]               arena alone from 8 threads, plain + ThreadSanitizer
+  shm                         CLI + php-fpm share one cache by name, then with Valkey
+  frankenphp                  FrankenPHP classic + worker mode, and shm with it
+  symfony [version=8.*]       Symfony bundle smoke test (alone and next to APCu)
+  apcu                        APCu's own suite against the polyfill (23 known failures)
+  drupal                      Drupal module's PHPUnit tests in 4 cache modes
+  ci                          everything above (what CI runs, one PHP version)
+
+  bench                       micro benchmarks vs APCu
+  stampede [workers secs ttl ms]
+  drupal-bench                Drupal under nginx + fpm, 8 cache configs (long)
+
+  stub                        regenerate nocopy_arginfo.h from nocopy.stub.php
+  shell                       bash in the image with nocopy built and loaded (php -m, php -a)
+  image                       (re)build the images for \$PHP
+EOF
+}
+
+img() { docker build -q --build-arg PHP="$PHP" -t "nocopy-linux:$PHP" docker >/dev/null; }
+run() { docker run --rm $TTY -v "$PWD":/src:ro "$@"; }
+
+cmd=${1:-help}; [ $# -gt 0 ] && shift
+case $cmd in
+  test)       img; run "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
+  novalkey)   img; run -e NOCOPY_CONFIGURE=--disable-nocopy-valkey "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
+  zts)        docker build -q --build-arg PHP=8.4 -f docker/Dockerfile.zts -t nocopy-zts:8.4 docker >/dev/null
+              run nocopy-zts:8.4 /src/docker/test.sh "$@" ;;
+  stress)     img; run "nocopy-linux:$PHP" /src/docker/stress.sh "${1:-30}" ;;
+  c)          img; run "nocopy-linux:$PHP" /src/tests/c/run.sh "${1:-3}" ;;
+  shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh ;;
+  frankenphp) run dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
+              run dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh ;;
+  symfony)    v=${1:-8.*}; sf=.cache/sf-$PHP-$(echo "$v" | tr -d '.*')
+              if [ ! -d "$sf/vendor" ]; then
+                mkdir -p "$sf" && echo "{\"config\":{\"platform\":{\"php\":\"$PHP.0\"}}}" > "$sf/composer.json"
+                docker run --rm -v "$PWD/$sf":/app -w /app composer:2 require -q '--ignore-platform-req=ext-*' "symfony/framework-bundle:$v"
+              fi
+              img; run -v "$PWD/$sf":/sf:ro "nocopy-linux:$PHP" /src/docker/symfony.sh ;;
+  apcu)       img; run "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && /src/scripts/apcu-suite.sh' ;;
+  drupal)     PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
+              run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
+  ci)         for c in test novalkey stress c shm zts frankenphp symfony; do
+                echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
+              done; echo "== ci: all passed" ;;
+  bench)      img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/bench.sh ;;
+  stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
+  drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
+              run --shm-size=1g -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
+  shell)      img; docker run --rm -it -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \
+                '/src/docker/build.sh && printf "extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy-shell\n" > /usr/local/etc/php/conf.d/zz-nocopy.ini && cd /src && exec bash' ;;
+  stub)       img; docker run --rm -v "$PWD":/src -w /src "nocopy-linux:$PHP" php /usr/local/lib/php/build/gen_stub.php nocopy.stub.php ;;
+  image)      img; echo "nocopy-linux:$PHP ready" ;;
+  help|-h|--help) usage ;;
+  *)          usage >&2; exit 1 ;;
+esac

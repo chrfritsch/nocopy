@@ -286,34 +286,30 @@ or `nocopy_*` for that.
 
 Not covered: `APCUIterator`, `apcu_key_info()`, the `APC_*` constants and every `apc.*` INI setting except `apc.enabled` and
 `apc.enable_cli` (size with `nocopy.*`). `apcu_cache_info()` and `apcu_sma_info()` return totals without per-entry lists.
-Against APCu's own test suite (`scripts/apcu-suite.sh`) the 22 failures are these gaps plus error messages that name `nocopy_*`.
+Against APCu's own test suite (`./dev apcu`) the 23 failures are these gaps plus error messages that name `nocopy_*`.
 
 ## Development
 
-```sh
-phpize && ./configure && make
-make test TESTS=tests                                            # .phpt suite (a debug PHP build catches more)
-PHP=php NOCOPY_SO=$PWD/modules/nocopy.so scripts/apcu-suite.sh   # APCu's own suite against the polyfill
-tests/c/run.sh                                                   # arena alone, 8 threads, plain + ThreadSanitizer
-```
-
-The Linux toolchain used by CI lives in [`docker/`](docker):
+All you need is Docker. `./dev` builds the Linux images on first use and runs everything in them, the same commands CI runs:
 
 ```sh
-docker build --build-arg PHP=8.5 -t nocopy-linux docker
-docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/test.sh      # build + test suite
-docker run --rm -v "$PWD":/src:ro nocopy-linux /src/docker/stress.sh 30 # race stress loop
+./dev test                          # build + .phpt suite (PHP=8.4 ./dev test for another version)
+./dev test tests/018_shift_under_readers.phpt
+./dev shell                         # bash with nocopy built and loaded: php -r 'nocopy_put("a", 1);'
+./dev ci                            # everything CI runs: suite with/without Valkey, ZTS, stress loops, fpm, FrankenPHP, Symfony
+./dev help                          # all commands, incl. drupal, apcu, bench
 ```
 
-Benchmarks against APCu: `docker/bench.sh` (CLI micro-benchmarks, release image) and `docker/fpm-bench.sh` (Symfony app behind php-fpm).
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) covers PHP 8.4/8.5 on amd64 and arm64, ZTS 8.4, FrankenPHP and Symfony 6.4/7.4/8.x.
+Sources are mounted read-only and rebuilt from clean in every run, so there is nothing to clean up.
+Without Docker: `phpize && ./configure && make && make test TESTS=tests` (Linux; a debug PHP build catches more).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same `./dev` commands on PHP 8.4/8.5, amd64 and arm64.
 
 For project state, decisions with their numbers and next steps, see [`HANDOVER.md`](HANDOVER.md).
 
 ## Contributing
 
 Bug reports and pull requests are welcome. Please include the PHP version, SAPI (fpm, FrankenPHP, CLI…), NTS/ZTS and the output of `nocopy_stats()`.
-Changes to locking or eviction should pass the stress loops (`docker/stress.sh`, `tests/c/run.sh`). See the invariants in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Changes to locking or eviction should pass the stress loops (`./dev stress`, `./dev c`). See the invariants in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## License
 
