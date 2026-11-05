@@ -80,4 +80,8 @@ the database alone where the extension is not loaded or `nocopy.shm_name` is not
 - **Long-running CLI processes** (queue workers, migrations) in copy mode see changes made elsewhere on their next cache read, like web requests.
 - **Deletes inside a database transaction wait for the commit** (none on rollback), so a concurrent request cannot refill the cache from uncommitted data.
 - **Memory:** `nocopy.shm_size` must hold the cache, render cache included. When it is full, nocopy evicts entries (cache misses, not errors).
-  Check `nocopy_stats()['used']` after warm-up: the 2,000-node benchmark site used 11 MB.
+  Check `nocopy_stats()['used']` after warm-up: the 2,000-node benchmark site used 11 MB, so the default `32M` fits; raise it once
+  `used` passes about half.
+- **`nocopy.local_size`** (copy mode: Drush, queue workers, worker runtimes) can stay at `8M`: a request's hot entries on the benchmark site
+  were about 3 MB, and a simulated worker (one process, a new kernel per request) was as fast with `0` as with `64M` (110-170 ms
+  either way: cache reads are noise next to the rest of a Drupal request).

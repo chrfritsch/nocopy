@@ -4,7 +4,16 @@ Symfony's built-in `cache.adapter.apcu` serializes values before they reach the 
 bundle in [`symfony/`](../../symfony) (`chrfritsch/nocopy-bundle`, Symfony 6.4 / 7.x / 8.x) adds `cache.adapter.nocopy`,
 which stores values as they are.
 
-Prerequisite: the extension is [installed](install.md) for php-fpm and the CLI.
+Prerequisite: the extension is [installed](install.md) for php-fpm and the CLI, with the same settings in both:
+
+```ini
+nocopy.shm_name=/nocopy
+;nocopy.serializer=igbinary   ; with the igbinary extension: smaller cached objects
+```
+
+The other defaults fit most apps (`shm_size=32M`, `local_size=8M`). Under FrankenPHP worker mode, values fetched repeatedly are kept
+per worker up to `nocopy.local_size`: raise it if the app's hot cache entries add up to more (check `nocopy_stats()['used']` after warm-up
+as an upper bound). It counts against `memory_limit`, per worker.
 
 ## 1. Install the bundle
 
