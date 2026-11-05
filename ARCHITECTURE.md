@@ -3,14 +3,20 @@ Layers, each using only the one below it:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, scans, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
 - `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`info`/`scan`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
 - `nocopy_apcu.c`: `apcu_*` and `APCUIterator`, only through `nocopy_php.h` (no locks, no arena fields); registered only with `nocopy.apcu_compat=1`.
+- No arena (`nocopy.shm_name` not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `tests/c/run.sh`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
 Everything lives in one `mmap(MAP_SHARED|MAP_ANONYMOUS)` created in MINIT, so forked workers share it at the same address (pointers are valid everywhere); threads (ZTS) share it anyway.
-With `nocopy.shm_name` it is a POSIX shm object (`name.<abi>`, mode 0600) that unrelated processes attach to: the creator (`O_EXCL`) maps it at the first free address of `bases[]`
-(0x2000'0000'0000, else 0x10'0000'0000; `MAP_FIXED_NOREPLACE`), fills the header and stores `magic` last (release); an attacher maps the header anywhere, waits up to 2 s for `magic`,
-checks `abi` (PHP version, debug, struct sizes, nocopy version; also in the name), and maps the whole at `base` or fails (MINIT then warns and uses an anonymous arena).
-`adopt()` derives the process-local copies (`nocopy_tabs`, masks, shift) from the header in both cases.
+With `nocopy.shm_name` it is a POSIX shm object that unrelated processes attach to (`nocopy_arena_open`, `nocopy_arena.c`):
+- Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
+- Liveness: every process that maps it holds a shared `flock` on its object for life (fd kept open, inherited by forks, closed on exec). `LOCK_EX|LOCK_NB` succeeds only on an object no process maps.
+- Create: `O_EXCL`, then `LOCK_SH` and a check that the name still refers to this object (`hold`: same `st_dev`/`st_ino`; someone may have removed it as unused in between),
+  then `posix_fallocate` (Linux: a sparse tmpfs file past `/dev/shm`'s limit SIGBUSes on first touch), map at the first free address of `bases[]` (0x2000'0000'0000, else 0x10'0000'0000; `MAP_FIXED_NOREPLACE`), set up the header, store `magic` last (release).
+- Attach: map the header anywhere, wait up to 2 s for `magic`; while it is missing and the object is unused, its creator died: `remove_unused` unlinks it (under `LOCK_EX`, only if the name still refers to it) and we start over. Then check `abi`, `hold`, map at `base`.
+  Test 060: 24 processes starting at once over an unfinished object all end in one arena; without the re-check in `hold`, most end up in orphans.
+- `collect` (Linux, `/dev/shm`): other builds' objects under the same base are removed when unused; the first one in use is reported (MINIT warns: those processes do not share this cache).
+- Any failure leaves `nocopy_a` NULL: the process has no cache (below), never an anonymous one, whose writes the others would not see.
 
 ## Layout
 

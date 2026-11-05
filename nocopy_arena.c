@@ -7,6 +7,9 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #ifndef MAP_ANONYMOUS
@@ -761,8 +764,6 @@ uint32_t nocopy_free_runs(uint32_t shard, size_t *off, size_t *len, uint32_t max
 
 /* ---- setup ---- */
 
-const char NOCOPY_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
-
 /* Process-local copies of the layout, from the header. */
 static void adopt(nocopy_arena *p)
 {
@@ -779,111 +780,15 @@ static void adopt(nocopy_arena *p)
 	nocopy_self = nocopy_owner_self();
 }
 
-/* p is zero-filled. */
-static void init(nocopy_arena *p, size_t size, size_t header, unsigned shift, uint32_t nshards, uint32_t per)
-{
-	p->base = (uintptr_t) p;
-	p->size = size;
-	p->header_size = header;
-	p->seg_shift = shift;
-	p->tab_per = per;
-	p->nsegs = (uint32_t) ((size - header) >> shift);
-	p->nsegs -= p->nsegs % nshards; /* equal slices */
-	p->nshards = nshards;
-	uint32_t slice = p->nsegs / nshards;
-	for (uint32_t s = 0; s < nshards; s++) {
-		nocopy_shard *sh = &p->shards[s];
-		sh->idx = s;
-		sh->lo = s * slice;
-		sh->hi = sh->lo + slice;
-		sh->nfree = slice;
-		sh->exp_next = sh->lo;
-		sh->cap = per / 4 * 3;
-		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-			sh->cur[b] = -1;
-		}
-	}
-	p->start_time = time(NULL);
-}
+typedef struct {
+	size_t size, header;
+	unsigned shift;
+	uint32_t nshards, per;
+} layout;
 
-#define NOCOPY_MAGIC 0x6e6f636f70790001ULL
+const char NOCOPY_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
 
-/* fd mapped exactly at base, or NULL. */
-static void *map_at(int fd, size_t size, uintptr_t base)
-{
-	int flags = MAP_SHARED;
-#ifdef MAP_FIXED_NOREPLACE
-	flags |= MAP_FIXED_NOREPLACE; /* older kernels treat it as a hint: checked below */
-#endif
-	void *p = mmap((void *) base, size, PROT_READ | PROT_WRITE, flags, fd, 0);
-	if (p == MAP_FAILED) {
-		return NULL;
-	}
-	if ((uintptr_t) p != base) {
-		munmap(p, size);
-		return NULL;
-	}
-	return p;
-}
-
-/* Far from PIE binaries, heaps, mmap bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
-static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL};
-
-static const char *create_named(const char *name, size_t size, size_t header, unsigned shift, uint32_t nshards, uint32_t per, uint64_t abi)
-{
-	int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
-	if (fd >= 0) {
-		void *p = NULL;
-		if (ftruncate(fd, (off_t) size) == 0) {
-			for (size_t i = 0; !p && i < sizeof bases / sizeof bases[0]; i++) {
-				p = map_at(fd, size, bases[i]);
-			}
-		}
-		close(fd);
-		if (!p) {
-			shm_unlink(name);
-			return "no free address for a named cache";
-		}
-		init(p, size, header, shift, nshards, per);
-		((nocopy_arena *) p)->abi = abi;
-		__atomic_store_n(&((nocopy_arena *) p)->magic, NOCOPY_MAGIC, __ATOMIC_RELEASE);
-		adopt(p);
-		return NULL;
-	}
-	if (errno != EEXIST || (fd = shm_open(name, O_RDWR, 0)) < 0) {
-		return errno == EACCES ? "no permission to open the named cache" : "shm_open failed";
-	}
-	/* wait for its creator to publish the header */
-	uint64_t magic = 0, habi = 0;
-	uintptr_t base = 0;
-	size_t hsize = 0;
-	for (int i = 0; i < 2000 && magic != NOCOPY_MAGIC; i++) {
-		struct stat st;
-		if (fstat(fd, &st) == 0 && (size_t) st.st_size >= sizeof(nocopy_arena)) {
-			nocopy_arena *q = mmap(NULL, sizeof(nocopy_arena), PROT_READ, MAP_SHARED, fd, 0);
-			if (q != MAP_FAILED) {
-				magic = __atomic_load_n(&q->magic, __ATOMIC_ACQUIRE);
-				habi = q->abi;
-				base = q->base;
-				hsize = q->size;
-				munmap(q, sizeof(nocopy_arena));
-			}
-		}
-		if (magic != NOCOPY_MAGIC) {
-			usleep(1000);
-		}
-	}
-	void *p = magic != NOCOPY_MAGIC || habi != abi ? NULL : map_at(fd, hsize, base);
-	close(fd);
-	if (!p) {
-		return magic != NOCOPY_MAGIC ? "named cache never initialized (remove it from /dev/shm)"
-			: habi != abi ? "named cache belongs to another build" : "the named cache's address is taken in this process";
-	}
-	adopt(p);
-	return NULL;
-}
-
-const char *nocopy_arena_create(size_t size, uint64_t hint, const char *name, uint64_t abi, size_t *need)
+static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 {
 	/* shards only where each slice stays >= 8 MB (an entry must fit in one) and holds >= 16 segments */
 	unsigned shift = 16;
@@ -908,16 +813,270 @@ const char *nocopy_arena_create(size_t size, uint64_t hint, const char *name, ui
 	if (size > ((size_t) 32 << 30)) {
 		return "larger than 32G";
 	}
-	if (name) {
-		return create_named(name, size, header, shift, nshards, (uint32_t) per, abi);
+	*l = (layout) {.size = size, .header = header, .shift = shift, .nshards = nshards, .per = (uint32_t) per};
+	return NULL;
+}
+
+/* p is zero-filled. */
+static void init(nocopy_arena *p, const layout *l)
+{
+	p->base = (uintptr_t) p;
+	p->size = l->size;
+	p->header_size = l->header;
+	p->seg_shift = l->shift;
+	p->tab_per = l->per;
+	p->nsegs = (uint32_t) ((l->size - l->header) >> l->shift);
+	p->nsegs -= p->nsegs % l->nshards; /* equal slices */
+	p->nshards = l->nshards;
+	uint32_t slice = p->nsegs / l->nshards;
+	for (uint32_t s = 0; s < l->nshards; s++) {
+		nocopy_shard *sh = &p->shards[s];
+		sh->idx = s;
+		sh->lo = s * slice;
+		sh->hi = sh->lo + slice;
+		sh->nfree = slice;
+		sh->exp_next = sh->lo;
+		sh->cap = l->per / 4 * 3;
+		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+			sh->cur[b] = -1;
+		}
+	}
+	p->start_time = time(NULL);
+}
+
+const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need)
+{
+	layout l;
+	const char *err = plan(&l, size, hint, need);
+	if (err) {
+		return err;
 	}
 	void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	if (p == MAP_FAILED) {
 		return "mmap failed";
 	}
-	init(p, size, header, shift, nshards, (uint32_t) per); /* zero-filled by the kernel */
+	init(p, &l); /* zero-filled by the kernel */
 	adopt(p);
 	return NULL;
+}
+
+/* ---- named arenas ---- */
+
+#define NOCOPY_MAGIC 0x6e6f636f70790001ULL
+
+/* The object of a named arena, open for the process's life with a shared flock on it (inherited by forks):
+ * an exclusive flock succeeds only while no process maps the object. */
+static int named_fd = -1;
+
+static bool same_object(const char *name, int fd)
+{
+	struct stat a, b;
+	int cur = shm_open(name, O_RDONLY, 0);
+	bool same = cur >= 0 && fstat(fd, &a) == 0 && fstat(cur, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+	if (cur >= 0) {
+		close(cur);
+	}
+	return same;
+}
+
+/* Unlinks name if no process uses fd's object and name still refers to it. false: in use. */
+static bool remove_unused(const char *name, int fd)
+{
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		return false;
+	}
+	if (same_object(name, fd)) {
+		shm_unlink(name);
+	}
+	flock(fd, LOCK_UN);
+	return true;
+}
+
+/* Marks fd's object as used by this process. false: name was replaced meanwhile, retry. */
+static bool hold(const char *name, int fd)
+{
+	while (flock(fd, LOCK_SH) != 0 && errno == EINTR) {}
+	return same_object(name, fd);
+}
+
+/* fd mapped exactly at base, or NULL. */
+static void *map_at(int fd, size_t size, uintptr_t base)
+{
+	int flags = MAP_SHARED;
+#ifdef MAP_FIXED_NOREPLACE
+	flags |= MAP_FIXED_NOREPLACE; /* older kernels treat it as a hint: checked below */
+#endif
+	void *p = mmap((void *) base, size, PROT_READ | PROT_WRITE, flags, fd, 0);
+	if (p == MAP_FAILED) {
+		return NULL;
+	}
+	if ((uintptr_t) p != base) {
+		munmap(p, size);
+		return NULL;
+	}
+	return p;
+}
+
+/* Far from PIE binaries, heaps, mmap bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
+static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL};
+
+typedef enum { OPEN_OK, OPEN_RETRY, OPEN_FAIL } open_result;
+
+/* fd: just created (O_EXCL), empty. */
+static open_result create_new(const char *name, int fd, const layout *l, uint64_t abi, const char **err)
+{
+	if (!hold(name, fd)) {
+		close(fd);
+		return OPEN_RETRY; /* removed as unused before we held it */
+	}
+#ifdef __linux__
+	/* reserve every page now: a sparse tmpfs file over /dev/shm's limit (Docker: 64M) would SIGBUS on first touch */
+	int r = posix_fallocate(fd, 0, (off_t) l->size);
+	*err = r == ENOSPC ? "not enough room in /dev/shm (Docker: --shm-size)" : r ? "posix_fallocate failed" : NULL;
+#else
+	*err = ftruncate(fd, (off_t) l->size) ? "ftruncate failed" : NULL;
+#endif
+	void *p = NULL;
+	for (size_t i = 0; !*err && !p && i < sizeof bases / sizeof bases[0]; i++) {
+		p = map_at(fd, l->size, bases[i]);
+	}
+	if (!p) {
+		*err = *err ? *err : "no free address for it";
+		shm_unlink(name);
+		close(fd);
+		return OPEN_FAIL;
+	}
+	nocopy_arena *a = p;
+	init(a, l);
+	a->abi = abi;
+	__atomic_store_n(&a->magic, NOCOPY_MAGIC, __ATOMIC_RELEASE);
+	named_fd = fd;
+	adopt(a);
+	return OPEN_OK;
+}
+
+/* fd: an existing object, maybe still being initialized by its creator. */
+static open_result attach(const char *name, int fd, uint64_t abi, const char **err)
+{
+	uint64_t magic = 0, habi = 0;
+	uintptr_t base = 0;
+	size_t size = 0;
+	for (int waited = 0;; waited++) {
+		struct stat st;
+		if (fstat(fd, &st) == 0 && (size_t) st.st_size >= sizeof(nocopy_arena)) {
+			nocopy_arena *q = mmap(NULL, sizeof(nocopy_arena), PROT_READ, MAP_SHARED, fd, 0);
+			if (q != MAP_FAILED) {
+				magic = __atomic_load_n(&q->magic, __ATOMIC_ACQUIRE);
+				habi = q->abi;
+				base = q->base;
+				size = q->size;
+				munmap(q, sizeof(nocopy_arena));
+			}
+		}
+		if (magic == NOCOPY_MAGIC) {
+			break;
+		}
+		if (remove_unused(name, fd)) {
+			close(fd);
+			return OPEN_RETRY; /* its creator died before it was set up */
+		}
+		if (waited == 2000) {
+			close(fd);
+			*err = "its creator has not finished setting it up for 2 s";
+			return OPEN_FAIL;
+		}
+		usleep(1000);
+	}
+	if (habi != abi) {
+		close(fd);
+		*err = "it belongs to another build";
+		return OPEN_FAIL;
+	}
+	if (!hold(name, fd)) {
+		close(fd);
+		return OPEN_RETRY;
+	}
+	void *p = map_at(fd, size, base);
+	if (!p) {
+		close(fd);
+		*err = "its address is taken in this process";
+		return OPEN_FAIL;
+	}
+	named_fd = fd;
+	adopt(p);
+	return OPEN_OK;
+}
+
+#ifdef __linux__
+#include <dirent.h>
+
+/* Other builds' arenas under the same base (base.<8 hex digits>): unused ones (left by an upgrade) are removed, one still in use is reported. */
+static void collect(const char *base, nocopy_named *out)
+{
+	DIR *d = opendir("/dev/shm");
+	if (!d) {
+		return;
+	}
+	size_t bl = strlen(base + 1);
+	struct dirent *de;
+	while ((de = readdir(d))) {
+		const char *n = de->d_name, *x = n + bl + 1;
+		if (strncmp(n, base + 1, bl) != 0 || n[bl] != '.' || strlen(x) != 8 || strspn(x, "0123456789abcdef") != 8 || strcmp(n, out->name + 1) == 0) {
+			continue;
+		}
+		char other[sizeof out->other];
+		snprintf(other, sizeof other, "/%.62s", n); /* n is at most 49 chars (checked above) */
+		int fd = shm_open(other, O_RDWR, 0);
+		if (fd < 0) {
+			continue; /* another user's: not ours to judge */
+		}
+		if (!remove_unused(other, fd) && !out->other[0]) {
+			memcpy(out->other, other, sizeof other);
+		}
+		close(fd);
+	}
+	closedir(d);
+}
+#endif
+
+const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint64_t abi, size_t *need, nocopy_named *out)
+{
+	memset(out, 0, sizeof *out);
+	if (base[0] != '/' || strchr(base + 1, '/') || !base[1] || strlen(base) > 40) {
+		return "not a name like /nocopy (one leading slash, at most 40 characters)";
+	}
+	layout l;
+	const char *err = plan(&l, size, hint, need);
+	if (err) {
+		return err;
+	}
+	snprintf(out->name, sizeof out->name, "%s.%08x", base, (uint32_t) (abi ^ abi >> 32));
+	for (int attempt = 0; attempt < 8; attempt++) {
+		int fd = shm_open(out->name, O_RDWR | O_CREAT | O_EXCL, 0600);
+		open_result r;
+		if (fd >= 0) {
+			r = create_new(out->name, fd, &l, abi, &err);
+		} else if (errno != EEXIST) {
+			return errno == EACCES ? "no permission to create it" : "shm_open failed";
+		} else if ((fd = shm_open(out->name, O_RDWR, 0)) < 0) {
+			if (errno == ENOENT) {
+				continue; /* removed meanwhile */
+			}
+			return errno == EACCES ? "no permission to open it (another user created it)" : "shm_open failed";
+		} else {
+			r = attach(out->name, fd, abi, &err);
+		}
+		if (r == OPEN_FAIL) {
+			return err;
+		}
+		if (r == OPEN_OK) {
+#ifdef __linux__
+			collect(base, out);
+#endif
+			return NULL;
+		}
+	}
+	return "it was replaced again and again while opening it";
 }
 
 void nocopy_arena_destroy(void)
@@ -925,5 +1084,9 @@ void nocopy_arena_destroy(void)
 	if (nocopy_a) {
 		munmap(nocopy_a, nocopy_a->size);
 		nocopy_a = NULL;
+	}
+	if (named_fd >= 0) {
+		close(named_fd); /* drops our shared flock */
+		named_fd = -1;
 	}
 }

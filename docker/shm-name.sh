@@ -6,7 +6,7 @@ command -v gcc >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y
 rm -rf /build && mkdir /build && cp /src/*.c /src/*.h /src/config.m4 /src/config.w32 /build/
 (cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>/build/make.err) || { cat /build/make.err; exit 1; }
 mkdir -p /app && cp /src/docker/shm-name/app.php /app/
-printf 'extension=/build/modules/nocopy.so\napc.enable_cli=1\nnocopy.shm_name=/nocopy\nnocopy.shm_size=64M\n' > /usr/local/etc/php/conf.d/zz-nocopy.ini
+printf 'extension=/build/modules/nocopy.so\napc.enable_cli=1\nnocopy.shm_name=/nocopy\nnocopy.shm_size=32M\n' > /usr/local/etc/php/conf.d/zz-nocopy.ini
 rm -f /dev/shm/nocopy.*
 bad=0
 cli() { php -r "\$_GET = ['op' => '$1', 'k' => '$2']; require '/app/app.php';" 2>&1; }
@@ -39,7 +39,7 @@ if command -v php-fpm >/dev/null; then
   stop; start
   check "after restart" "$(web get b)" fpm-fcgi true
   # another user cannot open it (mode 0600): warning, private cache
-  su www-data -s /bin/sh -c "php -r 'var_dump(nocopy_get(\"a\"));'" 2>&1 | grep -q 'no permission' && echo "www-data cli     private cache + warning" || { echo "www-data cli: FAIL"; bad=1; }
+  su www-data -s /bin/sh -c "php -r 'var_dump(nocopy_get(\"a\"));'" 2>&1 | grep -q 'no permission' && echo "www-data cli     unavailable + warning" || { echo "www-data cli: FAIL"; bad=1; }
   churn
   logcheck /tmp/fpm.log
   stop

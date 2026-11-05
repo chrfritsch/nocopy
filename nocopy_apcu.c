@@ -796,6 +796,10 @@ PHP_FUNCTION(apcu_cache_info)
 		php_error_docref(NULL, E_WARNING, "No APC info available.  Perhaps APC is not enabled? Check apc.enabled in your ini file");
 		RETURN_FALSE;
 	}
+	if (!nocopy_available()) {
+		php_error_docref(NULL, E_WARNING, "nocopy: the cache is unavailable in this process (see the startup warning)");
+		RETURN_FALSE;
+	}
 
 	zval list;
 	array_init(&list);
@@ -835,6 +839,10 @@ PHP_FUNCTION(apcu_sma_info)
 
 	if (!nocopy_apc_on) {
 		php_error_docref(NULL, E_WARNING, "No APC SMA info available.  Perhaps APC is disabled via apc.enabled?");
+		RETURN_FALSE;
+	}
+	if (!nocopy_available()) {
+		php_error_docref(NULL, E_WARNING, "nocopy: the cache is unavailable in this process (see the startup warning)");
 		RETURN_FALSE;
 	}
 

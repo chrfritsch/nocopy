@@ -111,6 +111,7 @@ nocopy_put_multiple(['a' => 1, 'b' => 2], ttl: 60);
 $report = nocopy_remember('report', fn (string $key) => buildReport(), ttl: 60);
 
 print_r(nocopy_stats());                         // hits, misses, evicted, expired, expunges, used, …
+echo nocopy_shared_with();                       // who sees these writes: process, host, valkey or none
 ```
 
 `nocopy_remember($key, $callback, $ttl = 0, $beta = 1.0)`: on a miss, the first worker takes a lease and runs the callback.
@@ -145,17 +146,17 @@ The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` a
 
 The module in [`drupal/`](drupal) (`chrfritsch/nocopy-drupal`, Drupal 11.2+) puts every cache bin and the cache tag checksums
 in nocopy, so cache reads and tag checks no longer touch the database. Install it, enable it, and add the `settings.php` lines from
-[`drupal/README.md`](drupal/README.md). It is for single-server sites.
+[`drupal/README.md`](drupal/README.md). It is for single-server sites, or several servers with `nocopy.valkey`.
 
-CLI processes such as Drush and cron get their own memory. They log every cache write and tag invalidation to a database table,
-and each web request replays what is new, at the cost of one query per request. So `drush cr`, `drush cim` and `drush cron` reach
-php-fpm on the next request ([details](drupal#trade-offs)).
+With `nocopy.shm_name` (and `$settings['nocopy_shared'] = TRUE`), Drush and cron attach to php-fpm's memory, so `drush cr`, `drush cim`
+and `drush cron` reach php-fpm directly. Without it, CLI processes get their own memory and log every cache write and tag invalidation
+to a database table, which each web request replays at the cost of one query per request ([details](drupal#trade-offs)).
 
 Reproduce the benchmark:
 
 ```sh
 docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-drupal -f docker/Dockerfile.drupal docker
-docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
+docker run --rm --shm-size=1g -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
 ```
 
 ## Configuration
@@ -165,7 +166,7 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 | Setting | Default | Meaning |
 |---|---|---|
 | `nocopy.shm_size` | `32M` | Arena size. Alias: `apc.shm_size` |
-| `nocopy.shm_name` | (off) | Name of a POSIX shared-memory object, e.g. `/nocopy`: the CLI (Drush, cron), other fpm pools and restarted servers attach to the same cache ([below](#shared-by-name)). Off: shared by php-fpm's or the server's own workers only, gone when it stops |
+| `nocopy.shm_name` | (off) | Name of a POSIX shared-memory object, e.g. `/nocopy`: the CLI (Drush, cron), other fpm pools and restarted servers attach to the same cache ([below](#shared-by-name)). A process that cannot attach has no cache. Off: shared by php-fpm's or the server's own workers only, gone when it stops |
 | `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias: `apc.ttl` |
 | `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias: `apc.entries_hint` |
 | `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
@@ -187,13 +188,20 @@ and a restart or `reload` starts cold. With `nocopy.shm_name=/nocopy` the first 
 and every later one attaches to it at the same address, so a CLI script and php-fpm (or FrankenPHP) share one cache, both ways, and it survives restarts.
 Readers attached this way still get zero-copy values (fpm, FrankenPHP classic mode); the CLI uses copy mode as before.
 
-- The CLI attaches only with `apc.enable_cli=1`; otherwise it keeps a private cache.
-- Created with mode `0600`: every process must run as the user that created it, typically the one that starts php-fpm (root, whose workers inherit the mapping).
-  A process that cannot open it logs a startup warning and uses a private cache. Anyone who can write it controls what fpm reads: do not widen the mode.
-- All processes must share one PID namespace (a dead lock holder is detected by its pid): not across containers.
-- The size is the creator's; `nocopy.shm_size` of later processes is ignored. The name carries a build id: another PHP or nocopy build creates its own,
-  and the old one stays in `/dev/shm` until reboot or `rm /dev/shm/nocopy.*`. `apcu_clear_cache()` empties it.
-- Linux only so far (`docker/shm-name.sh`).
+- **All or nothing.** A process that cannot attach (another user's, `/dev/shm` full) logs a startup warning and has no cache: fetches miss,
+  writes return `false`, as with Valkey down. Never a private cache instead: its writes and deletes would not reach the others.
+  Errors in the values themselves (an object without `$serialize`) still throw.
+- **One user.** The object is created with mode `0600`, so every process must run as the user that created it: the one that starts php-fpm
+  (often root; its workers inherit the mapping), and Drush, cron and workers as that user too. Anyone who can write it controls what fpm reads: do not widen the mode.
+- **One build.** The build id is a hash of the loaded `nocopy.so`, so php-fpm and the CLI share only when they load the same file.
+  A process that finds another build's arena under the same name still in use warns that those processes do not share this cache; unused ones
+  (left by an upgrade) are removed. Restart long-running processes after an upgrade.
+- **Memory is reserved up front.** The creator reserves the whole `nocopy.shm_size` in `/dev/shm`, so it counts as shared memory from the start
+  and can never run out under a reader. In Docker, raise `--shm-size` (64M by default). Later processes get the creator's size.
+- One PID namespace: a dead lock holder is detected by its pid, so not across containers.
+- `nocopy_shared_with()` tells a process where its writes go: `process` (its own memory and its forks'), `host` (this name), `valkey`, or `none`.
+  `nocopy_stats()['shm_name']` is the object's name. The CLI attaches whatever `apc.enable_cli` says (that only switches the `apcu_*` functions).
+- Linux (CI: `docker/shm-name.sh` with php-fpm and FrankenPHP); macOS untested.
 
 ### Valkey
 

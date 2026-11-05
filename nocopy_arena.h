@@ -99,10 +99,10 @@ typedef struct {
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
 	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
-	char user[128] __attribute__((aligned(64))); /* the user's process-independent data (nocopy.c: the shared empty array) */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];
+	char user[128] __attribute__((aligned(64))); /* the user's process-independent data (nocopy.c: the shared empty array) */
 	char tables[] __attribute__((aligned(64)));
 } nocopy_arena;
 
@@ -141,12 +141,19 @@ extern uint64_t nocopy_self; /* this process's owner id */
 /* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
 void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
 
-/* Maps size bytes (rounded to the arena layout). hint: entries the slot tables should hold. NULL, or an error;
- * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments.
- * name: a POSIX shm object any process may attach to at the same address (it then keeps the creator's size), or NULL for one shared by forks only.
- * abi: the user's layout id, attachers must match it. */
+/* Maps size bytes (rounded to the arena layout), shared with forks. hint: entries the slot tables should hold. NULL, or an error;
+ * NOCOPY_TOO_SMALL: size cannot hold the slot tables (*need bytes) plus a few segments. */
 extern const char NOCOPY_TOO_SMALL[];
-const char *nocopy_arena_create(size_t size, uint64_t hint, const char *name, uint64_t abi, size_t *need);
+const char *nocopy_arena_create(size_t size, uint64_t hint, size_t *need);
+
+typedef struct {
+	char name[64];  /* the POSIX shm object: base.<abi> */
+	char other[64]; /* another build's arena under the same base, still in use by its processes; "" none */
+} nocopy_named;
+
+/* Creates or attaches to the arena any process opening base with the same abi (the user's layout id) shares, at the same address.
+ * An attacher gets the creator's size. Unused arenas of other builds under base are removed. NULL, or an error (then no arena). */
+const char *nocopy_arena_open(const char *base, size_t size, uint64_t hint, uint64_t abi, size_t *need, nocopy_named *out);
 void nocopy_arena_destroy(void);
 
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */

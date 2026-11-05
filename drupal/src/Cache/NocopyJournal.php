@@ -6,9 +6,13 @@ namespace Drupal\nocopy\Cache;
 
 use Drupal\Core\Database\Database;
 use Drupal\Core\Database\StatementInterface;
+use Drupal\Core\Site\Settings;
 
 /**
  * CLI processes (Drush, cron) have their own nocopy memory: they log cache writes here, web requests replay them.
+ *
+ * Not with $settings['nocopy_shared']: every process then uses one cache (nocopy.shm_name or nocopy.valkey), which carries
+ * every write itself. settings.php is read by php-fpm and Drush alike, so they agree on it; their php.ini may differ.
  */
 final class NocopyJournal {
 
@@ -21,9 +25,16 @@ final class NocopyJournal {
 
   public function __construct(public readonly bool $writer = PHP_SAPI === 'cli') {}
 
-  // nocopy.valkey: every process shares Valkey, which carries invalidations itself.
+  // The site's choice, checked in each process: a process with a cache of its own would write where no one else reads.
   public static function shared(): bool {
-    return (string) ini_get('nocopy.valkey') !== '';
+    if (!Settings::get('nocopy_shared', FALSE)) {
+      return FALSE;
+    }
+    $with = nocopy_shared_with();
+    if ($with !== 'host' && $with !== 'valkey') {
+      throw new \RuntimeException(sprintf("nocopy: \$settings['nocopy_shared'] is set, but this %s process does not share the cache (nocopy_shared_with(): %s). Set nocopy.shm_name (or nocopy.valkey) in the php.ini of every PHP that runs this site, and run Drush and cron as the user that starts php-fpm.", PHP_SAPI, $with));
+    }
+    return TRUE;
   }
 
   public static function request(): float {

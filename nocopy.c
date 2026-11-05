@@ -13,11 +13,15 @@
 #include "SAPI.h"
 #include "zend_interfaces.h"
 #include "zend_system_id.h"
+#include "zend_extensions.h"
 #include "nocopy_arginfo.h"
 #include <pthread.h>
 #include <math.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #ifndef RTLD_DEFAULT
 # define RTLD_DEFAULT ((void *) 0)
 #endif
@@ -31,6 +35,8 @@ static size_t arena_size = 32 * 1024 * 1024, local_size = 8 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 zend_long nocopy_ini_ttl;
 static char *shm_name; /* nocopy.shm_name: attachable by any process, not only forks */
+static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
+static char shm_attached[64]; /* the object mapped; empty: an anonymous arena, or none (nocopy_a NULL: unavailable) */
 static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
 bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
@@ -56,9 +62,14 @@ _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
 static inline zend_string *entry_key(const nocopy_entry *e) { return (zend_string *) (nocopy_key(e) - _ZSTR_HEADER_SIZE); }
 
+bool nocopy_available(void)
+{
+	return nocopy_a != NULL;
+}
+
 bool nocopy_tracked(void)
 {
-	if (NOCOPY_G(ctx).slot < 0) {
+	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) { /* no arena (unavailable): the store API fails softly instead */
 		zend_throw_error(NULL, "nocopy: no free worker slot");
 		return false;
 	}
@@ -486,7 +497,8 @@ static bool serialize_value(zval *val, zval *out, bool *igb)
 	return true;
 }
 
-/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for publish(). */
+/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for publish().
+ * p NULL (no arena): only the checks, so a value a store would refuse is refused alike; then NOCOPY_NO_ROOM. */
 static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
@@ -519,7 +531,7 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, const noc
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(key))) + z.n;
-	nocopy_entry *e = nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
+	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
 		o->ttl ? o->ttl : nocopy_ini_ttl);
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : 0;
@@ -544,15 +556,15 @@ static nocopy_status vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
-	if (UNEXPECTED(nocopy_vk_on)) {
-		return vk_store(key, val, o, 0);
+	if (UNEXPECTED(detour)) {
+		return nocopy_a ? vk_store(key, val, o, 0) : build(NULL, key, val, o);
 	}
 	nocopy_put p;
 	nocopy_status s = build(&p, key, val, o);
 	return s == NOCOPY_OK ? publish(&p, o->add_only) : s;
 }
 
-bool nocopy_drop_local(const char *k, size_t len)
+static zend_always_inline bool drop_local(const char *k, size_t len)
 {
 	zend_ulong h = zend_hash_func(k, len); /* = zend_string_hash_val() */
 	nocopy_shard *sh = nocopy_shard_of(h);
@@ -560,6 +572,11 @@ bool nocopy_drop_local(const char *k, size_t len)
 	bool found = nocopy_remove(sh, h, k, (uint32_t) len);
 	nocopy_unlock(sh);
 	return found;
+}
+
+bool nocopy_drop_local(const char *k, size_t len)
+{
+	return nocopy_a && drop_local(k, len);
 }
 
 /* After a change in Valkey: a sibling's fill that read the old value sees the guard move and drops its copy. */
@@ -571,16 +588,22 @@ static void vk_forget(zend_string *key)
 
 bool nocopy_drop(zend_string *key)
 {
-	if (UNEXPECTED(nocopy_vk_on)) {
+	if (UNEXPECTED(detour)) {
+		if (!nocopy_a) {
+			return false;
+		}
 		int r = nocopy_vk_ready() ? nocopy_vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
 		vk_forget(key);
 		return r == 1;
 	}
-	return nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+	return drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 }
 
 void nocopy_clear_all(void)
 {
+	if (UNEXPECTED(!nocopy_a)) {
+		return;
+	}
 	if (nocopy_vk_on && nocopy_vk_ready()) {
 		nocopy_vk_clear();
 	}
@@ -589,8 +612,12 @@ void nocopy_clear_all(void)
 
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
-	if (UNEXPECTED(nocopy_vk_on)) {
+	if (UNEXPECTED(detour)) {
 		int64_t v = 0;
+		if (!nocopy_a) {
+			*out = 0;
+			return false;
+		}
 		zend_long t = ttl ? ttl : nocopy_ini_ttl;
 		int r = nocopy_vk_ready() ? nocopy_vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) t * 1000, &v) : -1;
 		vk_forget(key); /* the next read fetches it */
@@ -626,7 +653,10 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
-	if (UNEXPECTED(nocopy_vk_on)) {
+	if (UNEXPECTED(detour)) {
+		if (!nocopy_a) {
+			return false;
+		}
 		int r = nocopy_vk_ready() ? nocopy_vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
 		vk_forget(key);
 		return r == 1;
@@ -795,7 +825,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *
 /* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
 static zend_never_inline bool vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
-	if (!nocopy_vk_ready()) {
+	if (!nocopy_a || !nocopy_vk_ready()) { /* no arena: nothing to serve, with or without Valkey */
 		ZVAL_NULL(rv);
 		return false; /* no invalidations: local data may be stale */
 	}
@@ -817,7 +847,7 @@ static zend_never_inline bool vk_fetch(zend_string *key, zval *rv, time_t *exp, 
 
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
-	if (UNEXPECTED(nocopy_vk_on)) {
+	if (UNEXPECTED(detour)) {
 		return vk_fetch(key, rv, exp, delta);
 	}
 	return local_fetch(key, rv, exp, delta);
@@ -866,7 +896,7 @@ bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL
 void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 {
 	zval *k, t;
-	if (!nocopy_vk_on) {
+	if (!detour) {
 		ZEND_HASH_FOREACH_VAL(keys, k) {
 			ZVAL_DEREF(k);
 			if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
@@ -875,7 +905,7 @@ void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 		} ZEND_HASH_FOREACH_END();
 		return;
 	}
-	if (!nocopy_vk_ready()) {
+	if (!nocopy_a || !nocopy_vk_ready()) {
 		return;
 	}
 	zend_string **miss = safe_emalloc(zend_hash_num_elements(keys), sizeof *miss, 0);
@@ -986,7 +1016,7 @@ static bool vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *fai
 
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
 {
-	if (nocopy_vk_on && !o->add_only) {
+	if (nocopy_vk_on && !o->add_only && nocopy_a) {
 		return vk_store_multi(vals, o, failed); /* ponytail: add stays one round trip per key (NX decides first) */
 	}
 	zend_ulong h;
@@ -1026,10 +1056,10 @@ static bool local_info(zend_string *key, nocopy_meta *m)
 
 bool nocopy_info(zend_string *key, nocopy_meta *m)
 {
-	if (!nocopy_vk_on) {
+	if (!detour) {
 		return local_info(key, m);
 	}
-	if (!nocopy_vk_ready()) {
+	if (!nocopy_a || !nocopy_vk_ready()) {
 		return false;
 	}
 	if (!local_info(key, m)) {
@@ -1047,7 +1077,7 @@ bool nocopy_info(zend_string *key, nocopy_meta *m)
 
 void nocopy_scan(nocopy_scan_fn fn, void *arg)
 {
-	if (nocopy_vk_on && !nocopy_vk_ready()) {
+	if (!nocopy_a || (nocopy_vk_on && !nocopy_vk_ready())) {
 		return;
 	}
 	nocopy_ctx *c = &NOCOPY_G(ctx);
@@ -1102,6 +1132,10 @@ static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	}
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
 	uint32_t user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
+	if (UNEXPECTED(!nocopy_a)) {
+		build(NULL, key, rv, o);
+		return;
+	}
 	if (nocopy_vk_on) {
 		vk_store(key, rv, o, user);
 		return;
@@ -1117,6 +1151,10 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 {
 	time_t exp;
 	uint32_t delta;
+	if (UNEXPECTED(detour) && !nocopy_a) {
+		compute(key, fci, fcc, o, rv); /* no leases without an arena */
+		return;
+	}
 	if (fetch(key, rv, &exp, &delta)) {
 		if (!(beta > 0 && exp && delta)) {
 			return;
@@ -1341,13 +1379,21 @@ PHP_FUNCTION(nocopy_remember)
 	}
 }
 
+PHP_FUNCTION(nocopy_shared_with)
+{
+	ZEND_PARSE_PARAMETERS_NONE();
+	RETURN_STRING(!nocopy_a ? "none" : nocopy_vk_on ? "valkey" : shm_attached[0] ? "host" : "process");
+}
+
 PHP_FUNCTION(nocopy_stats)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	nocopy_stats_t s;
-	nocopy_stats(&s);
+	nocopy_stats_t s = {0};
+	if (nocopy_a) {
+		nocopy_stats(&s);
+	}
 	array_init(return_value);
-	add_assoc_long(return_value, "size", nocopy_a->size);
+	add_assoc_long(return_value, "size", nocopy_a ? (zend_long) nocopy_a->size : 0);
 	add_assoc_long(return_value, "used", s.used);
 	add_assoc_long(return_value, "segment_size", s.segment_size);
 	add_assoc_long(return_value, "segments", s.segments);
@@ -1366,6 +1412,11 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "expunges", s.expunges);
 	add_assoc_long(return_value, "lock_steals", s.lock_steals);
 	add_assoc_long(return_value, "leases", s.leases);
+	if (shm_attached[0]) {
+		add_assoc_string(return_value, "shm_name", shm_attached);
+	} else {
+		add_assoc_null(return_value, "shm_name");
+	}
 }
 
 /* ---- FrankenPHP worker mode ---- */
@@ -1382,6 +1433,78 @@ static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 }
 
 /* ---- module ---- */
+
+#if defined(__linux__) && defined(COMPILE_DL_NOCOPY)
+#include <link.h>
+
+typedef struct {
+	uintptr_t self; /* an address inside our .so */
+	uint64_t id;
+	bool found;
+} build_note;
+
+/* dl_iterate_phdr callback: the GNU build id of the object that contains self (the linker's hash of its contents). */
+static int find_build_id(struct dl_phdr_info *info, size_t size, void *arg)
+{
+	(void) size;
+	build_note *b = arg;
+	bool ours = false;
+	for (int i = 0; i < info->dlpi_phnum && !ours; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		ours = ph->p_type == PT_LOAD && b->self - (info->dlpi_addr + ph->p_vaddr) < ph->p_memsz;
+	}
+	if (!ours) {
+		return 0;
+	}
+	for (int i = 0; i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		if (ph->p_type != PT_NOTE) {
+			continue;
+		}
+		const char *n = (const char *) (info->dlpi_addr + ph->p_vaddr), *end = n + ph->p_memsz;
+		while (n + sizeof(ElfW(Nhdr)) <= end) {
+			const ElfW(Nhdr) *h = (const ElfW(Nhdr) *) n;
+			const char *name = n + sizeof *h, *desc = name + ZEND_MM_ALIGNED_SIZE_EX(h->n_namesz, 4);
+			if (h->n_type == NT_GNU_BUILD_ID && h->n_namesz == 4 && memcmp(name, "GNU", 4) == 0 && desc + h->n_descsz <= end) {
+				b->id = zend_hash_func(desc, h->n_descsz);
+				b->found = true;
+				return 1;
+			}
+			n = desc + ZEND_MM_ALIGNED_SIZE_EX(h->n_descsz, 4);
+		}
+	}
+	return 1;
+}
+#endif
+
+/* What processes sharing a named arena must agree on: the code that lays out and reads it. The same binary gives the same id; any other build gets its own arena. */
+static uint64_t layout_id(void)
+{
+	uint64_t id = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION " " ZEND_EXTENSION_BUILD_ID));
+#ifdef COMPILE_DL_NOCOPY
+# ifdef __linux__
+	build_note b = {.self = (uintptr_t) layout_id};
+	dl_iterate_phdr(find_build_id, &b);
+	if (b.found) {
+		return id ^ b.id;
+	}
+# endif
+	/* no build id: hash the file itself */
+	Dl_info dl;
+	int fd = dladdr((void *) layout_id, &dl) && dl.dli_fname ? open(dl.dli_fname, O_RDONLY | O_CLOEXEC) : -1;
+	struct stat st;
+	void *m = fd >= 0 && fstat(fd, &st) == 0 && st.st_size > 0 ? mmap(NULL, (size_t) st.st_size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+	if (fd >= 0) {
+		close(fd);
+	}
+	if (m != MAP_FAILED) {
+		id ^= zend_hash_func(m, (size_t) st.st_size);
+		munmap(m, (size_t) st.st_size);
+		return id;
+	}
+#endif
+	return id ^ zend_hash_func(ZEND_STRL(__DATE__ " " __TIME__)); /* built into PHP, or our .so unreadable */
+}
 
 static ZEND_INI_MH(OnShmName)
 {
@@ -1595,20 +1718,22 @@ PHP_MINIT_FUNCTION(nocopy)
 
 	size_t need;
 	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
-	const char *err = NULL;
-	if (shm_name && nocopy_apc_on) {
-		/* the name carries the layout id, so another build never attaches */
-		uint64_t abi = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION ZEND_TOSTR(PHP_VERSION_ID) ZEND_TOSTR(ZEND_DEBUG)))
-			^ (sizeof(zend_array) << 8 ^ sizeof(Bucket) << 16 ^ sizeof(zend_string) << 24 ^ (uint64_t) sizeof(nocopy_arena) << 32);
-		char name[64];
-		snprintf(name, sizeof name, "%s.%08x", shm_name, (uint32_t) (abi ^ abi >> 32));
-		err = nocopy_arena_create(arena_size, hint, name, abi, &need);
-		if (err && err != NOCOPY_TOO_SMALL) {
-			php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s %s: %s, using a cache of this process's own", "nocopy.shm_name", name, err);
-			err = nocopy_arena_create(arena_size, hint, NULL, 0, &need);
+	const char *err;
+	if (shm_name) {
+		nocopy_named named;
+		err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named);
+		if (!err) {
+			memcpy(shm_attached, named.name, sizeof shm_attached);
+			if (named.other[0]) {
+				php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
+			}
+		} else if (err != NOCOPY_TOO_SMALL) {
+			/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
+			php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
+			err = NULL;
 		}
 	} else {
-		err = nocopy_arena_create(arena_size, hint, NULL, 0, &need);
+		err = nocopy_arena_create(arena_size, hint, &need);
 	}
 	const char *p = apcu_compat ? "apc" : "nocopy";
 	if (err == NOCOPY_TOO_SMALL) { /* APCu's wording: its tests and users grep for it */
@@ -1619,7 +1744,10 @@ PHP_MINIT_FUNCTION(nocopy)
 		zend_error(E_CORE_ERROR, "nocopy: unable to create the %zu byte cache: %s", arena_size, err);
 		return FAILURE;
 	}
-	arena_empty_init();
+	if (nocopy_a) {
+		arena_empty_init();
+	}
+	detour = nocopy_vk_on || !nocopy_a;
 	pthread_atfork(NULL, NULL, atfork_child);
 
 	zend_function *hr = zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("frankenphp_handle_request"));
@@ -1655,7 +1783,7 @@ PHP_RINIT_FUNCTION(nocopy)
 #if defined(COMPILE_DL_NOCOPY) && defined(ZTS)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
-	if (NOCOPY_G(ctx).slot < 0) {
+	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) {
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
 	NOCOPY_G(zero_copy) = request_scope;

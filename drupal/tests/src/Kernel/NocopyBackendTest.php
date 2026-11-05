@@ -96,8 +96,7 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
 
   public function testPermanentTtlOnlyWithValkey(): void {
     $ttl = fn (string $bin) => (fn ($expire) => $this->ttl($expire))->call($this->createCacheBackend($bin), CacheBackendInterface::CACHE_PERMANENT);
-    $shared = (string) ini_get('nocopy.valkey') !== '';
-    $this->assertSame($shared ? 31536000 : 0, $ttl('render'));
+    $this->assertSame(nocopy_shared_with() === 'valkey' ? 31536000 : 0, $ttl('render'));
     $this->assertSame(0, $ttl('config'));
   }
 

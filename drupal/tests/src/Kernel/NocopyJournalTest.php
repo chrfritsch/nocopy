@@ -30,9 +30,6 @@ class NocopyJournalTest extends KernelTestBase {
 
   protected function setUp(): void {
     parent::setUp();
-    if (NocopyJournal::shared()) {
-      $this->markTestSkipped('nocopy.valkey: no journal');
-    }
     $this->installSchema('nocopy', ['nocopy_journal']);
     $this->site = $this->randomMachineName();
   }

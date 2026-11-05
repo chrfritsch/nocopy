@@ -90,6 +90,7 @@ extern bool nocopy_apc_on;
 extern zend_long nocopy_ini_ttl;
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
+bool nocopy_available(void); /* false: nocopy.shm_name could not be attached; the functions below then keep and serve nothing */
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
 /* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value; failed: key => -1 (may be NULL). */

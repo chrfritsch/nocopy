@@ -28,4 +28,11 @@ function nocopy_put_multiple(array $values, int $ttl = 0, bool $serialize = fals
 /** Fetch, or compute once across workers and store. $beta > 0 refreshes early (XFetch), scaled by the measured compute time. */
 function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
 
+/**
+ * Who sees this process's writes: "process" (its own memory, shared with the processes forked from the same parent, such as
+ * php-fpm's workers), "host" (every process on this machine that attached to nocopy.shm_name), "valkey" (every process on the
+ * same nocopy.valkey and prefix), "none" (nocopy.shm_name could not be attached: nothing is kept or served).
+ */
+function nocopy_shared_with(): string {}
+
 function nocopy_stats(): array {}

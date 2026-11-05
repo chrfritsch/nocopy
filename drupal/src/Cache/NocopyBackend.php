@@ -22,7 +22,7 @@ class NocopyBackend implements CacheBackendInterface {
   private const TTL_SLACK = 3600;
 
   // With nocopy.valkey: permanent items expire after a year, so Valkey's volatile-* eviction can drop them
-  // but never tag tokens, bin state or these small bins (no TTL). Not from Settings: the container bin is read before it exists.
+  // but never tag tokens, bin state or these small bins (no TTL).
   private const PERM_TTL = 31536000, PERMANENT_BINS = ['container', 'bootstrap', 'config', 'discovery'];
 
   // cid => TRUE: deleted inside a transaction, removed after the commit (a concurrent request could refill them from uncommitted data).
@@ -159,7 +159,7 @@ class NocopyBackend implements CacheBackendInterface {
 
   protected function ttl($expire): int {
     if ($expire == CacheBackendInterface::CACHE_PERMANENT) {
-      return NocopyJournal::shared() && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
+      return nocopy_shared_with() === 'valkey' && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
     }
     return max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }

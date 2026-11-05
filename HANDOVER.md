@@ -9,7 +9,7 @@ A sellable PHP extension in the style of Relay: a zero-copy shared-memory cache 
 for APCu (`apcu_*`, `APCUIterator`, `apc.*` INI) and adds extras (`nocopy_*`). Chosen after reviewing
 php-src for weak spots (opcache-style immutable arrays make zero-copy reads possible).
 
-## State (2026-11-04)
+## State (2026-11-05)
 
 Works, not released. Git repo, MIT license (2026-11-04). CI: `.github/workflows/ci.yml` (PHP 8.3/8.4/8.5 x amd64/arm64 + ZTS 8.4 + FrankenPHP; not run on GitHub yet: no remote).
 Renamed stash -> nocopy (2026-11-04): extension, `nocopy_*` functions, `nocopy.*` INI, `NOCOPY_*` macros, files, Symfony bundle (`Chrfritsch\NocopyBundle`, `cache.adapter.nocopy`), Docker images `nocopy-linux`/`nocopy-zts`. The `apcu_*` layer is unchanged. Packagist, PECL and nocopy.dev were free; the GitHub user `nocopy` is taken.
@@ -242,8 +242,12 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
 - No way to release zero-copy pins before the request ends (`nocopy_checkpoint`, `nocopy_scope` and FrankenPHP `request_scope=1` zero-copy were removed 2026-11-03): each relied on userland not keeping a value, and a broken promise was a use-after-free. Long-lived workers get copy mode.
 
 - `nocopy.shm_name` (2026-11-04): opt-in named POSIX shm at a fixed address (ARCHITECTURE.md), so the CLI, other pools and restarted servers attach. Needed: empty arrays point to `ARENA_EMPTY` in the header instead of `zend_empty_array` (another exec'd process segfaulted on it, test 057 without the fix), `pDestructor = NULL` in persisted arrays, layout globals derived from the header (`adopt`).
-  `docker/shm-name.sh` (CI): php-fpm 8.5 and FrankenPHP 8.4 (classic zero-copy, worker copy mode) share values with the CLI both ways, survive `USR2` reload and restart; 3 CLI writers overwriting keys during 2000-3000 server reads: 0 misses, logs clean; a CLI as another user gets a warning and a private cache. Suite 8.3/8.4/8.5/ZTS/amd64, tests/c TSAN, `stress.sh 10` clean. Read/write speed not re-measured (read path unchanged).
-  Open: permissions when the fpm master (root) and Drush (deploy user) differ (mode 0600, no group option yet); old builds' segments stay in /dev/shm; PID namespaces must match; macOS untested; the Drupal journal can go when `nocopy.shm_name` is set (next).
+  `docker/shm-name.sh` (CI): php-fpm 8.5 and FrankenPHP 8.4 (classic zero-copy, worker copy mode) share values with the CLI both ways, survive `USR2` reload and restart; 3 CLI writers overwriting keys during 2000-3000 server reads: 0 misses, logs clean; a CLI as another user gets a warning and no cache (since 2026-11-05). Suite 8.3/8.4/8.5/ZTS/amd64, tests/c TSAN, `stress.sh 10` clean. Read/write speed not re-measured (read path unchanged).
+- Named arena, clean pass (2026-11-05). A process that cannot attach the named cache has **no cache** (fetches miss, writes return false, one startup warning; caller errors still throw), never a private fallback that would silently split the cache. `detour` (one static bool) keeps that and Valkey off the hot path; `nocopy_shared_with()` = process/host/valkey/none.
+  Lifecycle: every process holds `flock(LOCK_SH)` on the shm fd; `LOCK_EX|LOCK_NB` proves a segment unused, so a dead creator's unfinished segment is replaced and other builds' unused `<base>.<abi>` segments are removed at start (in-use ones are reported); `hold()` re-checks the inode after locking (without it 1-2 of 24 concurrent starters saw the cache, test 060). Name check (one leading slash, <= 40 chars), `posix_fallocate` (no SIGBUS on a full tmpfs). Layout id = version + Zend build id + the `.so`'s GNU build-id (file hash only without one): named start within noise of anonymous (~5.0-5.7 ms per `php -r ""` either way).
+  Drupal: `$settings['nocopy_shared'] = TRUE` drops the journal and is verified in every process (throws unless `nocopy_shared_with()` is host or valkey); this replaces the INI check for Valkey too. Drush must run as the fpm pool's user (mode 0600). e2e (short run): anonymous DB queries per request 5 (nocopy-all, journal) / 0 (shm) / 0 (valkey), logged-in 8/7/7, first request after fpm restart 627/156/167 ms. Store path +2..4 instructions, fetch unchanged within noise.
+  Tests 057-060, Drupal `NocopySharedTest` + all 4 modes (copy, request_scope, shm_name, valkey), suite 8.3/8.4/8.5/ZTS 8.4, tests/c TSAN, `stress.sh 15`, `shm-name.sh` fpm + FrankenPHP: all clean.
+  Open: no group/mode option (root master + deploy user must match); PID namespaces must match (fixed address is per host, not per container unless /dev/shm is shared); macOS untested (no /dev/shm scan there, `collect` is Linux-only).
 
 ## Known gaps / next steps (rough priority)
 
