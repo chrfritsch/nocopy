@@ -7,7 +7,7 @@ command -v gcc >/dev/null && command -v valkey-server >/dev/null || { apt-get up
 rm -rf /build && mkdir /build && cp /src/*.c /src/*.h /src/config.m4 /src/config.w32 /build/
 (cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>/build/make.err) || { cat /build/make.err; exit 1; }
 mkdir -p /app && cp /src/docker/shm-name/app.php /app/
-ini() { printf 'extension=/build/modules/nocopy.so\napc.enable_cli=1\nnocopy.shm_name=/nocopy\nnocopy.shm_size=32M\n%s\n' "$1" > /usr/local/etc/php/conf.d/zz-nocopy.ini; }
+ini() { printf 'extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy\nnocopy.shm_size=32M\n%s\n' "$1" > /usr/local/etc/php/conf.d/zz-nocopy.ini; }
 ini ""
 rm -f /dev/shm/nocopy.*
 bad=0

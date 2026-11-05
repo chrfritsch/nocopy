@@ -7,7 +7,7 @@ nocopy
 --FILE--
 <?php
 $code = '$f = fopen(PHP_BINARY, "r"); $s = stream_socket_server("tcp://127.0.0.1:0"); nocopy_put("a", 1); echo nocopy_stats()["valkey_listener"], "\n"; fgets(STDIN);';
-$p = proc_open([PHP_BINARY, '-n', '-d', 'extension=' . getenv('NOCOPY_SO'), '-d', 'apc.enable_cli=1', '-d', 'nocopy.valkey=127.0.0.1:6379', '-d', 'nocopy.valkey_prefix=t062:', '-r', $code],
+$p = proc_open([PHP_BINARY, '-n', '-d', 'extension=' . getenv('NOCOPY_SO'), '-d', 'nocopy.valkey=127.0.0.1:6379', '-d', 'nocopy.valkey_prefix=t062:', '-r', $code],
     [0 => ['pipe', 'r'], 1 => ['pipe', 'w']], $pipes);
 $pid = (int) fgets($pipes[1]);
 $fds = array_map(fn ($f) => @readlink("/proc/$pid/fd/$f"), array_diff(scandir("/proc/$pid/fd"), ['.', '..']));

@@ -12,5 +12,5 @@ rm -rf $W/tests && cp -R $W/apcu/tests $W/tests
 print -r -- '<?php if (!function_exists("apcu_store")) die("skip apcu_* not available"); ?>' > $W/tests/skipif.inc
 sed -i '' "s|\$ext = (substr(PHP_OS, 0, 3) == 'WIN') ? 'php_apcu.dll' : 'apcu.so';|\$ext = '$NOCOPY_SO';|" $W/tests/server_test.inc
 cd $W && NO_INTERACTION=1 TEST_PHP_EXECUTABLE=$PHP $PHP $RT -q \
-  -d extension=$NOCOPY_SO -d apc.enable_cli=1 ${=EXTRA} tests 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E "^FAIL|Tests (passed|failed|skipped)"
+  -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d apc.enable_cli=1 ${=EXTRA} tests 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E "^FAIL|Tests (passed|failed|skipped)"
 # expected failures: apc54_014 (preload_path), apcu_sma_info (no SMA), ghbug335 (slam defense) -- all out of scope

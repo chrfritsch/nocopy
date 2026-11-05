@@ -27,7 +27,7 @@ run_cfg() { name=$1; raw=$2; shift 2
   kill $fpm; wait $fpm 2>/dev/null; sleep 1
 }
 run_cfg "apcu / default pool" 0 "extension=$APCU" "apc.serializer=default"
-run_cfg "nocopy / default pool" 0 "extension=/build/modules/nocopy.so"
+run_cfg "nocopy / default pool" 0 "extension=/build/modules/nocopy.so" "nocopy.apcu_compat=1"
 run_cfg "apcu / raw pool" 1 "extension=$APCU" "apc.serializer=default"
-run_cfg "nocopy copy / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.request_scope=0"
-run_cfg "nocopy zero / raw pool" 1 "extension=/build/modules/nocopy.so"
+run_cfg "nocopy copy / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.apcu_compat=1" "nocopy.request_scope=0"
+run_cfg "nocopy zero / raw pool" 1 "extension=/build/modules/nocopy.so" "nocopy.apcu_compat=1"

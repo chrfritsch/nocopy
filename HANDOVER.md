@@ -276,6 +276,11 @@ Earlier "zero-copy write is 50-100x slower" rows were a bug (retire-list pile-up
   unknown CA, verify off, IP not in the cert, no client cert, bad key file (startup warning), plain to the TLS port. Images now carry libssl-dev + pkg-config
   (rebuilt; their Debian valkey now also on 8.3/8.4, so the Valkey tests run there). Suite 8.3/8.4/8.5/amd64/ZTS (+ redis-server: 14 Valkey tests incl. TLS), TSAN, stress 10,
   shm-name.sh fpm, Drupal 4 modes: clean. Not done: Sentinel, Cluster; TLS over a unix socket; CRL/OCSP; a `tls_server_name` override.
+- APCu layer opt-in (2026-11-05, "fresh start" #4; user chose docs + default, kept the apc.* aliases): `nocopy.apcu_compat` defaults to 0, so a plain load registers only
+  `nocopy_*`/`nocopy.*` and loads next to real APCu without a warning. README leads with `nocopy_*` (intro, example, quick start); "Differences from APCu" became "APCu layer"
+  (how to enable, thin layer, no native gain where the caller serializes first). The test suite, stress, benches (ab, bench, fpm-bench, stampede, frankenphp, sfapp, all.sh,
+  symfony-all), apcu-suite.sh and drupal-bench's serializer probe pass `nocopy.apcu_compat=1`; symfony.sh runs layer on / default / next to APCu. Test 064 (default off).
+  Suite 8.3/8.4/8.5/amd64/ZTS, stress 10, shm-name fpm, FrankenPHP, Symfony 8 smoke (3 modes), Drupal 4 modes: clean.
 
 ## Known gaps / next steps (rough priority)
 

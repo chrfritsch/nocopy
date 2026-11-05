@@ -54,6 +54,7 @@ cp /src/bench/drupal/settings.*.php /src/bench/drupal/fast.services.yml $D/web/s
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
+# nocopy.apcu_compat=1 in the nocopy configs: only for this probe (the module uses nocopy_*)
 # with Valkey the listener drops the writer's own fresh copy: refetch until it stays local
 echo '<?php apcu_store("probe", new ArrayObject(array_fill(0, 1000, str_repeat("x", 100)))); for ($i = 0; $i < 200; $i++, usleep(1000)) { apcu_fetch("probe"); foreach (new APCUIterator("/^probe$/") as $e) { echo $e["mem_size"]; break 2; } }' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
@@ -92,18 +93,22 @@ for cfg in $CONFIGS; do
 extension=igbinary
 apc.serializer=igbinary"; SET=stock ;;
     nocopy-fast) EXT="extension=/build/modules/nocopy.so
+nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fast ;;
     nocopy-fast-routes) EXT="extension=/build/modules/nocopy.so
+nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary"; SET=fastroutes ;;
     nocopy-all) EXT="extension=/build/modules/nocopy.so
+nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary
 nocopy.shm_name=/nocopy-bench"; SET=all ;;
     redis|redis2) EXT="extension=$APCU
 extension=redis"; SET=redis ;;
     nocopy-valkey) EXT="extension=/build/modules/nocopy.so
+nocopy.apcu_compat=1
 extension=igbinary
 nocopy.serializer=igbinary
 nocopy.valkey=127.0.0.1:6379"; SET=all ;;

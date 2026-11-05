@@ -6,7 +6,7 @@ nocopy
 <?php
 require __DIR__ . '/valkey_skip.inc';
 if (!is_executable('/usr/bin/openssl') || !($vs = trim((string) shell_exec('command -v valkey-server || command -v redis-server')))) die('skip needs openssl and valkey-server');
-if (str_contains((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d apc.enable_cli=1 -d nocopy.valkey=tls://localhost:1 -r "nocopy_get(1);" 2>&1'), 'no TLS')) die('skip built without OpenSSL');
+if (str_contains((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d nocopy.valkey=tls://localhost:1 -r "nocopy_get(1);" 2>&1'), 'no TLS')) die('skip built without OpenSSL');
 ?>
 --FILE--
 <?php
@@ -29,7 +29,7 @@ function child(string $url, array $ini, string $code): string
 {
     $ini += ['nocopy.valkey_tls_ca_file' => "$GLOBALS[d]/ca.crt", 'nocopy.valkey_tls_cert_file' => "$GLOBALS[d]/client.crt", 'nocopy.valkey_tls_key_file' => "$GLOBALS[d]/client.key"];
     $args = '';
-    foreach ($ini + ['apc.enable_cli' => 1, 'nocopy.valkey' => $url, 'nocopy.valkey_prefix' => 't063:'] as $k => $v) {
+    foreach ($ini + ['nocopy.valkey' => $url, 'nocopy.valkey_prefix' => 't063:'] as $k => $v) {
         $args .= ' -d ' . escapeshellarg("$k=$v");
     }
     $code = '$GLOBALS["VK_PORT"] = 6391; require ' . var_export(__DIR__ . '/valkey.inc', true) . '; ' . $code;

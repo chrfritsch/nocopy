@@ -4,8 +4,8 @@
 
 **A shared-memory cache for PHP that hands out cached arrays without copying them.**
 
-A drop-in replacement for APCu (`apcu_*`, `APCUIterator`, `apc.*` INI) with a lock-free read path,
-segment-based eviction, and stampede-safe `nocopy_remember()`.
+Lock-free reads, segment-based eviction, stampede-safe `nocopy_remember()`, one cache for php-fpm and the CLI,
+and Valkey as a shared tier for several servers. An optional APCu layer (`apcu_*`) eases migration.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![PHP 8.3 | 8.4 | 8.5](https://img.shields.io/badge/PHP-8.3%20%7C%208.4%20%7C%208.5-777bb4.svg)
@@ -15,8 +15,8 @@ segment-based eviction, and stampede-safe `nocopy_remember()`.
 </div>
 
 ```php
-apcu_store('products', $rows);      // 1,000 rows
-$rows = apcu_fetch('products');     // APCu: ~200 µs to rebuild the array. nocopy: ~13 ns, any size.
+nocopy_put('products', $rows);      // 1,000 rows
+$rows = nocopy_get('products');     // APCu: ~200 µs to rebuild the array. nocopy: ~13 ns, any size.
 ```
 
 > **Status:** works and is tested in CI, not released yet. No PECL/PIE package and no Packagist entry yet: build from source.
@@ -27,7 +27,7 @@ APCu copies every value out of shared memory on each fetch: arrays are rebuilt e
 so the cost grows with the size of what you cache. Readers also take a lock, so throughput drops as workers are added.
 
 nocopy stores arrays and strings as **opcache-style immutable structures** in one `mmap` arena that all php-fpm workers
-(or ZTS threads) share. `apcu_fetch()` then returns a pointer straight into shared memory, with no copy, no unserialize and no lock.
+(or ZTS threads) share. `nocopy_get()` then returns a pointer straight into shared memory, with no copy, no unserialize and no lock.
 Per-worker pins keep that memory alive until the request ends, so a fetched value can never point at freed memory.
 
 Measured on Linux (Docker, arm64, PHP 8.5, release builds; details and method in [`HANDOVER.md`](HANDOVER.md)):
@@ -67,14 +67,14 @@ on a single server, `nocopy.valkey` on several ([details](drupal)).
 
 ## Features
 
-- **APCu-compatible.** `apcu_*`, `APCUIterator`, the `APC_*` constants and the `apc.*` INI names. Passes APCu's own test suite except three tests for documented non-goals ([differences](#differences-from-apcu)).
 - **Zero-copy reads** under php-fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode. Long-running workers and the CLI get a safe **copy mode** that still reuses private copies of unchanged entries.
 - **Lock-free reads, sharded writes.** Up to 8 shards with their own locks. A writer killed with `kill -9` mid-write is detected and its shard repaired.
 - **Smarter eviction when full.** APCu wipes the whole cache. nocopy evicts its oldest segments and keeps entries read since they were written, using Segcache-style merging with a ghost list for keys that return.
-- **Stampede protection.** `nocopy_remember()` and `apcu_entry()` run the callback once per key across all workers. `nocopy_remember()` also refreshes early via XFetch.
+- **Stampede protection.** `nocopy_remember()` runs the callback once per key across all workers and refreshes early via XFetch.
 - **Symfony bundle** with `cache.adapter.nocopy`, which stores values without Symfony's marshaller so fetches stay zero-copy.
 - **Valkey tier** (`nocopy.valkey`): Valkey becomes the cache of record shared by all servers, nocopy the zero-copy local copy in front of it. nocopy.so speaks RESP3 itself (no phpredis) and keeps local copies in sync through Valkey's client-side tracking.
 - **Drupal module** with a cache backend for all bins and cache tag checksums, shared by php-fpm and Drush (`nocopy.shm_name`, or `nocopy.valkey` for several servers).
+- **Optional APCu layer** (`nocopy.apcu_compat=1`): `apcu_*`, `APCUIterator`, `APC_*` and the `apc.*` INI names on top of the same cache, for code you cannot change yet. Passes APCu's own test suite except three tests for documented non-goals ([APCu layer](#apcu-layer)).
 
 ## Quick start
 
@@ -83,18 +83,18 @@ Requires PHP 8.3+ with `phpize` (e.g. the `php-dev` package), a C compiler, and 
 ```sh
 git clone <this repository> nocopy && cd nocopy
 phpize && ./configure && make
-php -d extension=$PWD/modules/nocopy.so -d apc.enable_cli=1 \
-    -r 'apcu_store("a", [1, 2, 3]); var_dump(apcu_fetch("a"));'
+php -d extension=$PWD/modules/nocopy.so -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
 ```
 
-To enable it for your server, load it in `php.ini` (or a `conf.d` file) **instead of** APCu:
+To enable it for your server, load it in `php.ini` (or a `conf.d` file):
 
 ```ini
 extension=/path/to/nocopy/modules/nocopy.so
 nocopy.shm_size=128M
+;nocopy.shm_name=/nocopy      ; one cache for php-fpm and the CLI, kept over restarts
 ```
 
-Existing `apcu_*` code and `apc.shm_size` / `apc.ttl` / `apc.entries_hint` settings keep working.
+Coming from APCu with code you cannot change yet: see [APCu layer](#apcu-layer).
 
 ## Usage
 
@@ -141,7 +141,7 @@ framework:
         app: cache.adapter.nocopy
 ```
 
-The adapter uses `nocopy_*` only, so it also works with `nocopy.apcu_compat=0` and next to real APCu.
+The adapter uses `nocopy_*` only, so it needs no APCu layer and works next to real APCu.
 `clear()` bumps a namespace version instead of deleting keys, and old entries leave through normal eviction.
 
 ### Drupal
@@ -165,23 +165,23 @@ All settings are `PHP_INI_SYSTEM` (php.ini only).
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `nocopy.shm_size` | `32M` | Arena size. Alias: `apc.shm_size` |
+| `nocopy.shm_size` | `32M` | Arena size. Alias (APCu layer): `apc.shm_size` |
 | `nocopy.shm_name` | (off) | Name of a POSIX shared-memory object, e.g. `/nocopy`: the CLI (Drush, cron), other fpm pools and restarted servers attach to the same cache ([below](#shared-by-name)). A process that cannot attach has no cache. Off: shared by php-fpm's or the server's own workers only, gone when it stops |
-| `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias: `apc.ttl` |
-| `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias: `apc.entries_hint` |
+| `nocopy.ttl` | `0` | Default TTL in seconds (0 = none). Alias (APCu layer): `apc.ttl` |
+| `nocopy.entries_hint` | `4096` | Sizes the fixed slot table (~2 slots per hinted entry, at least one per 256 B of arena). Raise it for many entries under ~300 B, or the cache evicts before its memory is full. Alias (APCu layer): `apc.entries_hint` |
 | `nocopy.request_scope` | `auto` | `auto`: zero-copy under fpm, CGI, Apache, LiteSpeed, `php -S` and FrankenPHP classic mode, copy mode elsewhere. `1`: zero-copy also under the CLI (pins every segment read until the script ends). `0`: always copy |
 | `nocopy.local_size` | `8M` | Copy mode only: keeps private copies of arrays and strings (≥ 512 B) fetched twice and hands them out again while the entry is unchanged. Counts against `memory_limit`. `0` = off |
-| `nocopy.serializer` | `php` | `php` or `igbinary`: the format for values stored serialized (objects, shared references). Arrays and scalars are never serialized. `igbinary` needs the igbinary extension, otherwise a startup warning and `php`. Alias: `apc.serializer` |
-| `nocopy.apcu_compat` | `1` | Registers `apcu_*`, `APCUIterator`, `APC_*` and `apc.*`. `0`: only `nocopy_*`, so real APCu can be loaded too. If APCu is already loaded, nocopy switches to `0` itself and logs a startup warning |
+| `nocopy.serializer` | `php` | `php` or `igbinary`: the format for values stored serialized (objects, shared references). Arrays and scalars are never serialized. `igbinary` needs the igbinary extension, otherwise a startup warning and `php`. Alias (APCu layer): `apc.serializer` |
+| `nocopy.apcu_compat` | `0` | `1`: also registers `apcu_*`, `APCUIterator`, `APC_*` and `apc.*` ([APCu layer](#apcu-layer)). `0`: only `nocopy_*`, so real APCu can be loaded next to it. With `1` and APCu already loaded, nocopy stays at `0` and logs a startup warning |
 | `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `tls://…` or `rediss://…` (TLS), `host:port` or `unix:///path`: share the cache through Valkey ([below](#valkey)). `phpinfo()` hides the credentials |
 | `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey; servers with the same prefix share one cache |
 | `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connect or a reply before treating Valkey as down |
 | `nocopy.valkey_tls_ca_file` | (system store) | PEM file of the CAs that may sign the server certificate, for `tls://` / `rediss://` |
 | `nocopy.valkey_tls_cert_file`, `nocopy.valkey_tls_key_file` | (none) | Client certificate (chain) and key, where the server asks for one (`tls-auth-clients`) |
 | `nocopy.valkey_tls_verify` | `1` | Verify the server certificate and its name (or IP); `0` only for tests |
-| `apc.enabled`, `apc.enable_cli` | `1`, `0` | As in APCu. These switch the `apcu_*` functions, not `nocopy_*` |
+| `apc.enabled`, `apc.enable_cli` | `1`, `0` | APCu layer only, as in APCu. These switch the `apcu_*` functions, not `nocopy_*` (which work in the CLI too) |
 
-If both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
+With the APCu layer, if both an `apc.*` alias and its `nocopy.*` name are set, the `nocopy.*` value wins and a startup warning is logged.
 FrankenPHP worker scripts switch to copy mode at their first `frankenphp_handle_request()`, whatever `request_scope` says.
 
 ### Shared by name
@@ -269,9 +269,22 @@ flowchart LR
 
 The full design, including invariants and failure handling, is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## Differences from APCu
+## APCu layer
 
-The API behaves the same. What depends on APCu's internal layout differs by design:
+For code that calls `apcu_*` and cannot change yet, load nocopy **instead of** APCu with the layer on:
+
+```ini
+extension=/path/to/nocopy/modules/nocopy.so
+nocopy.apcu_compat=1
+apc.shm_size=128M          ; apc.* sizing names work as aliases of nocopy.*
+```
+
+`apcu_*`, `APCUIterator` and the `APC_*` constants then use the same cache as `nocopy_*` (`apcu_entry()` gets the single flight of
+`nocopy_remember()`). It is a thin layer over the native API, and it does not bring the native gains where the caller serializes first:
+Symfony's `cache.adapter.apcu`, for example, hands over strings, so nothing is left to read without a copy. Use the
+[Symfony bundle](#symfony), the [Drupal module](#drupal) or `nocopy_*` for that.
+
+The API behaves as in APCu. What depends on APCu's internal layout differs by design:
 
 | | APCu | nocopy |
 |---|---|---|

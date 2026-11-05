@@ -8,6 +8,6 @@ run_cfg() { name=$1; shift; : > $HERE/results-sf/$name.jsonl
   for g in read write parallel; do $PHP "$@" ${=COMMON} $HERE/symfony.php $g >> $HERE/results-sf/$name.jsonl 2>>$HERE/results-sf/$name.err; done; }
 run_cfg apcu_php     -d extension=$APCU_SO -d apc.serializer=php
 run_cfg apcu_default -d extension=$APCU_SO -d apc.serializer=default
-run_cfg nocopy_zero   -d extension=$NOCOPY_SO -d nocopy.request_scope=1
-run_cfg nocopy_copy   -d extension=$NOCOPY_SO -d nocopy.request_scope=0
+run_cfg nocopy_zero   -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d nocopy.request_scope=1
+run_cfg nocopy_copy   -d extension=$NOCOPY_SO -d nocopy.apcu_compat=1 -d nocopy.request_scope=0
 $PHP $HERE/table.php results-sf

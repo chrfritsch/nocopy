@@ -37,7 +37,7 @@ zend_long nocopy_ini_ttl;
 static char *shm_name; /* nocopy.shm_name: attachable by any process, not only forks */
 static bool detour; /* Valkey on, or no arena: operations leave the local fast path (one check on it, set in MINIT) */
 static char shm_attached[64]; /* the object mapped; empty: an anonymous arena, or none (nocopy_a NULL: unavailable) */
-static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat = true;
+static bool ini_enabled = true, ini_enable_cli, request_scope, apcu_compat;
 bool nocopy_apc_on; /* apc.enabled, and apc.enable_cli under the CLI SAPI */
 typedef int (*igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
 typedef int (*igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
@@ -1580,7 +1580,7 @@ static ZEND_INI_MH(OnTtl)
 
 PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.request_scope", "auto", PHP_INI_SYSTEM, OnRequestScope)
-	PHP_INI_ENTRY("nocopy.apcu_compat", "1", PHP_INI_SYSTEM, OnBool)
+	PHP_INI_ENTRY("nocopy.apcu_compat", "0", PHP_INI_SYSTEM, OnBool)
 	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
@@ -1711,7 +1711,7 @@ PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
 	if (apcu_compat && zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: APCu is loaded, running without the apcu_* layer (nocopy.apcu_compat=0)");
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.apcu_compat=1, but APCu is loaded: running without the apcu_* layer");
 		apcu_compat = false;
 	}
 	zend_register_ini_entries(ini_nocopy, module_number);

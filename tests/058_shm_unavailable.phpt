@@ -26,7 +26,7 @@ var_dump(iterator_count(new APCUIterator()), nocopy_stats()['size'], nocopy_stat
 apcu_clear_cache();
 PHP;
 echo shell_exec('/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' . escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-    . ' -d apc.enable_cli=1 -d nocopy.shm_name=/nocopy-t058 -r ' . escapeshellarg($code) . ' 2>&1');
+    . ' -d nocopy.apcu_compat=1 -d apc.enable_cli=1 -d nocopy.shm_name=/nocopy-t058 -r ' . escapeshellarg($code) . ' 2>&1');
 var_dump(nocopy_get('mine'), nocopy_get('a'), nocopy_get('b'));
 ?>
 --CLEAN--

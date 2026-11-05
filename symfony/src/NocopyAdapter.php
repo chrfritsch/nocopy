@@ -5,7 +5,7 @@ namespace Chrfritsch\NocopyBundle;
 use Symfony\Component\Cache\Adapter\AbstractAdapter;
 use Symfony\Component\Cache\Exception\CacheException;
 
-/** Symfony cache pool on nocopy_*: works with nocopy.apcu_compat=0 and next to real APCu. */
+/** Symfony cache pool on nocopy_*: needs no APCu layer, works next to real APCu. */
 class NocopyAdapter extends AbstractAdapter
 {
     public function __construct(string $namespace = '', int $defaultLifetime = 0, ?string $version = null)
