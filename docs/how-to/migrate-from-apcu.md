@@ -17,7 +17,8 @@ Replace calls one to one:
 
 Arrays and scalars are never serialized: that is where zero-copy comes from. Most objects aren't either: a fetch rebuilds
 them from their stored properties (or `__serialize()` array, or enum case), whose strings and arrays stay zero-copy, and runs
-`__wakeup`/`__unserialize` as `unserialize()` would. Objects with `__sleep` or `Serializable` are stored serialized, as in APCu.
+`__wakeup`/`__unserialize` as `unserialize()` would, and `__sleep` is called on store as `serialize()` would. Objects with `Serializable`
+(or extending most internal classes) are stored serialized, as in APCu.
 
 For frameworks: [Symfony bundle](symfony.md), [Drupal module](../../drupal/README.md).
 

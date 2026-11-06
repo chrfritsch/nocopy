@@ -39,13 +39,16 @@ static zend_always_inline void key_put(const nocopy_keys *t, nocopy_kslot *s, co
 #define NC_OREF IS_OBJECT /* in a graph: Z_LVAL is the object's index */
 #define NC_RREF IS_REFERENCE /* in a graph: Z_LVAL is the shared reference's index */
 #define NC_SPINE IS_PTR   /* in a graph: an array with objects or shared references below it, copied on fetch */
+#define NC_DEFAULT IS_INDIRECT /* in a K_SLEEP slot: the class's default value */
 /* Graph values are plain (at most IS_ARRAY) or one of the markers above. */
 
 /* How a class's objects are stored, in the low bits of its fingerprint (0: not as a node, so the value is serialized). */
 #define K_SLOTS 1  /* the raw property slots */
 #define K_WAKEUP 2 /* the slots, then __wakeup() */
-#define K_DATA 3   /* props[0]: __serialize()'s array, given to __unserialize() */
-#define K_ENUM 4   /* props[0]: the case's name */
+#define K_SLEEP 3  /* the slots __sleep() names, NC_DEFAULT in the others */
+#define K_SLEEPW 4 /* K_SLEEP, then __wakeup() */
+#define K_DATA 5   /* props[0]: __serialize()'s array, given to __unserialize() */
+#define K_ENUM 6   /* props[0]: the case's name */
 #define K_MASK 7
 static zend_always_inline uint32_t fp_kind(uint64_t fp) { return (uint32_t) (fp & K_MASK); }
 
@@ -78,7 +81,7 @@ static zend_always_inline size_t graph_head(uint32_t ncls, uint32_t nref, uint32
 static zend_always_inline size_t obj_size(uint32_t nprops) { return offsetof(nc_obj, props) + nprops * sizeof(zval); }
 
 static zend_always_inline uint32_t obj_nz(const nc_class *c, const nc_obj *o) { return c[o->cls].nprops + o->dyn; }
-static zend_always_inline uint32_t kind_nprops(const zend_class_entry *ce, uint32_t kind) { return kind <= K_WAKEUP ? (uint32_t) ce->default_properties_count : 1; }
+static zend_always_inline uint32_t kind_nprops(const zend_class_entry *ce, uint32_t kind) { return kind <= K_SLEEPW ? (uint32_t) ce->default_properties_count : 1; }
 
 /* The kind (as serialize() treats the class) and a hash of what must not change: for slots, their names, visibility, types. */
 static uint64_t class_fp_compute(zend_class_entry *ce)
@@ -88,17 +91,18 @@ static uint64_t class_fp_compute(zend_class_entry *ce)
 		&& ((ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT | ZEND_ACC_IMPLICIT_ABSTRACT_CLASS | ZEND_ACC_EXPLICIT_ABSTRACT_CLASS
 			| ZEND_ACC_ANON_CLASS | ZEND_ACC_NOT_SERIALIZABLE))
 		|| (data && (!ce->__serialize || !ce->__unserialize))
-		|| (!data && (ce->serialize || ce->unserialize || zend_hash_str_exists(&ce->function_table, ZEND_STRL("__sleep"))
+		|| (!data && (ce->serialize || ce->unserialize
 			|| (ce->type != ZEND_USER_CLASS && ce != zend_standard_class_def) || ce->create_object || ce->default_object_handlers != &std_object_handlers)))) {
 		return 0;
 	}
+	bool wake = zend_hash_exists(&ce->function_table, ZSTR_KNOWN(ZEND_STR_WAKEUP));
 	uint32_t kind = ce->ce_flags & ZEND_ACC_ENUM ? K_ENUM : data ? K_DATA
-		: zend_hash_exists(&ce->function_table, ZSTR_KNOWN(ZEND_STR_WAKEUP)) ? K_WAKEUP : K_SLOTS;
+		: zend_hash_str_exists(&ce->function_table, ZEND_STRL("__sleep")) ? (wake ? K_SLEEPW : K_SLEEP) : wake ? K_WAKEUP : K_SLOTS;
 	smart_str b = {0};
 	smart_str_append(&b, ce->name);
 	smart_str_append_long(&b, kind);
 	smart_str_append_long(&b, ce->default_properties_count);
-	for (int i = 0; kind <= K_WAKEUP && i < ce->default_properties_count; i++) {
+	for (int i = 0; kind <= K_SLEEPW && i < ce->default_properties_count; i++) {
 		zend_property_info *pi = ce->properties_info_table ? ce->properties_info_table[i] : NULL;
 		if (!pi) {
 			smart_str_free(&b);
@@ -417,6 +421,100 @@ static void dyn_copy(zval *a, zend_object *o)
 /* stdClass's table itself, else the node's copy. */
 static zend_always_inline zend_array *dyn_props(const gnode *n, zend_object *o) { return o->ce->default_properties_count ? Z_ARR(n->data) : o->properties; }
 
+/* __sleep()'s result resolved to [slot mask (packed: true named, null not), dynamic properties or null]. */
+static zend_always_inline const zval *sleep_mask(const zval *d) { return Z_ARR_P(Z_ARR_P(d)->arPacked)->arPacked; }
+static zend_always_inline zval *sleep_dyn(const zval *d) { return &Z_ARR_P(d)->arPacked[1]; }
+
+/* Calls __sleep() and finds its names as serialize() does (as given, private to the class, protected).
+ * SIZE_OBJECT for anything serialize() would warn about: serializing the value repeats the warning. */
+static size_status sleep_props(zend_object *o, zval *out)
+{
+	zend_class_entry *ce = o->ce;
+	zval names;
+	BG(serialize_lock)++;
+	zend_call_known_instance_method_with_0_params(zend_hash_str_find_ptr(&ce->function_table, ZEND_STRL("__sleep")), o, &names);
+	BG(serialize_lock)--;
+	if (EG(exception)) {
+		zval_ptr_dtor(&names);
+		return SIZE_ERROR;
+	}
+	if (Z_TYPE(names) != IS_ARRAY) {
+		zval_ptr_dtor(&names);
+		return SIZE_OBJECT;
+	}
+	HashTable *props = zend_std_get_properties(o);
+	zval mask, *nm;
+	HashTable *dyn = NULL;
+	array_init_size(&mask, ce->default_properties_count);
+	zend_hash_real_init_packed(Z_ARR(mask));
+	ZEND_HASH_FILL_PACKED(Z_ARR(mask)) { /* null: not named */
+		for (int k = 0; k < ce->default_properties_count; k++) {
+			ZEND_HASH_FILL_SET_NULL();
+			ZEND_HASH_FILL_NEXT();
+		}
+	} ZEND_HASH_FILL_END();
+	size_status st = SIZE_OK;
+	ZEND_HASH_FOREACH_VAL(Z_ARR(names), nm) {
+		ZVAL_DEREF(nm);
+		if (Z_TYPE_P(nm) != IS_STRING) {
+			st = SIZE_OBJECT;
+			break;
+		}
+		zend_string *n = Z_STR_P(nm);
+		zval *v = zend_hash_find(props, n);
+		bool plain = v != NULL;
+		for (int m = 0; !v && m < 2; m++) {
+			zend_string *key = m ? zend_mangle_property_name("*", 1, ZSTR_VAL(n), ZSTR_LEN(n), 0)
+				: zend_mangle_property_name(ZSTR_VAL(ce->name), ZSTR_LEN(ce->name), ZSTR_VAL(n), ZSTR_LEN(n), 0);
+			v = zend_hash_find(props, key);
+			zend_string_release(key);
+		}
+		if (v && Z_TYPE_P(v) == IS_INDIRECT) {
+			zval *slot = Z_INDIRECT_P(v);
+			uint32_t k = (uint32_t) (slot - o->properties_table);
+			zval *bit = &Z_ARR(mask)->arPacked[k];
+			if (Z_TYPE_P(slot) == IS_UNDEF && ZEND_TYPE_IS_SET(ce->properties_info_table[k]->type)) {
+				continue; /* uninitialized: serialize() leaves it out too */
+			}
+			if (Z_TYPE_P(slot) == IS_UNDEF || Z_TYPE_P(bit) == IS_TRUE) {
+				st = SIZE_OBJECT;
+				break;
+			}
+			ZVAL_TRUE(bit);
+		} else if (plain) {
+			if (!dyn) {
+				dyn = zend_new_array(0);
+			}
+			if (!zend_hash_add(dyn, n, v)) {
+				st = SIZE_OBJECT;
+				break;
+			}
+			Z_TRY_ADDREF_P(v);
+		} else {
+			st = SIZE_OBJECT;
+			break;
+		}
+	} ZEND_HASH_FOREACH_END();
+	zval_ptr_dtor(&names);
+	if (st != SIZE_OK) {
+		zval_ptr_dtor(&mask);
+		if (dyn) {
+			zend_array_release(dyn);
+		}
+		return st;
+	}
+	zval d;
+	if (dyn) {
+		ZVAL_ARR(&d, dyn);
+	} else {
+		ZVAL_NULL(&d);
+	}
+	array_init_size(out, 2);
+	zend_hash_next_index_insert_new(Z_ARR_P(out), &mask);
+	zend_hash_next_index_insert_new(Z_ARR_P(out), &d);
+	return SIZE_OK;
+}
+
 /* SIZE_OBJECT: no node for it, so the whole value is serialized. */
 __attribute__((noinline)) static size_status size_object(sizing *z, zend_object *o, int depth)
 {
@@ -431,7 +529,7 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	}
 	zend_class_entry *ce = o->ce;
 	uint32_t kind = fp_kind(class_fp(ce));
-	if (!kind || zend_object_is_lazy(o) || (kind <= K_WAKEUP && o->handlers != &std_object_handlers)) {
+	if (!kind || zend_object_is_lazy(o) || (kind <= K_SLEEPW && o->handlers != &std_object_handlers)) {
 		return SIZE_OBJECT;
 	}
 	uint32_t ck = pmap_add(&g->cls, (uintptr_t) ce, g->cls.n << 3 | kind, &added)->v;
@@ -448,6 +546,16 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 		if (n->dyn && ce->default_properties_count) {
 			dyn_copy(&n->data, o);
 		}
+	}
+	if ((kind == K_SLEEP || kind == K_SLEEPW) && Z_TYPE(n->data) == IS_UNDEF) {
+		g->user = true;
+		zval sl;
+		size_status ss = sleep_props(o, &sl);
+		if (ss != SIZE_OK) {
+			return ss;
+		}
+		ZVAL_COPY_VALUE(&n->data, &sl);
+		n->dyn = Z_TYPE_P(sleep_dyn(&n->data)) == IS_ARRAY;
 	}
 	bool dyn = n->dyn;
 	z->n += SALIGN(obj_size(kind_nprops(ce, kind) + dyn));
@@ -474,6 +582,17 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 		}
 		ZVAL_COPY_VALUE(&dv, &n->data); /* sizing below may move the nodes */
 		st = size_zval(z, &dv, depth + 1);
+	} else if (kind == K_SLEEP || kind == K_SLEEPW) {
+		ZVAL_COPY_VALUE(&dv, &n->data); /* sizing below may move the nodes */
+		const zval *mask = sleep_mask(&dv);
+		for (int k = 0; k < ce->default_properties_count && st == SIZE_OK; k++) {
+			if (Z_TYPE(mask[k]) == IS_TRUE) {
+				st = size_zval(z, OBJ_PROP_NUM(o, k), depth + 1);
+			}
+		}
+		if (st == SIZE_OK && Z_TYPE_P(sleep_dyn(&dv)) == IS_ARRAY) {
+			st = size_zval(z, sleep_dyn(&dv), depth + 1);
+		}
 	} else {
 		if (dyn) {
 			ZVAL_ARR(&dv, dyn_props(n, o));
@@ -485,7 +604,7 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 			st = size_zval(z, &dv, depth + 1);
 		}
 	}
-	if (st == SIZE_OK && (kind == K_WAKEUP || kind == K_DATA)) {
+	if (st == SIZE_OK && (kind == K_WAKEUP || kind == K_SLEEPW || kind == K_DATA)) {
 		graph_b_hook(g, i);
 	}
 	return st;
@@ -633,6 +752,21 @@ __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 		} else if (kind == K_DATA) {
 			ZVAL_COPY_VALUE(&n->props[0], &gn->data);
 			persist_zval(p, &n->props[0]);
+		} else if (kind == K_SLEEP || kind == K_SLEEPW) {
+			const zval *mask = sleep_mask(&gn->data);
+			for (int k = 0; k < ce->default_properties_count; k++) {
+				if (Z_TYPE(mask[k]) == IS_TRUE) {
+					ZVAL_COPY_VALUE(&n->props[k], OBJ_PROP_NUM(o, k));
+					persist_zval(p, &n->props[k]);
+				} else {
+					Z_TYPE_INFO(n->props[k]) = NC_DEFAULT;
+				}
+			}
+			if (dyn) {
+				zval *d = &n->props[ce->default_properties_count];
+				ZVAL_COPY_VALUE(d, sleep_dyn(&gn->data));
+				persist_zval(p, d);
+			}
 		} else {
 			for (int k = 0; k < ce->default_properties_count; k++) {
 				ZVAL_COPY_VALUE(&n->props[k], OBJ_PROP_NUM(o, k));
@@ -1058,13 +1192,30 @@ static bool graph_hooks_run(zend_object **objs, zval *data, const uint32_t *hook
 	return !failed;
 }
 
+/* K_SLEEP: the slots __sleep() named, class defaults in the others (as unserialize() leaves them). */
+__attribute__((noinline)) static void graph_sleep(gout *o, zend_object *obj, const nc_obj *n, uint32_t np)
+{
+	zval *dst = obj->properties_table, *def = obj->ce->default_properties_table;
+	for (uint32_t k = 0; k < np; k++) {
+		if (Z_TYPE(n->props[k]) == NC_DEFAULT) {
+			ZVAL_COPY_OR_DUP_PROP(&dst[k], &def[k]);
+		} else {
+			graph_zval(o, &dst[k], &n->props[k]);
+			Z_PROP_FLAG_P(&dst[k]) = 0;
+		}
+	}
+	if (n->dyn) {
+		graph_dyn(o, obj, &n->props[np]);
+	}
+}
+
 /* A typed slot holding a shared reference becomes one of its type sources. */
 __attribute__((noinline)) static void graph_ref_types(const nc_graph *g, zend_object **objs)
 {
 	const nc_class *c = graph_cls(g);
 	for (uint32_t i = 0; i < g->nobj; i++) {
 		nc_obj *n = graph_obj(g, i);
-		if (fp_kind(c[n->cls].fp) > K_WAKEUP) {
+		if (fp_kind(c[n->cls].fp) > K_SLEEPW) {
 			continue;
 		}
 		for (uint32_t k = 0; k < c[n->cls].nprops; k++) {
@@ -1137,6 +1288,8 @@ static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmo
 				if (n->dyn) {
 					graph_dyn(&o, objs[i], &n->props[c[n->cls].nprops]);
 				}
+			} else if (kind <= K_SLEEPW) {
+				graph_sleep(&o, objs[i], n, c[n->cls].nprops);
 			}
 		}
 		if (nref) {

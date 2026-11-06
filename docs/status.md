@@ -15,8 +15,8 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
-| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, with objects as graph nodes incl. hooks, enums, stdClass) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
-| `./dev test` (8.5, `PHP=8.4`, `./dev asan`; 2026-11-06 with shared references as graph nodes, `ci` not rerun) | 61 passed, 1 skipped |
+| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, with objects, shared references and `__sleep` classes as graph nodes; also `./dev drupal`, `./dev apcu` at 24 known) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
+| `./dev test` (8.5, `PHP=8.4`, `./dev asan`; 2026-11-06 with shared references and `__sleep` classes as graph nodes) | 62 passed, 1 skipped |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |

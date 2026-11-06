@@ -43,7 +43,7 @@ the SAPI (not configurable):
   unchanged, so repeated fetches in a worker are nearly as cheap as zero-copy.
 
 Objects and shared references cannot be immutable: they are stored as nodes and rebuilt on each fetch (with the arrays that
-hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`__sleep`, `Serializable`, ...)
+hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`Serializable`, most internal classes, ...)
 make the whole value serialized and unserialized on every fetch.
 
 ## Writes, shards and segments

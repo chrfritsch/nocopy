@@ -9,7 +9,7 @@ nocopy.serializer=igbinary
 --FILE--
 <?php
 class P { public $a = [1, 2]; public ?P $self = null; }
-class Sl { public $l; function __sleep() { return ['l']; } }
+class Sl extends Exception { public $l; }
 class S { public $x = 1; function __serialize(): array { return ['y' => 7]; } function __unserialize(array $d): void { $this->x = $d['y']; } }
 $p = new P; $p->self = $p;
 $v = ['p' => $p, 's' => new S, 'arr' => [1, 'two', 3.0]];
@@ -23,7 +23,7 @@ var_dump(count($r['arr']));
 nocopy_put('o', new ArrayObject([1, 2]), 0);
 var_dump(nocopy_get('o')->count());
 var_dump(nocopy_inc('o'));
-$o = new Sl; $o->l = array_fill(0, 1000, str_repeat('x', 100)); // __sleep: still serialized (most objects are graph nodes)
+$o = new Sl; $o->l = array_fill(0, 1000, str_repeat('x', 100)); // extends an internal class: serialized
 $used = nocopy_stats()['used'];
 nocopy_put('dedup', $o, 0);
 var_dump(nocopy_stats()['used'] - $used < 20000); // igbinary dedups strings, serialize() would need ~110 KB

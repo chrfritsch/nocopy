@@ -18,7 +18,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   shm                         CLI + php-fpm share one cache by name, then with Valkey
   frankenphp                  FrankenPHP classic + worker mode, and shm with it
   symfony [version=8.*]       Symfony bundle smoke test (alone and next to APCu)
-  apcu                        APCu's own suite against the polyfill (23 known failures)
+  apcu                        APCu's own suite against the polyfill (24 known failures)
   drupal                      Drupal module's PHPUnit tests in 3 cache modes
   tidy                        clang-tidy over the C sources (.clang-tidy)
   ci                          everything above (what CI runs, one PHP version)

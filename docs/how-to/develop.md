@@ -24,7 +24,7 @@ stays untouched (it is mounted read-only). A failed test prints its diff: `-` ex
 | `third_party/libvalkey` (only via `scripts/vendor-libvalkey.sh <tag>`, never by hand) | `./dev ci` |
 | thread handling, FrankenPHP | `./dev zts`, `./dev frankenphp` |
 | `nocopy.stub.php` (function signatures) | `./dev stub` to regenerate `nocopy_arginfo.h`, commit both |
-| `apcu/apcu.php` | `./dev apcu` (23 known failures, listed in `scripts/apcu-suite.sh`) |
+| `apcu/apcu.php` | `./dev apcu` (24 known failures, listed in `scripts/apcu-suite.sh`) |
 | `symfony/` | `./dev symfony`, and `./dev symfony 6.4.*` for the oldest supported |
 | `drupal/` | `./dev drupal` (PHPUnit in 4 cache modes) |
 | before a pull request | `./dev ci` |
