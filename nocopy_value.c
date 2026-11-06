@@ -141,10 +141,79 @@ void nocopy_classes_clear(void)
 	}
 }
 
+/* Nonzero key -> uint32, open addressing, at most half full (igbinary's hash_si_ptr); small graphs stay in inl. */
+typedef struct {
+	uintptr_t k;
+	uint32_t v;
+} pslot;
+
+typedef struct {
+	pslot *s;
+	uint32_t mask, n;
+	pslot inl[32];
+} pmap;
+
+static void pmap_init(pmap *m)
+{
+	memset(m->inl, 0, sizeof(m->inl));
+	m->s = m->inl;
+	m->mask = 31;
+	m->n = 0;
+}
+
+static void pmap_free(pmap *m)
+{
+	if (m->s != m->inl) {
+		efree(m->s);
+	}
+}
+
+static zend_always_inline uint32_t pmap_hash(uintptr_t k) { return (uint32_t) __builtin_bswap64((uint64_t) k * 0x5e2d58d8b3bce8d9ULL); }
+
+static zend_always_inline pslot *pmap_probe(const pmap *m, uintptr_t k)
+{
+	uint32_t i = pmap_hash(k) & m->mask;
+	while (m->s[i].k && m->s[i].k != k) {
+		i = (i + 1) & m->mask;
+	}
+	return &m->s[i];
+}
+
+static void pmap_grow(pmap *m)
+{
+	pslot *old = m->s;
+	uint32_t n = m->mask + 1;
+	m->s = ecalloc(2 * n, sizeof(pslot));
+	m->mask = 2 * n - 1;
+	for (uint32_t i = 0; i < n; i++) {
+		if (old[i].k) {
+			*pmap_probe(m, old[i].k) = old[i];
+		}
+	}
+	if (old != m->inl) {
+		efree(old);
+	}
+}
+
+/* k's slot, added with value v if it was missing; *added says which. */
+static zend_always_inline pslot *pmap_add(pmap *m, uintptr_t k, uint32_t v, bool *added)
+{
+	if (2 * (m->n + 1) > m->mask + 1) {
+		pmap_grow(m);
+	}
+	pslot *s = pmap_probe(m, k);
+	if ((*added = !s->k)) {
+		s->k = k;
+		s->v = v;
+		m->n++;
+	}
+	return s;
+}
+
 /* One value's objects and classes, in the order sizing meets them (persisting walks the same order). */
 typedef struct {
-	HashTable objs;  /* handle -> index */
-	HashTable cls;   /* class entry -> index << 3 | kind */
+	pmap objs;       /* handle -> index */
+	pmap cls;        /* class entry -> index << 3 | kind */
 	HashTable hooks; /* indices, inner first */
 	HashTable data;  /* handle -> __serialize()'s array: called once, kept (with what it made) until the entry is built */
 	bool on;
@@ -152,10 +221,15 @@ typedef struct {
 	bool user;       /* __serialize ran: it may have used the key table, so sizing is done again */
 } graph_b;
 
+static void graph_b_init_maps(graph_b *g)
+{
+	pmap_init(&g->objs);
+	pmap_init(&g->cls);
+}
+
 static void graph_b_init(graph_b *g)
 {
-	zend_hash_init(&g->objs, 8, NULL, NULL, 0);
-	zend_hash_init(&g->cls, 4, NULL, NULL, 0);
+	graph_b_init_maps(g);
 	g->on = true;
 	g->hooks_on = false;
 }
@@ -174,8 +248,8 @@ static zend_always_inline uint32_t graph_b_nhooks(const graph_b *g) { return g->
 static void graph_b_free(graph_b *g)
 {
 	if (g->on) {
-		zend_hash_destroy(&g->objs);
-		zend_hash_destroy(&g->cls);
+		pmap_free(&g->objs);
+		pmap_free(&g->cls);
 	}
 	if (g->hooks_on) {
 		zend_hash_destroy(&g->hooks);
@@ -315,8 +389,9 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 		graph_b_init(g);
 	}
 	zval idx;
-	ZVAL_LONG(&idx, zend_hash_num_elements(&g->objs));
-	if (!zend_hash_index_add(&g->objs, o->handle, &idx)) {
+	bool added;
+	zend_long i = pmap_add(&g->objs, o->handle, g->objs.n, &added)->v;
+	if (!added) {
 		return SIZE_OK; /* met before: a back reference */
 	}
 	zend_class_entry *ce = o->ce;
@@ -324,14 +399,12 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	if (!kind || zend_object_is_lazy(o) || (kind <= K_WAKEUP && o->handlers != &std_object_handlers)) {
 		return SIZE_OBJECT;
 	}
-	zend_long i = Z_LVAL(idx);
 	bool dyn = kind <= K_WAKEUP && o->properties && has_dynamic(o->properties);
 	if (kind == K_WAKEUP || kind == K_DATA || (dyn && ce->default_properties_count)) {
 		graph_b_hooks(g);
 	}
-	if (!zend_hash_index_exists(&g->cls, (zend_ulong) (uintptr_t) ce)) {
-		ZVAL_LONG(&idx, (zend_long) zend_hash_num_elements(&g->cls) << 3 | kind);
-		zend_hash_index_add_new(&g->cls, (zend_ulong) (uintptr_t) ce, &idx);
+	pmap_add(&g->cls, (uintptr_t) ce, g->cls.n << 3 | kind, &added);
+	if (added) {
 		z->n += 2 * SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(ce->name)));
 	}
 	z->n += SALIGN(obj_size(kind_nprops(ce, kind) + dyn));
@@ -477,11 +550,11 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 {
 	zend_object *o = Z_OBJ_P(z);
-	uint32_t i = (uint32_t) Z_LVAL_P(zend_hash_index_find(&p->g->objs, o->handle));
-	if (!p->done[i]) { /* NOLINT(clang-analyzer-core.NullDereference): objects are met only in graphs */
+	uint32_t i = pmap_probe(&p->g->objs, o->handle)->v;
+	if (!p->done[i]) {
 		p->done[i] = true;
 		zend_class_entry *ce = o->ce;
-		zend_long ck = Z_LVAL_P(zend_hash_index_find(&p->g->cls, (zend_ulong) (uintptr_t) ce));
+		zend_long ck = pmap_probe(&p->g->cls, (uintptr_t) ce)->v;
 		uint32_t kind = (uint32_t) (ck & K_MASK);
 		bool dyn = kind <= K_WAKEUP && o->properties && has_dynamic(o->properties);
 		nc_obj *n = take(p, obj_size(kind_nprops(ce, kind) + dyn));
@@ -545,7 +618,7 @@ static void persist_zval(persist *p, zval *z)
 __attribute__((noinline)) static nc_graph *persist_graph(persist *p, zval *val)
 {
 	graph_b *g = p->g;
-	uint32_t ncls = zend_hash_num_elements(&g->cls), nobj = zend_hash_num_elements(&g->objs), nhooks = graph_b_nhooks(g);
+	uint32_t ncls = g->cls.n, nobj = g->objs.n, nhooks = graph_b_nhooks(g);
 	nc_graph *gr = take(p, graph_head(ncls, nobj, nhooks));
 	gr->ncls = ncls;
 	gr->nobj = nobj;
@@ -557,19 +630,20 @@ __attribute__((noinline)) static nc_graph *persist_graph(persist *p, zval *val)
 			*h++ = (uint32_t) Z_LVAL_P(hv);
 		} ZEND_HASH_FOREACH_END();
 	}
-	nc_class *c = graph_cls(gr);
-	zend_ulong k;
-	ZEND_HASH_FOREACH_NUM_KEY(&g->cls, k) {
-		zend_class_entry *ce = (zend_class_entry *) (uintptr_t) k;
-		zend_string *lc = zend_string_tolower(ce->name); /* NOLINT(clang-analyzer-core.NullDereference): keys are class entries */
+	for (uint32_t s = 0; s <= g->cls.mask; s++) {
+		if (!g->cls.s[s].k) {
+			continue;
+		}
+		zend_class_entry *ce = (zend_class_entry *) g->cls.s[s].k;
+		nc_class *c = &graph_cls(gr)[g->cls.s[s].v >> 3];
+		zend_string *lc = zend_string_tolower(ce->name);
 		zend_string_hash_val(lc);
 		c->name = persist_str(p, ce->name);
 		c->lc = persist_str(p, lc);
 		zend_string_release(lc);
 		c->fp = class_fp(ce);
 		c->nprops = kind_nprops(ce, fp_kind(c->fp));
-		c++;
-	} ZEND_HASH_FOREACH_END();
+	}
 	p->graph = gr;
 	p->done = ecalloc(nobj, sizeof(bool));
 	ZVAL_COPY_VALUE(&gr->root, val);
@@ -1158,12 +1232,13 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 		keys_reset(keys);
 		z.keys = *keys;
 		z.n = 0;
-		zend_hash_clean(&g.objs);
-		zend_hash_clean(&g.cls);
+		pmap_free(&g.objs);
+		pmap_free(&g.cls);
+		graph_b_init_maps(&g);
 		zend_hash_clean(&g.hooks);
 		st = size_root(&z, val);
 	}
-	bool graph = st == SIZE_OK && g.on && zend_hash_num_elements(&g.objs);
+	bool graph = st == SIZE_OK && g.on && g.objs.n;
 	if (st != SIZE_OK) {
 		graph_b_free(&g);
 		if (st == SIZE_ERROR) {
@@ -1180,7 +1255,7 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 		serialized = true;
 		z.n = SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN(ser)));
 	} else if (graph) {
-		z.n += SALIGN(graph_head(zend_hash_num_elements(&g.cls), zend_hash_num_elements(&g.objs), graph_b_nhooks(&g)));
+		z.n += SALIGN(graph_head(g.cls.n, g.objs.n, graph_b_nhooks(&g)));
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;

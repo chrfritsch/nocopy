@@ -190,9 +190,11 @@ its strings and arrays copied out, classes resolved); later fetches build the ob
 refcount (COW). `bench/objects.php` copy mode: one object 249 -> 104 ns, 100 objects 16.2 -> 5.3 µs, 100 arrays + 1 object
 9.0 µs -> 67 ns; `ab.sh` fetch object copy 131 -> 72 ns, other fetches within ±0.3 ns.
 Building a graph copies plain slot values inline (zero and template mode) and calls out only for object references, spines
-and copy mode; sizing keeps each object's class code in its `objs` entry (and the last class), so persisting does one lookup
-per object instead of two. `bench/objects.php` 100 objects, copy / zero: 4429 / 3619 -> 3647 / 3232 ns; `prof.php` put_prods
-11352 -> 11260 ns, put_json 14121 -> 13698, put_ords 44256 -> 42968. Profile after (`./dev perf get_prods ...`): a fetch of
+and copy mode: `bench/objects.php` 100 objects, copy / zero: 4429 / 3619 -> 3647 / 3232 ns. Sizing and persisting find
+objects (by handle) and classes in an open-addressing table keyed by integer (igbinary's `hash_si_ptr`: multiply + byte swap,
+linear probing, half full at most, 32 slots inline), not `HashTable`s: `prof.php` put_json 13764 -> 12173 ns, put_prods
+10592 -> 10236, put_ords 40278 -> 39054, put_obj 263 -> 247; fetches unchanged. Packing the class code into the `objs` entry
+instead (one lookup fewer) gave 1-3%. Profile after (`./dev perf get_prods ...`): a fetch of
 100 objects is ~36% nocopy, the rest the engine creating and freeing objects; `DateTime*` objects cost ~550 ns each, over 95%
 in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup). Storing them natively
 (timestamp, microseconds, zone) would be the next lever.
