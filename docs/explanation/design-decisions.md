@@ -189,6 +189,13 @@ Copy mode keeps a private **template** of a graph in the kept-copy table on its 
 its strings and arrays copied out, classes resolved); later fetches build the objects from it, sharing those values by
 refcount (COW). `bench/objects.php` copy mode: one object 249 -> 104 ns, 100 objects 16.2 -> 5.3 µs, 100 arrays + 1 object
 9.0 µs -> 67 ns; `ab.sh` fetch object copy 131 -> 72 ns, other fetches within ±0.3 ns.
+Building a graph copies plain slot values inline (zero and template mode) and calls out only for object references, spines
+and copy mode; sizing keeps each object's class code in its `objs` entry (and the last class), so persisting does one lookup
+per object instead of two. `bench/objects.php` 100 objects, copy / zero: 4429 / 3619 -> 3647 / 3232 ns; `prof.php` put_prods
+11352 -> 11260 ns, put_json 14121 -> 13698, put_ords 44256 -> 42968. Profile after (`./dev perf get_prods ...`): a fetch of
+100 objects is ~36% nocopy, the rest the engine creating and freeing objects; `DateTime*` objects cost ~550 ns each, over 95%
+in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup). Storing them natively
+(timestamp, microseconds, zone) would be the next lever.
 
 **The Drupal module requires the polyfill.** Without APCu, `function_exists('apcu_fetch')` is false, so Composer's class loader
 (`setApcuPrefix`) and Drupal's FileCache fall back to the file system: 807 `faccessat` per logged-in request vs 65 with the

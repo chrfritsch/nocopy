@@ -16,7 +16,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | Check | Result |
 |---|---|
 | `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, with objects as graph nodes incl. hooks, enums, stdClass) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
-| `./dev test` (8.5; also `PHP=8.4`, `./dev asan`) | 60 passed, 1 skipped |
+| `./dev test` (8.5; also `PHP=8.4`, `./dev asan`; 2026-11-06 after 8a494b1, graph fetch/store lookups: 8.5 only, `ci` not rerun) | 60 passed, 1 skipped |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
