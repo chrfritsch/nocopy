@@ -37,7 +37,9 @@ static zend_always_inline void key_put(const nocopy_keys *t, nocopy_kslot *s, co
 /* ---- object graphs: objects stored as nodes, rebuilt on fetch ---- */
 
 #define NC_OREF IS_OBJECT /* in a graph: Z_LVAL is the object's index */
-#define NC_SPINE IS_PTR   /* in a graph: an array with objects below it, copied on fetch */
+#define NC_RREF IS_REFERENCE /* in a graph: Z_LVAL is the shared reference's index */
+#define NC_SPINE IS_PTR   /* in a graph: an array with objects or shared references below it, copied on fetch */
+/* Graph values are plain (at most IS_ARRAY) or one of the markers above. */
 
 /* How a class's objects are stored, in the low bits of its fingerprint (0: not as a node, so the value is serialized). */
 #define K_SLOTS 1  /* the raw property slots */
@@ -60,18 +62,19 @@ typedef struct {
 	zval props[];
 } nc_obj;
 
-/* Followed by nc_class[ncls], uint32_t off[nobj] (each object's offset from the graph), uint32_t hooks[nhooks]. */
+/* Followed by nc_class[ncls], zval refs[nref] (shared references' values), uint32_t off[nobj] (each object's offset from the graph), uint32_t hooks[nhooks]. */
 typedef struct {
-	uint32_t ncls, nobj, nhooks;
+	uint32_t ncls, nobj, nhooks, nref;
 	zval root;
 } nc_graph;
 
 static zend_always_inline nc_class *graph_cls(const nc_graph *g) { return (nc_class *) (g + 1); }
-static zend_always_inline uint32_t *graph_off(const nc_graph *g) { return (uint32_t *) (graph_cls(g) + g->ncls); }
+static zend_always_inline zval *graph_refs(const nc_graph *g) { return (zval *) (graph_cls(g) + g->ncls); }
+static zend_always_inline uint32_t *graph_off(const nc_graph *g) { return (uint32_t *) (graph_refs(g) + g->nref); }
 static zend_always_inline nc_obj *graph_obj(const nc_graph *g, uint32_t i) { return (nc_obj *) ((char *) g + graph_off(g)[i]); }
 /* Objects whose __wakeup/__unserialize runs after the build, inner first (unserialize's order). */
 static zend_always_inline uint32_t *graph_hooks(const nc_graph *g) { return graph_off(g) + g->nobj; }
-static zend_always_inline size_t graph_head(uint32_t ncls, uint32_t nobj, uint32_t nhooks) { return sizeof(nc_graph) + ncls * sizeof(nc_class) + (nobj + nhooks) * sizeof(uint32_t); }
+static zend_always_inline size_t graph_head(uint32_t ncls, uint32_t nref, uint32_t nobj, uint32_t nhooks) { return sizeof(nc_graph) + ncls * sizeof(nc_class) + nref * sizeof(zval) + (nobj + nhooks) * sizeof(uint32_t); }
 static zend_always_inline size_t obj_size(uint32_t nprops) { return offsetof(nc_obj, props) + nprops * sizeof(zval); }
 
 static zend_always_inline uint32_t obj_nz(const nc_class *c, const nc_obj *o) { return c[o->cls].nprops + o->dyn; }
@@ -226,15 +229,22 @@ typedef struct {
 	uint32_t nn, ncap;
 	uint32_t *hooks; /* indices, inner first */
 	uint32_t nh, hcap;
+	pmap refs;       /* shared reference -> times met while sizing; while persisting REF_DONE | index */
+	uint32_t nref;   /* met more than once: nodes */
 	bool on;
+	bool refs_on;
 	bool user;       /* __serialize ran: it may have used the key table, so sizing is done again */
 	gnode inl[16];
 } graph_b;
+
+#define REF_DONE 0x80000000u
 
 static void graph_b_init_maps(graph_b *g)
 {
 	pmap_init(&g->objs);
 	pmap_init(&g->cls);
+	g->refs_on = false;
+	g->nref = 0;
 }
 
 static void graph_b_init(graph_b *g)
@@ -272,6 +282,9 @@ static void graph_b_free(graph_b *g)
 	}
 	pmap_free(&g->objs);
 	pmap_free(&g->cls);
+	if (g->refs_on) {
+		pmap_free(&g->refs);
+	}
 	for (uint32_t i = 0; i < g->nn; i++) {
 		if (Z_REFCOUNTED(g->nodes[i].data)) {
 			zval_ptr_dtor(&g->nodes[i].data);
@@ -297,6 +310,7 @@ typedef struct {
 
 static size_status size_zval(sizing *z, zval *v, int depth);
 static size_status size_object(sizing *z, zend_object *o, int depth);
+static size_status size_ref(sizing *z, zend_reference *r, int depth);
 
 static size_status size_array(sizing *z, zend_array *a, int depth)
 {
@@ -340,7 +354,7 @@ static size_status size_zval(sizing *z, zval *v, int depth)
 			return SIZE_OK;
 		case IS_REFERENCE:
 			if (Z_REFCOUNT_P(v) > 1) {
-				return SIZE_OBJECT; /* must stay shared: serialize */
+				return size_ref(z, Z_REF_P(v), depth);
 			}
 			return size_zval(z, Z_REFVAL_P(v), depth + 1);
 		case IS_STRING:
@@ -477,6 +491,28 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	return st;
 }
 
+/* Counts how often the value holds r: once, it is stored as its value; more, as a node. */
+__attribute__((noinline)) static size_status size_ref(sizing *z, zend_reference *r, int depth)
+{
+	graph_b *g = z->g;
+	if (!g->on) {
+		graph_b_init(g);
+	}
+	if (!g->refs_on) {
+		pmap_init(&g->refs);
+		g->refs_on = true;
+	}
+	bool added;
+	pslot *s = pmap_add(&g->refs, (uintptr_t) r, 1, &added);
+	if (!added) {
+		if (s->v++ == 1) {
+			g->nref++;
+		}
+		return SIZE_OK;
+	}
+	return size_zval(z, &r->val, depth + 1);
+}
+
 /* ---- persisting: values into an arena block, opcache-style immutable ---- */
 
 typedef struct {
@@ -484,7 +520,8 @@ typedef struct {
 	nocopy_keys keys;
 	graph_b *g;
 	nc_graph *graph;
-	bool obj;   /* an object met since the innermost array began */
+	uint32_t nref; /* shared references persisted so far */
+	bool obj;   /* an object or shared reference met since the innermost array began */
 } persist;
 
 /* The empty array every entry points to: in the arena, so it has the same address in every process that maps it (unlike zend_empty_array). */
@@ -578,6 +615,7 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 {
 	zend_object *o = Z_OBJ_P(z);
+	ZEND_ASSERT(p->g); /* objects make a graph */
 	uint32_t i = pmap_probe(&p->g->objs, o->handle)->v;
 	gnode *gn = &p->g->nodes[i];
 	if (!gn->done) {
@@ -612,11 +650,35 @@ __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 	p->obj = true;
 }
 
+/* A reference met more than once becomes NC_RREF; its value goes into refs the first time. false: met once, stored as its value. */
+__attribute__((noinline)) static bool persist_ref(persist *p, zval *z)
+{
+	pslot *s = pmap_probe(&p->g->refs, (uintptr_t) Z_REF_P(z));
+	if (s->v == 1) {
+		return false;
+	}
+	if (!(s->v & REF_DONE)) {
+		s->v = REF_DONE | p->nref;
+		zval *rv = &graph_refs(p->graph)[p->nref++];
+		ZVAL_COPY_VALUE(rv, Z_REFVAL_P(z));
+		bool outer = p->obj;
+		persist_zval(p, rv);
+		p->obj = outer;
+	}
+	Z_LVAL_P(z) = s->v & ~REF_DONE;
+	Z_TYPE_INFO_P(z) = NC_RREF;
+	p->obj = true;
+	return true;
+}
+
 /* Rewrites *z in place so everything it points to lives in the block. */
 static void persist_zval(persist *p, zval *z)
 {
 	switch (Z_TYPE_P(z)) {
 		case IS_REFERENCE:
+			if (p->g && p->g->refs_on && Z_REFCOUNT_P(z) > 1 && persist_ref(p, z)) {
+				break;
+			}
 			ZVAL_COPY_VALUE(z, Z_REFVAL_P(z));
 			persist_zval(p, z);
 			break;
@@ -647,9 +709,10 @@ __attribute__((noinline)) static nc_graph *persist_graph(persist *p, zval *val)
 {
 	graph_b *g = p->g;
 	uint32_t ncls = g->cls.n, nobj = g->objs.n, nhooks = g->nh;
-	nc_graph *gr = take(p, graph_head(ncls, nobj, nhooks));
+	nc_graph *gr = take(p, graph_head(ncls, g->nref, nobj, nhooks));
 	gr->ncls = ncls;
 	gr->nobj = nobj;
+	gr->nref = g->nref;
 	gr->nhooks = nhooks;
 	if (nhooks) {
 		memcpy(graph_hooks(gr), g->hooks, nhooks * sizeof(uint32_t));
@@ -758,6 +821,9 @@ void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 			rebase_zval(&r, &o->props[k]);
 		}
 	}
+	for (uint32_t i = 0; i < g->nref; i++) {
+		rebase_zval(&r, &graph_refs(g)[i]);
+	}
 	rebase_zval(&r, &g->root);
 }
 
@@ -853,15 +919,16 @@ typedef enum {
 typedef struct {
 	nocopy_keys *keys;
 	zend_object **objs;
+	zend_reference **refs;
 	gmode mode;
 } gout;
 
 static void graph_zval_slow(gout *o, zval *dst, const zval *src);
 
-/* No object or spine, not copy mode: shared without a call (arena values carry no refcount flag). */
+/* No marker, not copy mode: shared without a call (arena values carry no refcount flag). */
 static zend_always_inline void graph_zval(gout *o, zval *dst, const zval *src)
 {
-	if (EXPECTED(o->mode != G_COPY && Z_TYPE_P(src) != NC_OREF && Z_TYPE_P(src) != NC_SPINE)) {
+	if (EXPECTED(o->mode != G_COPY && Z_TYPE_P(src) <= IS_ARRAY)) {
 		ZVAL_COPY(dst, src);
 	} else {
 		graph_zval_slow(o, dst, src);
@@ -876,7 +943,7 @@ static void graph_contents(gout *o, zend_array *a)
 	if (HT_IS_PACKED(a)) {
 		zval *v;
 		ZEND_HASH_PACKED_FOREACH_VAL(a, v) {
-			if (copy || Z_TYPE_P(v) == NC_OREF || Z_TYPE_P(v) == NC_SPINE) {
+			if (copy || Z_TYPE_P(v) > IS_ARRAY) {
 				graph_zval(o, &t, v);
 				ZVAL_COPY_VALUE(v, &t);
 			}
@@ -887,7 +954,7 @@ static void graph_contents(gout *o, zend_array *a)
 			if (copy && b->key && in_arena(b->key)) {
 				unshare_key(o->keys, a, b);
 			}
-			if (copy || Z_TYPE(b->val) == NC_OREF || Z_TYPE(b->val) == NC_SPINE) {
+			if (copy || Z_TYPE(b->val) > IS_ARRAY) {
 				graph_zval(o, &t, &b->val);
 				ZVAL_COPY_VALUE(&b->val, &t);
 			}
@@ -904,6 +971,10 @@ __attribute__((noinline)) static void graph_zval_slow(gout *o, zval *dst, const 
 		case NC_SPINE:
 			ZVAL_ARR(dst, zend_array_dup(Z_ARR_P(src))); /* a template's spine: dup addrefs its values */
 			graph_contents(o, Z_ARR_P(dst));
+			break;
+		case NC_RREF:
+			GC_ADDREF(o->refs[Z_LVAL_P(src)]);
+			ZVAL_REF(dst, o->refs[Z_LVAL_P(src)]);
 			break;
 		default:
 			if (o->mode == G_COPY) {
@@ -987,12 +1058,31 @@ static bool graph_hooks_run(zend_object **objs, zval *data, const uint32_t *hook
 	return !failed;
 }
 
+/* A typed slot holding a shared reference becomes one of its type sources. */
+__attribute__((noinline)) static void graph_ref_types(const nc_graph *g, zend_object **objs)
+{
+	const nc_class *c = graph_cls(g);
+	for (uint32_t i = 0; i < g->nobj; i++) {
+		nc_obj *n = graph_obj(g, i);
+		if (fp_kind(c[n->cls].fp) > K_WAKEUP) {
+			continue;
+		}
+		for (uint32_t k = 0; k < c[n->cls].nprops; k++) {
+			zend_property_info *pi = objs[i]->ce->properties_info_table[k];
+			if (Z_TYPE(n->props[k]) == NC_RREF && ZEND_TYPE_IS_SET(pi->type)) {
+				ZEND_REF_ADD_TYPE_SOURCE(Z_REF(objs[i]->properties_table[k]), pi);
+			}
+		}
+	}
+}
+
 /* Reads g only before the hooks run user code (which may drop a template). false: an enum case is gone, or a hook threw. */
 static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmode mode)
 {
 	const nc_class *c = graph_cls(g);
 	zend_object *objs_s[16], **objs = g->nobj <= 16 ? objs_s : emalloc(g->nobj * sizeof(*objs));
-	uint32_t made = 0;
+	zend_reference *refs_s[8], **refs = g->nref <= 8 ? refs_s : emalloc(g->nref * sizeof(*refs));
+	uint32_t made = 0, nref = 0;
 	for (; made < g->nobj; made++) {
 		nc_obj *n = graph_obj(g, made);
 		zend_class_entry *ce = ces[n->cls];
@@ -1017,9 +1107,18 @@ static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmo
 	bool ok = made == g->nobj;
 	zval *data = NULL;
 	if (ok) {
-		gout o = {.keys = &NOCOPY_G(keys), .objs = objs, .mode = mode};
+		gout o = {.keys = &NOCOPY_G(keys), .objs = objs, .refs = refs, .mode = mode};
 		if (mode == G_COPY) {
 			keys_reset(o.keys);
+		}
+		for (nref = 0; nref < g->nref; nref++) {
+			zval t;
+			ZVAL_NEW_EMPTY_REF(&t);
+			ZVAL_NULL(Z_REFVAL(t));
+			refs[nref] = Z_REF(t);
+		}
+		for (uint32_t i = 0; i < g->nref; i++) {
+			graph_zval(&o, &refs[i]->val, &graph_refs(g)[i]);
 		}
 		if (g->nhooks) {
 			data = ecalloc(g->nobj, sizeof(zval)); /* IS_UNDEF */
@@ -1039,6 +1138,9 @@ static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmo
 					graph_dyn(&o, objs[i], &n->props[c[n->cls].nprops]);
 				}
 			}
+		}
+		if (nref) {
+			graph_ref_types(g, objs);
 		}
 		graph_zval(&o, rv, &g->root);
 	} else {
@@ -1063,6 +1165,14 @@ static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmo
 			zval_ptr_dtor(rv);
 			ZVAL_NULL(rv);
 		}
+	}
+	for (uint32_t i = 0; i < nref; i++) {
+		zval t;
+		ZVAL_REF(&t, refs[i]);
+		zval_ptr_dtor(&t);
+	}
+	if (refs != refs_s) {
+		efree(refs);
 	}
 	for (uint32_t i = 0; i < made; i++) {
 		OBJ_RELEASE(objs[i]);
@@ -1112,7 +1222,7 @@ static void tpl_zval(nocopy_keys *keys, zval *z)
 			} ZEND_HASH_FOREACH_END();
 		}
 		Z_ARR_P(z) = a;
-	} else if (Z_TYPE_P(z) != NC_OREF) {
+	} else if (Z_TYPE_P(z) <= IS_ARRAY) {
 		unshare_zval(keys, z);
 	}
 }
@@ -1153,6 +1263,9 @@ void *nocopy_graph_tpl(const nocopy_entry *e)
 			tpl_zval(keys, &o->props[k]);
 		}
 	}
+	for (uint32_t i = 0; i < t->g.nref; i++) {
+		tpl_zval(keys, &graph_refs(&t->g)[i]);
+	}
 	tpl_zval(keys, &t->g.root);
 	return t;
 }
@@ -1166,6 +1279,9 @@ void nocopy_graph_tpl_free(void *p)
 		for (uint32_t k = 0; k < obj_nz(c, o); k++) {
 			tpl_free_zval(&o->props[k]);
 		}
+	}
+	for (uint32_t i = 0; i < t->g.nref; i++) {
+		tpl_free_zval(&graph_refs(&t->g)[i]);
 	}
 	tpl_free_zval(&t->g.root);
 	efree(t);
@@ -1256,11 +1372,14 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 		z.n = 0;
 		pmap_free(&g.objs);
 		pmap_free(&g.cls);
+		if (g.refs_on) {
+			pmap_free(&g.refs);
+		}
 		graph_b_init_maps(&g);
 		g.nh = 0;
 		st = size_root(&z, val);
 	}
-	bool graph = st == SIZE_OK && g.on && g.objs.n;
+	bool graph = st == SIZE_OK && g.on && (g.objs.n || g.nref);
 	if (st != SIZE_OK) {
 		graph_b_free(&g);
 		if (st == SIZE_ERROR) {
@@ -1277,7 +1396,7 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 		serialized = true;
 		z.n = SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN(ser)));
 	} else if (graph) {
-		z.n += SALIGN(graph_head(g.cls.n, g.objs.n, g.nh));
+		z.n += SALIGN(graph_head(g.cls.n, g.nref, g.objs.n, g.nh));
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;

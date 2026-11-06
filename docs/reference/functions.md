@@ -30,7 +30,8 @@ calls (and their order) of `unserialize()`: user classes and `stdClass` as their
 array, enums as their case. Identities, cycles, private, readonly and uninitialized properties are kept; strings and arrays
 stay zero-copy, and so do arrays next to the objects. A fetch after a class was changed (another property layout), can't be
 loaded or lost the enum case is a miss; a `__wakeup`/`__unserialize` that throws makes it a miss with the exception thrown.
-A value containing any other object (`__sleep`, `Serializable`, lazy, internal classes without `__serialize`), a reference shared between elements, or nested deeper than 64 levels is stored serialized (with
+A reference held more than once in the value stays one reference on fetch (writes through one place show in the others); its value stays zero-copy, the arrays holding it are copied.
+A value containing any other object (`__sleep`, `Serializable`, lazy, internal classes without `__serialize`) or nested deeper than 64 levels is stored serialized (with
 `nocopy.serializer`), as in APCu, and unserialized on every fetch. A resource warns and returns `false`.
 A negative `$ttl` throws a `ValueError`. Returns `false` when the value does not fit (larger than a shard) or there is no shared cache.
 

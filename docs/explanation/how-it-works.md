@@ -42,8 +42,9 @@ the SAPI (not configurable):
   Copies of values fetched twice are kept per process (`nocopy.local_size`) and handed out again while the entry is
   unchanged, so repeated fetches in a worker are nearly as cheap as zero-copy.
 
-Objects, and arrays with shared references, cannot be immutable: they are stored serialized and unserialized on fetch in
-both modes. Store arrays to get the gain.
+Objects and shared references cannot be immutable: they are stored as nodes and rebuilt on each fetch (with the arrays that
+hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`__sleep`, `Serializable`, ...)
+make the whole value serialized and unserialized on every fetch.
 
 ## Writes, shards and segments
 

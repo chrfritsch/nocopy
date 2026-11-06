@@ -182,9 +182,15 @@ each fetch gives the object a private copy of it (one bucket memcpy; its strings
 immutable table: the engine separates such tables on its own writes, but its `(object)` cast still duplicates them, and an
 extension writing a table in place would corrupt the cache. `bench/objects.php`, `json_decode` of 100 rows (200 objects):
 42.2 / 41.8 -> 8.2 / 9.5 µs (zero / copy). `ab.sh` store object (plain slots) 180 -> 190 ns for the kind checks (243 ns serialized). Other objects (`__sleep`, `Serializable`, internal classes without `__serialize`,
-lazy, closures) and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
+lazy, closures) serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
 in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
+**Shared references are graph nodes too** (were: the whole value serialized): a reference met more than once is `NC_RREF`, its value in
+the graph's `refs`, rebuilt as one `zend_reference` per fetch (typed slots holding it become its type sources); one met once is
+stored as its value, like `serialize()`. 1k rows + one shared ref, copy (`local_size=0`) / zero: fetch 124 / 113 µs -> 32 µs / 42 ns,
+store 125 -> 24 µs; 3 keys, one shared: fetch 125 / 116 -> 77 / 42 ns. Price: graphs without shared refs fetch 1-3% slower
+(`prof.php`, best of 16 interleaved: get_prods 3647 -> 3773 ns, get_obj 100 -> 103 ns, get_json, get_ords within noise),
+stores within noise; the type sources first sat in the slot loop (get_prods -6%), now a pass of their own.
 Copy mode keeps a private **template** of a graph in the kept-copy table on its second sighting (the block's bytes with
 its strings and arrays copied out, classes resolved); later fetches build the objects from it, sharing those values by
 refcount (COW). `bench/objects.php` copy mode: one object 249 -> 104 ns, 100 objects 16.2 -> 5.3 µs, 100 arrays + 1 object
