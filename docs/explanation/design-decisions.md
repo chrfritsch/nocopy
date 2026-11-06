@@ -242,7 +242,9 @@ polyfill (strace, 2,000 nodes). Median of 3 interleaved runs, nocopy-all: logged
 
 ## Build
 
-**One translation unit for the PHP layers.** `nocopy.c` includes `nocopy_value.c` and `nocopy_store.c`, which still compile alone (tidy).
+**One translation unit for the PHP layers.** `nocopy.c` includes `nocopy_value.c`, `nocopy_graph.c` and `nocopy_store.c`, which still compile alone (tidy).
+Splitting objects out of `nocopy_value.c` (shared through `nocopy_value_int.h`, the object and reference walkers kept `noinline`) cost nothing:
+`ab.sh write`, best of 7, copy / zero: all within ±2.5% (store object -1.9 / -2.5%, store+delete int, untouched, -2.0 / -2.2%); `bench/objects.php`, best of 5: 100 objects +2.9 / +5.9%, one object -2.2 / 0%.
 Built as three, `nocopy_*` stopped inlining the store: fetch miss -5%, failing add -6%; as one, `ab.sh` read/write within noise.
 
 **LTO in shared builds** (`--disable-nocopy-lto` turns it off), which inlines the arena into the fetch and store paths. `ab.sh` best of 5,

@@ -1,4 +1,4 @@
-/* The PHP store on top of the arena: values (nocopy_value.c), the store (nocopy_store.c), nocopy_* and the module (nocopy.c). */
+/* The PHP store on top of the arena: values (nocopy_value.c, objects: nocopy_graph.c), the store (nocopy_store.c), nocopy_* and the module (nocopy.c). */
 
 #ifndef NOCOPY_PHP_H
 #define NOCOPY_PHP_H
@@ -65,7 +65,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	uint32_t local_hand; /* SIEVE hand over local */
 	bool local_ok; /* between RINIT and RSHUTDOWN */
 	nocopy_vk vk;
-	HashTable classes; /* class entry -> layout fingerprint (nocopy_value.c), this request */
+	HashTable classes; /* class entry -> layout fingerprint (nocopy_graph.c), this request */
 	bool classes_on;
 ZEND_END_MODULE_GLOBALS(nocopy)
 

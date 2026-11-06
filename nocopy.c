@@ -26,6 +26,7 @@
 
 /* One translation unit, so nocopy_* inlines the store and value layers (split: miss -5%, failing add -6%); each also compiles alone. */
 #include "nocopy_value.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_graph.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_store.c" /* NOLINT(bugprone-suspicious-include) */
 
 ZEND_DECLARE_MODULE_GLOBALS(nocopy)
