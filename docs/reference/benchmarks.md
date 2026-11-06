@@ -89,7 +89,7 @@ ten configs the same day ([full](../../bench/results-drupal/2026-11-06/full)) ca
 which the three runs did not reproduce.
 
 Not in the table (full run, stock there 4,221 / 906 req/s): stock + igbinary is the same as stock (4,407 / 1,009 req/s), and so
-is nocopy as chainedfast's fast layer (`nocopy-fast` 4,454 / 997 req/s, with `routes` 4,574 / 980 req/s). Chainedfast asks the database for each bin's
+is nocopy as chainedfast's fast layer (`nocopy-fast` 4,454 / 997 req/s). Chainedfast asks the database for each bin's
 last write on every request, and those bins were never the bottleneck.
 
 ### Memory per php-fpm worker
