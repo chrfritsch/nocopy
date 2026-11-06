@@ -8,8 +8,10 @@ Start with [How nocopy works](how-it-works.md) for the overview; this page is fo
 Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
-- `nocopy.c`: PHP values in and out of the arena (size, persist, rebase, copy-out, unserialize), the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), `nocopy_*`, the module, FrankenPHP's worker hook.
-- `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_build`/`publish`/`fetch_local`/`serialize`/`unserialize`).
+- `nocopy_value.c`: PHP values in and out of an arena block (size, persist, rebase, copy-out, serialize, `nocopy_build`).
+- `nocopy_store.c`: the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), copy mode's private copies, leases.
+- `nocopy.c`: `nocopy_*`, INI, the module, FrankenPHP's worker hook.
+- `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy_store.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_build`/`publish`/`fetch_local`/`serialize`/`unserialize`).
 - `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
@@ -68,7 +70,7 @@ and `nocopy_find` reads `mseq` before probing and treats a miss as real only if 
 ## Writes
 
 A write is a `nocopy_put`: `nocopy_put_begin` locks the key's shard, `nocopy_alloc`s (bump-allocate in the shard's open segment for the entry's TTL bucket, or take a fresh one / a run) and sets the header;
-the caller (`build()` in nocopy.c: size the value, `persist_entry`) fills key and payload; `nocopy_put_commit` locates the slot, publishes with a release store, marks the old entry dead and unlocks.
+the caller (`nocopy_build()` in nocopy_value.c: size the value, `persist_entry`) fills key and payload; `nocopy_put_commit` locates the slot, publishes with a release store, marks the old entry dead and unlocks.
 Blocks up to `NOCOPY_INLINE_PUT` (2 KB) are filled under the lock (one critical section); larger ones are filled with the lock dropped and recorded as the worker's `wip` meanwhile (see Locks). The caller never sees the lock.
 Per segment: `used` (bytes appended), `live`, `pending` (allocated, unpublished). A sealed segment with `live==0 && pending==0` becomes DEAD (`seg_check`); `reclaim()` frees DEAD segments no worker pins, under the shard lock.
 TTL buckets (Segcache): one open segment per bucket (ttl 0, < 8 s, < 64 s, < 512 s, < 4096 s, < 32768 s, longer); each segment keeps `max_exp`. Every write runs `nocopy_expire_step()` on its shard: a cursor walks the entries of
@@ -85,7 +87,7 @@ Ghost (S3-FIFO): per shard, one 32-bit tag per slot (in the header after the slo
 a new key whose tag is there starts at `hot = 2` (survives two merges unread; `ghost_hits`). Keys used once never come back, so only recurring keys whose reuse distance exceeds the cache get the extension.
 `hot` is a byte in the entry header, a Morris-style read counter (0-15): the first read sets 1, later reads add 1 with probability 1/2^hot (per-worker xorshift), so a hot key writes its cache line ~log2(reads) times between merges and it stays shared otherwise (exact per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.
-Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy.c walks the value and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` stays.
+Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy_value.c walks the value and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` stays.
 Value strings get `h = 0` (a reader may have been hashing the old copy during the memcpy). Nothing is re-persisted, so the moved block has the old size by construction.
 
 ## Reads (lock-free) and pins
@@ -128,8 +130,8 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 
 ## Valkey tier (`nocopy_valkey.c`)
 
-`nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy.c` hands `nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`, the multi variants,
-`compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy.c`); `nocopy_valkey.c` owns the routing, the connection and every command.
+`nocopy.valkey` makes Valkey the cache of record; the arena holds local copies. `nocopy_store.c` hands `nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`, the multi variants,
+`compute` and `nocopy_clear_all` to `nocopy_vk_*` (with an arena; without one they miss or fail in `nocopy_store.c`); `nocopy_valkey.c` owns the routing, the connection and every command.
 - Connections are libvalkey's (vendored in `third_party/libvalkey`, `scripts/vendor-libvalkey.sh`; compiled with `-w`, `-U_GNU_SOURCE` and its API hidden): blocking `valkeyContext`s with `nocopy.valkey_timeout` for connect and every read and write,
   `VALKEY_OPT_NO_PUSH_AUTOFREE` so pushes come back as replies and are applied here. Commands are built as RESP by hand (the key prefix without a copy) and queued with `valkeyAppendFormattedCommand`.
 - TLS (`tls://`, `rediss://`, `HAVE_NOCOPY_TLS`): our `SSL_CTX` from MINIT, shared by forks and threads; our `SSL` (SNI, host or IP verified) handed to `valkeyInitiateTLS`. libvalkey frees it without close_notify, so a forked child leaves the parent's session intact.

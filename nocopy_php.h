@@ -1,4 +1,4 @@
-/* The PHP store on top of the arena, implemented in nocopy.c. */
+/* The PHP store on top of the arena: values (nocopy_value.c), the store (nocopy_store.c), nocopy_* and the module (nocopy.c). */
 
 #ifndef NOCOPY_PHP_H
 #define NOCOPY_PHP_H
@@ -22,6 +22,15 @@ typedef struct {
 	nocopy_kslot *slot; /* own allocation: kept out of the hot globals */
 	uint32_t gen;
 } nocopy_keys;
+
+/* Empties the table for the next value. */
+static zend_always_inline void keys_reset(nocopy_keys *t)
+{
+	if (UNEXPECTED(++t->gen == 0)) {
+		memset(t->slot, 0, NOCOPY_KEYS * sizeof(nocopy_kslot));
+		t->gen = 1;
+	}
+}
 
 #define NOCOPY_LOCAL 4096 /* 1024 sets of NOCOPY_LOCAL_WAYS */
 #define NOCOPY_LOCAL_WAYS 4
@@ -73,6 +82,31 @@ typedef enum {
 	NOCOPY_REFUSED, /* the value: warned, or an exception is pending */
 } nocopy_status;
 
+
+/* ---- the arena block (nocopy_value.c): core header, the value, then the key's bytes and the value's out-of-line parts ---- */
+#define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
+typedef struct {
+	nocopy_entry h;
+	zval val;
+} php_entry;
+/* nocopy_entry.user: nocopy_remember's compute time, ms (XFetch) */
+#define KEY_OFF SALIGN(sizeof(php_entry)) /* the key's bytes come first after the zval: only compared, never a zend_string */
+_Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
+static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
+
+typedef int (*nocopy_igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
+typedef int (*nocopy_igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
+extern bool nocopy_use_igbinary; /* nocopy.serializer=igbinary, and igbinary resolved (MINIT) */
+extern nocopy_igb_ser_fn nocopy_igb_ser;
+extern nocopy_igb_unser_fn nocopy_igb_unser;
+void nocopy_value_minit(void); /* with an arena: its shared empty array */
+void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value, with NOCOPY_G(keys): keys_reset() it first for an array */
+
+/* ---- module state the store reads (set in MINIT / INI) ---- */
+extern size_t nocopy_local_size; /* nocopy.local_size */
+extern bool nocopy_detour; /* Valkey on, or no arena: operations leave the local fast path */
+void nocopy_store_rshutdown(void); /* drops copy mode's copies */
+void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
 bool nocopy_available(void); /* false: nocopy.shm_name could not be attached; the functions below then keep and serve nothing */

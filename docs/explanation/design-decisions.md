@@ -30,7 +30,7 @@ over loopback (scratch script, 9 interleaved rounds, rounds where both builds ra
 (each reply is a malloc'd tree), get 3.9-4.0 -> 3.7-4.0, inc 11.8-13.8 -> 12.5-13.0, get_multiple of 100 58-75 -> 52-71. Price: ~7k lines
 of C in the repo, updated with `scripts/vendor-libvalkey.sh <tag>`.
 
-**Valkey tier behind a seam.** `nocopy.c` reaches it only through `nocopy_vk_*`, and `--disable-nocopy-valkey` compiles it
+**Valkey tier behind a seam.** `nocopy_store.c` reaches it only through `nocopy_vk_*`, and `--disable-nocopy-valkey` compiles it
 out, so the core builds and ships without it. CI runs the suite both ways. Default stays on.
 
 ## Hashing and slots
