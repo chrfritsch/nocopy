@@ -34,6 +34,20 @@ static zend_always_inline void key_put(const nocopy_keys *t, nocopy_kslot *s, co
 	s->gen = t->gen;
 }
 
+#define NOCOPY_VSTR_MAX 64 /* value strings up to this length share the key table: stored once per value */
+
+/* A map's hash in the arena: 2 slots per bucket rounded up, as PHP sizes it, not the table's 16 minimum. */
+static zend_always_inline uint32_t map_mask(const zend_array *a)
+{
+	uint32_t slots = 4;
+	while (slots < 2 * a->nNumUsed) {
+		slots <<= 1;
+	}
+	return slots < (uint32_t) -(int32_t) a->nTableMask ? (uint32_t) -(int32_t) slots : a->nTableMask;
+}
+
+static zend_always_inline size_t map_size(const zend_array *a) { return HT_HASH_SIZE(map_mask(a)) + a->nNumUsed * sizeof(Bucket); }
+
 /* ---- object graphs: objects stored as nodes, rebuilt on fetch ---- */
 
 #define NC_OREF IS_OBJECT /* in a graph: Z_LVAL is the object's index */
@@ -313,6 +327,21 @@ typedef struct {
 } sizing;
 
 static size_status size_zval(sizing *z, zval *v, int depth);
+
+/* A string inside an array or object: counted once per value if short (persist_vstr decides alike). */
+static zend_always_inline void size_vstr(sizing *z, zend_string *s)
+{
+	if (ZSTR_LEN(s) <= NOCOPY_VSTR_MAX) {
+		zend_ulong h = zend_string_hash_val(s);
+		nocopy_kslot *k = key_slot(&z->keys, h);
+		if (key_hit(&z->keys, k, s, h)) {
+			return;
+		}
+		key_put(&z->keys, k, s, h);
+	}
+	z->n += SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(s)));
+}
+
 static size_status size_object(sizing *z, zend_object *o, int depth);
 static size_status size_ref(sizing *z, zend_reference *r, int depth);
 
@@ -321,7 +350,7 @@ static size_status size_array(sizing *z, zend_array *a, int depth)
 	if (zend_hash_num_elements(a) == 0) {
 		return SIZE_OK;
 	}
-	z->n += SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : HT_USED_SIZE(a));
+	z->n += SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
 	size_status st = SIZE_OK;
 	if (HT_IS_PACKED(a)) {
 		zval *v;
@@ -362,7 +391,7 @@ static size_status size_zval(sizing *z, zval *v, int depth)
 			}
 			return size_zval(z, Z_REFVAL_P(v), depth + 1);
 		case IS_STRING:
-			z->n += SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN_P(v)));
+			size_vstr(z, Z_STR_P(v));
 			return SIZE_OK;
 		case IS_ARRAY:
 			return size_array(z, Z_ARR_P(v), depth);
@@ -381,7 +410,7 @@ static zend_always_inline size_status size_root(sizing *z, zval *v)
 	if (Z_TYPE_P(v) < IS_STRING) {
 		return SIZE_OK;
 	}
-	if (Z_TYPE_P(v) == IS_STRING) {
+	if (Z_TYPE_P(v) == IS_STRING) { /* no table: it is reset for arrays and objects only */
 		z->n += SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN_P(v)));
 		return SIZE_OK;
 	}
@@ -562,7 +591,7 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	size_status st = SIZE_OK;
 	zval dv;
 	if (kind == K_ENUM) {
-		z->n += SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN_P(zend_enum_fetch_case_name(o))));
+		size_vstr(z, Z_STR_P(zend_enum_fetch_case_name(o)));
 	} else if (kind == K_DATA) {
 		if (Z_TYPE(n->data) == IS_UNDEF) {
 			g->user = true;
@@ -678,6 +707,20 @@ static zend_string *persist_str(persist *p, const zend_string *s)
 
 static void persist_zval(persist *p, zval *z);
 
+static zend_always_inline zend_string *persist_vstr(persist *p, zend_string *s)
+{
+	if (ZSTR_LEN(s) > NOCOPY_VSTR_MAX) {
+		return persist_str(p, s);
+	}
+	zend_ulong h = zend_string_hash_val(s);
+	nocopy_kslot *k = key_slot(&p->keys, h);
+	if (key_hit(&p->keys, k, s, h)) {
+		return k->copy;
+	}
+	key_put(&p->keys, k, s, h);
+	return k->copy = persist_str(p, s);
+}
+
 static zend_array *persist_array(persist *p, const zend_array *src)
 {
 	if (zend_hash_num_elements(src) == 0) {
@@ -687,10 +730,33 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 	memcpy(ht, src, sizeof(zend_array));
 	ht->pDestructor = NULL; /* a function address: differs between processes; immutable arrays are never destroyed */
 
-	size_t size = HT_IS_PACKED(src) ? HT_PACKED_USED_SIZE(src) : HT_USED_SIZE(src);
-	void *data = take(p, size);
-	memcpy(data, HT_GET_DATA_ADDR(src), size);
-	HT_SET_DATA_ADDR(ht, data);
+	if (HT_IS_PACKED(src)) {
+		size_t size = HT_PACKED_USED_SIZE(src);
+		void *data = take(p, size);
+		memcpy(data, HT_GET_DATA_ADDR(src), size);
+		HT_SET_DATA_ADDR(ht, data);
+	} else if ((ht->nTableMask = map_mask(src)) == src->nTableMask) {
+		size_t size = HT_USED_SIZE(src);
+		void *data = take(p, size);
+		memcpy(data, HT_GET_DATA_ADDR(src), size);
+		HT_SET_DATA_ADDR(ht, data);
+	} else { /* smaller hash: rechain, as opcache compacts */
+		HT_SET_DATA_ADDR(ht, take(p, map_size(src)));
+		Bucket *d = ht->arData;
+		const Bucket *sb = src->arData;
+		uint32_t mask = ht->nTableMask;
+		for (uint32_t *h = (uint32_t *) d - (uint32_t) -(int32_t) mask; h < (uint32_t *) d; h++) {
+			*h = HT_INVALID_IDX;
+		}
+		for (uint32_t i = 0; i < ht->nNumUsed; i++) {
+			d[i] = sb[i];
+			if (EXPECTED(Z_TYPE(d[i].val) != IS_UNDEF)) {
+				uint32_t ni = (uint32_t) d[i].h | mask;
+				Z_NEXT(d[i].val) = HT_HASH_EX(d, ni);
+				HT_HASH_EX(d, ni) = HT_IDX_TO_HASH(i);
+			}
+		}
+	}
 
 	ht->nInternalPointer = 0;
 	GC_SET_REFCOUNT(ht, 2);
@@ -817,7 +883,7 @@ static void persist_zval(persist *p, zval *z)
 			persist_zval(p, z);
 			break;
 		case IS_STRING:
-			Z_STR_P(z) = persist_str(p, Z_STR_P(z));
+			Z_STR_P(z) = persist_vstr(p, Z_STR_P(z));
 			Z_TYPE_FLAGS_P(z) = 0;
 			break;
 		case IS_ARRAY: {
@@ -881,6 +947,9 @@ static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, no
 	memcpy(take(&p, ZSTR_LEN(key)), ZSTR_VAL(key), ZSTR_LEN(key));
 	if (g) {
 		ZVAL_PTR(entry_val(e), persist_graph(&p, val));
+	} else if (Z_TYPE_P(val) == IS_STRING) { /* as size_root: not through the table */
+		ZVAL_STR(entry_val(e), persist_str(&p, Z_STR_P(val)));
+		Z_TYPE_FLAGS_P(entry_val(e)) = 0;
 	} else {
 		ZVAL_COPY_VALUE(entry_val(e), val);
 		persist_zval(&p, entry_val(e));

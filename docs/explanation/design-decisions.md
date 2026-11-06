@@ -71,6 +71,18 @@ source key**, so repeated keys match by pointer (was a `memcmp` against the pers
 10 / 1k / 1k unserialized-key rows: 616 -> 520 ns, 59.2 -> 49.5 µs, 65.7 -> 53.8 µs. **`nocopy_get_multiple` sizes
 its result up front**: no rehash, 10 keys 122 -> 109 ns.
 
+**Short value strings are deduped and map hashes sized to their elements**, for the arena's size: Drupal's cache values took
+3.3x igbinary's bytes once objects became graph nodes (bench arena 11.1 -> 19.7 MB). Every row of Drupal's database bins after
+a warmed `./dev drupal-bench` (786 values), put one by one: serialize 6.26 MB, igbinary 3.80 MB, nocopy 12.62 -> 10.77 MB (-15%).
+Of the 12.62 MB, strings were 4.75 (3.59 unique), buckets ~2.80, hashes ~1.64, array headers ~1.37 (24.5k arrays), object nodes
+~0.68: 18k of 20k maps hold at most 8 elements (8.2k hold one) and each had PHP's minimum 16-slot hash (64 B). Simulated before
+building: equal strings up to 64 bytes in the existing 256-slot key table save 1.06 of 1.23 MB possible (exact table, any length);
+a 1024-slot table 1.17, up to 16 bytes 0.74. Hash slots at 2 per bucket (PHP's own ratio, opcache's after compaction) save ~0.8 MB.
+`ab.sh write`, copy / zero: store array 10 rows 517 -> 604 ns, 1k rows 50.7 -> 58.5 µs, 1k unserialized keys 56.1 -> 66.0 µs
+(+13-17%, three quarters of it the rechaining; one pass copying and chaining each bucket won back 2-4%); other stores and all
+fetches within noise. `bench/run.php` 1k rows 520,096 -> 425,472 bytes. A write is paid once per value, the bytes for as long
+as it stays cached.
+
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
 round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
@@ -184,7 +196,7 @@ Also nodes: classes with `__serialize`/`__unserialize` (user and internal: `Date
 `SplObjectStorage`; `props[0]` is the array, `__unserialize` called on fetch), user classes with `__wakeup` (slots, then the call)
 and enums (the case). `bench/objects.php`, 100 `Order` objects with a `DateTimeImmutable` and an enum: 85.9 / 83.8 µs ->
 48.9 / 47.1 µs (zero / copy); `DateTime::__unserialize` parsing its string is most of the rest. Like arrays, nodes don't
-dedup equal strings (igbinary does). `stdClass` and dynamic properties too: the properties table is stored as an array, and
+dedup equal strings (igbinary does; since 2026-11-06 short ones are, see [Writes](#writes)). `stdClass` and dynamic properties too: the properties table is stored as an array, and
 each fetch gives the object a private copy of it (one bucket memcpy; its strings and arrays stay zero-copy), not the arena's
 immutable table: the engine separates such tables on its own writes, but its `(object)` cast still duplicates them, and an
 extension writing a table in place would corrupt the cache. `bench/objects.php`, `json_decode` of 100 rows (200 objects):

@@ -33,8 +33,9 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 - Segment size = power of two so that there are at most 256 segments (min 64 KB). Entries larger than half a segment take a run of contiguous segments.
 - Entry = `nocopy_entry` header (hash, size, expiry, seq, 32-bit created, key length/offset, live/hot/flags, the user's 32-bit `user`: 48 bytes, `_Static_assert`ed) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
-  Equal array keys are stored once per entry (rows of a result set share their column names): a 256-slot table by hash (`NOCOPY_G(keys)`, `key_slot`/`key_hit`) remembers this value's keys; a miss overwrites the slot.
-  Its decisions depend only on the sequence of key contents, so sizing (`size_zval`) and persisting (`persist_*`) dedupe exactly alike and agree on the size.
+  Equal array keys, and equal strings of up to 64 bytes inside arrays and objects (`NOCOPY_VSTR_MAX`), are stored once per entry (rows of a result set share their column names and repeated values): a 256-slot table by hash (`NOCOPY_G(keys)`, `key_slot`/`key_hit`) remembers this value's strings, keys and values alike; a miss overwrites the slot.
+  Its decisions depend only on the sequence of string contents, so sizing (`size_zval`, `size_vstr`) and persisting (`persist_*`, `persist_vstr`) dedupe exactly alike and agree on the size. A string stored alone (the whole value) bypasses the table: it is reset for arrays and objects only.
+  A map's hash gets 2 slots per bucket, rounded up to a power of two (`map_mask`), not the table's 16-slot minimum: rechained on persist, as opcache compacts its arrays. Readers and `zend_array_dup` take the mask as they find it.
 - Slot: 64 bits = `{ offset/8 (32 bit), nocopy_slot_tag(hash) }`; 0 empty. The tag is the hash times an odd constant, top 32 bits; its low bits are the home slot, all 32 the probe filter: a probe compares them first and only dereferences on a match.
   Not the raw hash: PHP's DJBX33A gives keys like `prefix.N` regular low bits, and as home slots they formed probe runs of hundreds at 3/4 fill (simulated: hit 215 / miss 1247 probes vs 2 / 8).
 
@@ -164,7 +165,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 - Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `nocopy_hold` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `relocate()` relies on it.
-- Key dedupe must stay a function of key contents only: sizing and persisting must agree on `e->size` (`ZEND_ASSERT` at the end of `persist_entry`).
+- String dedupe must stay a function of string contents and walk order only: sizing and persisting must agree on `e->size` (`ZEND_ASSERT` at the end of `persist_entry`).
 - Every pointer inside a block points into the same block or to the arena's empty array (`ARENA_EMPTY`, in the header's `user` area): `nocopy_rebase` relies on it. Never to anything of the process (`zend_empty_array`, interned strings, function pointers: `pDestructor` is NULL): another process maps the arena at the same address but its own binary elsewhere (test 057 segfaults with `zend_empty_array`).
 - Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
