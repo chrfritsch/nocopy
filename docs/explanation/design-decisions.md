@@ -210,7 +210,7 @@ stored as its value, like `serialize()`. 1k rows + one shared ref, copy (`local_
 store 125 -> 24 µs; 3 keys, one shared: fetch 125 / 116 -> 77 / 42 ns. Price: graphs without shared refs fetch 1-3% slower
 (`prof.php`, best of 16 interleaved: get_prods 3647 -> 3773 ns, get_obj 100 -> 103 ns, get_json, get_ords within noise),
 stores within noise; the type sources first sat in the slot loop (get_prods -6%), now a pass of their own.
-**`__sleep` classes are graph nodes** (were: the whole value serialized): `__sleep` runs while sizing, its names are found as `serialize()`
+**`__sleep` classes are graph nodes** (were: the whole value serialized): `__sleep` runs before the last sizing pass, its names are found as `serialize()`
 finds them (as given, private to the class, protected) and kept as a slot mask plus the named dynamic properties; the other slots are
 `NC_DEFAULT` and get the class default on fetch, as `unserialize()` leaves them. Anything `serialize()` would warn about (not an array,
 a missing, duplicate or non-string name) serializes the value, which repeats the warning (and calls `__sleep` a second time).
@@ -230,8 +230,15 @@ instead (one lookup fewer) gave 1-3%.
 What sizing learns about each object (class code, kind, dynamic properties, `__serialize()`'s array) is kept in a node array
 by object index, so persisting does one lookup per object and no `HashTable`s are built for hooks: `prof.php` best of 11,
 put_obj 240 -> 212 ns, put_ords 37.4 -> 36.0 µs, put_prods 9.79 -> 9.97 µs, put_json 11.86 -> 12.15 µs (~1 ns per plain
-object; not the free loop, regrowth or node size: 8-byte nodes with a side array made put_json 5.6% slower). Sizing still
-runs twice after `__serialize`: key dedupe depends on the walk order, and user code may store and so reuse the key table. Profile after (`./dev perf get_prods ...`): a fetch of
+object; not the free loop, regrowth or node size: 8-byte nodes with a side array made put_json 5.6% slower). **Hooks run between sizing passes, not during one** (were: called mid-walk, then a second pass reused their results by walk
+index): a `__serialize` that replaced an object already walked gave persisting another graph than sizing (block size assertion,
+test 074), and a hook could grow an array the walk was iterating. A pass skips the contents of objects whose hook has not run,
+the hooks run, the next pass sizes everything; results are found by object (held), not by index. `prof.php` best of 9
+interleaved: put_ords 51.4 -> 48.2 µs, put_prods 14.8 -> 14.1 µs, put_json 18.9 -> 18.1 µs, a `__sleep` value of 100 entities 17.1 -> 16.4 µs
+(the first pass no longer sizes hook objects' contents), put_obj 260 -> 254 ns, put_int / put_arr within noise. Results kept
+in a map from the start (512 B more in every store's frame) made put_int +3.7% and put_obj +5%: up to 4 are searched
+linearly. A `__serialize` result holding more hook objects costs one more pass; hooks run outer first, siblings before the
+ones their results hold (`serialize()` runs them depth first). Profile after (`./dev perf get_prods ...`): a fetch of
 100 objects is ~36% nocopy, the rest the engine creating and freeing objects; `DateTime*` objects cost ~550 ns each, over 95%
 in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup). Storing them natively
 (timestamp, microseconds, zone) would be the next lever.

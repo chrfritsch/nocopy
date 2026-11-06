@@ -152,31 +152,17 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 
 /* ---- writes ---- */
 
-static nocopy_status publish(nocopy_put *p, bool add_only)
-{
-	switch (nocopy_put_commit(p, add_only)) {
-		case PUT_OK: return NOCOPY_OK;
-		case PUT_EXISTS: return NOCOPY_EXISTS;
-		default: return NOCOPY_NO_ROOM;
-	}
-}
-
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	nocopy_put p;
-	nocopy_status s = nocopy_build(&p, key, val, o->ttl);
-	if (s != NOCOPY_OK) {
-		return s;
-	}
-	p.e->user = user;
-	return publish(&p, o->add_only);
+	return nocopy_build(&p, key, val, o->ttl, user, o->add_only);
 }
 
 /* The local store, else the Valkey tier, else (no arena) only the checks. user: the compute time (ms). */
 static zend_always_inline nocopy_status store_as(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	if (UNEXPECTED(nocopy_detour)) {
-		return nocopy_a ? nocopy_vk_store(key, val, o, user) : nocopy_build(NULL, key, val, o->ttl);
+		return nocopy_a ? nocopy_vk_store(key, val, o, user) : nocopy_build(NULL, key, val, o->ttl, 0, false);
 	}
 	return nocopy_put_local(key, val, o, user);
 }

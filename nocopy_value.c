@@ -416,12 +416,17 @@ bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 
 /* ---- building an entry ---- */
 
-/* Sizes the value: SIZE_OK with z->n, the bytes after the key; g holds its objects and shared references if it has any. */
+/* Sizes the value: SIZE_OK with z->n, the bytes after the key; g holds its objects and shared references if it has any.
+ * Sizing runs no user code: __serialize/__sleep run between passes, so the last pass sees what persisting will. */
 static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 {
 	size_status st = size_root(z, val);
-	if (st == SIZE_OK && graph_b_user(z->g)) { /* again without user code: __serialize's arrays are kept */
-		keys_reset(keys);
+	for (int pass = 0; st == SIZE_OK && graph_b_pending(z->g); pass++) {
+		if (pass == NOCOPY_MAX_DEPTH || (st = nocopy_graph_b_hooks(z->g)) != SIZE_OK) {
+			st = st == SIZE_OK ? SIZE_DEEP : st;
+			break;
+		}
+		keys_reset(keys); /* a hook may have stored */
 		z->keys = *keys;
 		z->n = 0;
 		nocopy_graph_b_rewind(z->g);
@@ -433,7 +438,7 @@ static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 	return st;
 }
 
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl)
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
 	keys_reset_for(keys, val);
@@ -465,15 +470,19 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;
 	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size, ttl);
+	nocopy_status r = NOCOPY_NO_ROOM;
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : graph ? ENTRY_GRAPH : 0;
+		e->user = user;
 		persist_entry(e, key, val, keys, graph ? &g : NULL);
+		nocopy_put_result c = nocopy_put_commit(p, add_only);
+		r = c == PUT_OK ? NOCOPY_OK : c == PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
-	if (graph) {
+	if (graph) { /* after the commit: freeing the hooks' results may run destructors */
 		nocopy_graph_b_free(&g);
 	}
 	if (serialized) {
 		zend_string_release(Z_STR(ser));
 	}
-	return e ? NOCOPY_OK : NOCOPY_NO_ROOM;
+	return r;
 }

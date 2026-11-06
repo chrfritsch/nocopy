@@ -15,7 +15,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 | Check | Result |
 |---|---|
-| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`); also `./dev drupal`; `./dev apcu` at 24 known with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
+| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` at 24 known with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
 | `./dev test` (8.5, `./dev asan`, `./dev clang`; 2026-11-06 after objects moved to `nocopy_graph.c`) | 64 passed, 1 skipped |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |

@@ -67,34 +67,48 @@ typedef struct {
 
 /* What sizing learned about one object, so persisting looks nothing up again. */
 typedef struct {
-	uint32_t ck;    /* class index << 3 | kind */
-	bool dyn;       /* dynamic properties stored after the slots */
-	bool done;      /* persisted */
-	zval data;      /* __serialize()'s array (called once), else the dynamic properties without the slots; UNDEF: none, or the object's own table (stdClass) */
-	uint8_t *named; /* __sleep(): 1 per slot it named; NULL: not called, or no __sleep() */
+	uint32_t ck;          /* class index << 3 | kind */
+	bool dyn;             /* dynamic properties stored after the slots */
+	bool done;            /* persisted */
+	bool own;             /* data is the node's (dynamic properties copied); else borrowed from its ghook */
+	zval data;            /* __serialize()'s array, else the dynamic properties without the slots; UNDEF: none, or the object's own table (stdClass) */
+	const uint8_t *named; /* __sleep(): 1 per slot it named; NULL: no __sleep() */
 } gnode;
+
+/* A __serialize/__sleep result, kept by object across sizing passes. */
+typedef struct {
+	zend_object *o; /* held, so its handle stays unique */
+	zval data;      /* __serialize()'s array, or the dynamic properties __sleep() named */
+	uint8_t *named;
+	bool ran;
+} ghook;
+
+#define GHOOK_INL 4 /* hook results found by a linear search, without a map */
 
 /* One value's objects, classes and shared references, in the order sizing meets them (persisting walks the same order). */
 typedef struct {
 	pmap objs;       /* handle -> index */
 	pmap cls;        /* class entry -> index << 3 | kind */
-	gnode *nodes;    /* by index; kept for a second sizing */
+	gnode *nodes;    /* by index */
 	uint32_t nn, ncap;
 	uint32_t *hooks; /* indices, inner first */
 	uint32_t nh, hcap;
 	pmap refs;       /* shared reference -> times met while sizing; while persisting REF_DONE | index */
 	uint32_t nref;   /* met more than once: nodes */
+	pmap *hk;        /* handle -> index into res, past GHOOK_INL; outlives a pass */
+	ghook *res;
+	uint32_t nres, nrun, rcap;
 	bool on;         /* set up: an object or a shared reference was met */
 	bool refs_on;
-	bool user;       /* __serialize/__sleep ran: they may have used the key table, so sizing is done again */
 	gnode inl[16];
+	ghook rinl[GHOOK_INL];
 } graph_b;
 
 /* Not = {0}: zeroing its tables cost every store ~3 ns. */
-static zend_always_inline void graph_b_off(graph_b *g) { g->on = g->user = false; }
+static zend_always_inline void graph_b_off(graph_b *g) { g->on = false; }
 static zend_always_inline bool graph_b_used(const graph_b *g) { return g->on && (g->objs.n || g->nref); }
-/* __serialize/__sleep ran while sizing: size again without them. */
-static zend_always_inline bool graph_b_user(const graph_b *g) { return g->on && g->user; }
+/* Sizing met objects whose __serialize/__sleep has not run: run them (nocopy_graph_b_hooks), then size again. */
+static zend_always_inline bool graph_b_pending(const graph_b *g) { return g->on && g->nrun < g->nres; }
 
 /* ---- sizing ---- */
 
@@ -184,7 +198,8 @@ static zend_always_inline void array_each(zend_array *a, nocopy_keys *keys, zval
 size_status nocopy_size_object(sizing *z, zend_object *o, int depth);
 size_status nocopy_size_ref(sizing *z, zend_reference *r, int depth);
 size_t nocopy_graph_head(const graph_b *g); /* the graph's fixed part, aligned */
-void nocopy_graph_b_rewind(graph_b *g);     /* for a second sizing: the nodes (and __serialize's arrays) stay, the walk starts over */
+size_status nocopy_graph_b_hooks(graph_b *g); /* user code: only between sizing passes */
+void nocopy_graph_b_rewind(graph_b *g);     /* for the next sizing: only the hooks' results stay */
 void nocopy_graph_b_free(graph_b *g);
 
 nc_graph *nocopy_persist_graph(persist *p, zval *val);

@@ -59,9 +59,9 @@ typedef enum {
 /* ---- in ---- */
 
 void nocopy_value_minit(void); /* with an arena: its shared empty array */
-/* Sizes the value, allocates and fills its entry (ttl 0: none). NOCOPY_OK: p holds it, ready for nocopy_put_commit().
+/* Sizes the value, then writes and publishes its entry (ttl 0: none; user: nocopy_entry.user).
  * p NULL (no arena): only the checks, so a value a store would refuse is refused alike; then NOCOPY_NO_ROOM. */
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl);
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only);
 
 /* ---- out ---- */
 
