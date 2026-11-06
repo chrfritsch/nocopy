@@ -22,6 +22,12 @@ $slow = function () use (&$n) { usleep(20000); return ++$n; };
 nocopy_remember('e', $slow, 100);
 var_dump(nocopy_remember('e', $slow, 100), nocopy_remember('e', $slow, 100, 0.0)); // 20 ms vs 100 s left: never early
 var_dump(nocopy_remember('e', $slow, 100, 1e9), nocopy_get('e')); // a huge beta always refreshes
+
+var_dump(nocopy_remember('s', function ($k, &$ttl) { $ttl = -1; return 'once'; }), nocopy_get('s', $hit), $hit); // ttl < 0: not stored
+nocopy_remember('t', function ($k, &$ttl) { var_dump($ttl); $ttl = 1; return 'short'; }, 100);
+sleep(3);
+var_dump(nocopy_get('t', $hit), $hit); // the callback's ttl won
+var_dump(nocopy_remember('u', 'strtoupper')); // internal callbacks get the key only
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t030*')); ?>
@@ -38,3 +44,10 @@ int(1)
 int(1)
 int(2)
 int(2)
+string(4) "once"
+NULL
+bool(false)
+int(100)
+NULL
+bool(false)
+string(1) "U"

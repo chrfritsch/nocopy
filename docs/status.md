@@ -21,7 +21,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
-| `./dev symfony` (8.x) | pass |
+| `./dev symfony` (6.4, 7.4, 8.x; 2026-11-06, with `get()` on `nocopy_remember`) | pass |
 | `./dev apcu` | 23 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 10 configs incl. `apcu-all` / `nocopy-all-dbtags` breakdown, published ([results](../bench/results-drupal/2026-11-05)) |

@@ -145,6 +145,19 @@ arbitrarily old data.
 `zend_is_callable_ex` and `zend_fcall_info_init`); a Closure now only gets a type check, other callables `zend_is_callable_ex`
 (still a TypeError on a hit). `ab.sh` best of 5, `apcu_entry hit` (`nocopy_remember`), copy / zero: 24.7 -> 18.7 / 24.1 -> 18.6 ns.
 
+**A user callback gets `&$ttl`** (internal ones only the key: they reject extra arguments); `$ttl < 0` stores nothing. Symfony's
+`get()` callbacks pick their lifetime while they run (`$item->expiresAfter()`) and may veto the save (`$save = false`), so this
+is what lets the bundle route `get()` through `nocopy_remember`.
+
+## Symfony
+
+**The bundle's `get()` is `nocopy_remember`**, not Symfony's: `AbstractAdapter::get()` runs `getItem()` + metadata, wraps every
+value with an expiry in a `ValueWrapper` object (so nocopy stored it serialized, not zero-copy), and locks misses with
+`flock` per host under php-fpm. `bench/sfget.php` (CLI, so without Symfony's lock; 8.5, Symfony 8, a 20-int array + 100-byte
+string), two runs: hit with `expiresAfter` 1,958 / 2,097 -> 190 / 217 ns, hit without expiry 682 / 655 -> 197 / 207 ns,
+miss + store 3,534 / 3,415 -> 1,559 / 1,481 ns. Not carried over: `$metadata` (left empty; ChainAdapter takes it from the pools
+below), `$item->isHit()` on an early refresh (always false), `setCallbackWrapper()`, a pending `saveDeferred()` of the same key.
+
 ## APCu
 
 **Compatibility as a PHP polyfill**, not in the extension. The extension keeps only `apc.enabled`/`apc.enable_cli`

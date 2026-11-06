@@ -39,7 +39,7 @@ function nocopy_get_multiple(array $keys): array {}
 /** key => value, one $ttl for all; with nocopy.valkey, one pipeline. false: some were not stored. */
 function nocopy_put_multiple(array $values, int $ttl = 0): bool {}
 
-/** Fetch, or compute once across workers and store. $beta > 0 refreshes early (XFetch), scaled by the measured compute time. */
+/** Fetch, or compute once across workers and store; a user callback gets ($key, &$ttl), $ttl < 0 skips the store. $beta > 0 refreshes early (XFetch). */
 function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
 
 /**

@@ -372,17 +372,23 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 	if (zend_fcall_info_init(fn, 0, &fci, &fcc, NULL, NULL) != SUCCESS) {
 		return; /* checked by the caller */
 	}
-	zval arg;
-	ZVAL_STR(&arg, key);
-	fci.param_count = 1;
-	fci.params = &arg;
+	zval args[2], t;
+	ZVAL_STR(&args[0], key);
+	ZVAL_LONG(&t, o->ttl);
+	ZVAL_NEW_REF(&args[1], &t);
+	fci.param_count = fcc.function_handler->type == ZEND_USER_FUNCTION ? 2 : 1; /* internal ones reject extra args */
+	fci.params = args;
 	fci.retval = rv;
 	double t0 = now_s(CLOCK_MONOTONIC);
 	zend_result r = zend_call_function(&fci, &fcc);
 	zend_release_fcall_info_cache(&fcc);
-	if (r == FAILURE || EG(exception)) {
-		return;
+	zend_long ttl = zval_get_long(Z_REFVAL(args[1]));
+	zval_ptr_dtor(&args[1]);
+	if (r == FAILURE || EG(exception) || ttl < 0) {
+		return; /* ttl < 0: the callback asks not to store */
 	}
+	const nocopy_opts oo = {.ttl = ttl, .add_only = o->add_only};
+	o = &oo;
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
 	uint32_t user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
 	if (UNEXPECTED(!nocopy_a)) {

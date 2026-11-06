@@ -64,6 +64,9 @@ Replaces the integer `$old` with `$new` atomically; `false` if the current value
 
 Returns the cached value, or computes it with `$callback($key)`, stores it and returns it.
 
+- **TTL from the callback:** a user callback (closure, function, method) also gets `int &$ttl`, set to `$ttl`; it may change
+  it, and `$ttl < 0` returns the value without storing it. Internal functions (`'strtoupper'`) get the key only.
+
 - **Single flight:** on a miss, the first worker takes a lease and runs the callback; the others wait for its value.
   A dead lease holder is detected, a stuck one is ignored after 30 s, and a recursive call for the same key does not wait.
   With `nocopy.valkey` the single flight is per server.

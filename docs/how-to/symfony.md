@@ -66,6 +66,9 @@ then load a page that uses the cache twice and check `nocopy_stats()['hits']` gr
   given to items without a lifetime (Valkey).
 - The adapter refuses to start in a process that does not share the cache (`nocopy_shared_with()` is `none`): set
   `nocopy.shm_name` or `nocopy.valkey` for php-fpm and the CLI, and run the console as the php-fpm user.
+- `$pool->get($key, $callback)` runs on `nocopy_remember`: one worker computes a miss while the others wait or get the expired
+  value, and hits refresh early ([XFetch](../reference/functions.md#nocopy_rememberstring-key-callable-callback-int-ttl--0-float-beta--10-mixed)).
+  `expiresAfter()`, `$save = false` and `$beta` work as in Symfony; `setCallbackWrapper()` is not used, and `$metadata` comes back empty.
 - Multi-key reads and writes (`getItems()`, deferred saves) are one call each; with Valkey, one round trip.
 - Each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
 - Under FrankenPHP worker mode, nocopy switches to copy mode automatically (the kernel keeps values across requests).

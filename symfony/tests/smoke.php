@@ -61,5 +61,16 @@ foreach (['cache.app', 'my.pool'] as $name) {
     assert($pool->clear() && !$pool->hasItem('k'), "$name clear");
     $pool->reset(); // next request: the new namespace version is read back from nocopy
     assert(!$pool->getItem('k')->isHit(), "$name clear survives reset");
+
+    $n = 0;
+    $f = function ($item) use (&$n) { $item->expiresAfter(100); return ['n' => ++$n]; };
+    assert($pool->get('g', $f) === ['n' => 1] && $pool->get('g', $f) === ['n' => 1], "$name get computes once");
+    assert(nocopy_get($id->invoke($pool, 'g')) === ['n' => 1], "$name get stores the value unwrapped");
+    assert($pool->getItem('g')->isHit() && $pool->get('g', $f, INF) === ['n' => 2], "$name get: getItem sees it, INF recomputes");
+    $pool->get('ns', function ($item, &$save) { $save = false; return 1; });
+    $pool->get('old', fn ($item) => $item->expiresAt(new DateTime('-1 sec')) ? 1 : 0);
+    assert(!$pool->hasItem('ns') && !$pool->hasItem('old'), "$name get: \$save = false and past expiry keep nothing");
+    $chain = new Symfony\Component\Cache\Adapter\ChainAdapter([$pool, $arr = new Symfony\Component\Cache\Adapter\ArrayAdapter()]);
+    assert($chain->get('c', fn () => 'v') === 'v' && $pool->getItem('c')->isHit() && $arr->getItem('c')->isHit(), "$name get in a chain");
 }
 echo "ok\n";

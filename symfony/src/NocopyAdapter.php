@@ -3,7 +3,9 @@
 namespace Chrfritsch\NocopyBundle;
 
 use Symfony\Component\Cache\Adapter\AbstractAdapter;
+use Symfony\Component\Cache\CacheItem;
 use Symfony\Component\Cache\Exception\CacheException;
+use Symfony\Component\Cache\Exception\InvalidArgumentException;
 
 /** Symfony cache pool on nocopy_*: needs no APCu layer, works next to real APCu. */
 class NocopyAdapter extends AbstractAdapter
@@ -11,7 +13,10 @@ class NocopyAdapter extends AbstractAdapter
     // Valkey has no eviction of its own here: cap "forever" so versioned-out keys leave
     private const PERM_TTL = 31536000;
 
+    private static \Closure $compute;
+
     private readonly bool $valkey;
+    private readonly int $lifetime;
 
     public function __construct(string $namespace = '', int $defaultLifetime = 0, ?string $version = null)
     {
@@ -21,6 +26,13 @@ class NocopyAdapter extends AbstractAdapter
             throw new CacheException(\sprintf('nocopy: this %s process does not share the cache (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this app, and run the console as the user that starts php-fpm.', \PHP_SAPI, $with));
         }
         $this->valkey = 'valkey' === $with;
+        $this->lifetime = $defaultLifetime;
+        self::$compute ??= \Closure::bind(static function (string $key, callable $callback, bool &$save): array {
+            $item = new CacheItem();
+            $item->key = $key;
+
+            return [$callback($item, $save), $item->expiry];
+        }, null, CacheItem::class);
         parent::__construct($namespace, $defaultLifetime);
         // ponytail: clear() bumps a namespace version instead of deleting keys; eviction (shm) or PERM_TTL (Valkey) drops the old ones
         $this->enableVersioning();
@@ -34,6 +46,38 @@ class NocopyAdapter extends AbstractAdapter
                 nocopy_put($marker, true, $this->valkey ? self::PERM_TTL : 0);
             }
         }
+    }
+
+    /** Single flight, stale-while-revalidate and early refresh in nocopy_remember, instead of Symfony's file locks and value wrappers. */
+    public function get(string $key, callable $callback, ?float $beta = null, ?array &$metadata = null): mixed
+    {
+        if (0 > $beta ??= 1.0) {
+            throw new InvalidArgumentException(\sprintf('Argument "$beta" provided to "%s::get()" must be a positive number, %f given.', static::class, $beta));
+        }
+        $id = $this->getId($key);
+        if (\INF === $beta) {
+            nocopy_delete($id);
+        }
+        $metadata = []; // ponytail: no expiry/ctime returned; ChainAdapter fills them from the pools below
+        // ponytail: ignores a pending saveDeferred() of the same key and setCallbackWrapper()
+
+        return nocopy_remember($id, function (string $id, int &$ttl) use ($key, $callback): mixed {
+            $save = true;
+            [$value, $expiry] = (self::$compute)($key, $callback, $save);
+            if (!$save) {
+                $ttl = -1;
+            } elseif (null !== $expiry) {
+                $ttl = $expiry ? (int) (0.1 + $expiry - microtime(true)) : 0;
+                if ($expiry && 0 >= $ttl) {
+                    $ttl = -1; // already expired: return it, keep nothing
+                }
+            }
+            if (0 === $ttl && $this->valkey) {
+                $ttl = self::PERM_TTL;
+            }
+
+            return $value;
+        }, $this->lifetime, $beta);
     }
 
     protected function doFetch(array $ids): iterable
