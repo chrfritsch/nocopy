@@ -84,6 +84,26 @@ static bool relocate(nocopy_shard *sh, nocopy_entry *old)
 	return true;
 }
 
+/* Would survive a merge: published and not expired. */
+static bool alive(const nocopy_entry *e) { return e->live && !nocopy_expired(e); }
+
+static uint64_t seg_live(uint32_t s) { return nocopy_a->segs[s].live; }
+static uint64_t seg_born(uint32_t s) { return nocopy_a->segs[s].born; }
+
+/* Keeps v (*nv of at most k) the k segments with the smallest key, ascending: s goes in if it beats the largest. */
+static void keep_least(uint32_t *v, uint32_t *nv, uint32_t k, uint32_t s, uint64_t (*key)(uint32_t))
+{
+	uint64_t ks = key(s);
+	if (*nv == k && ks >= key(v[k - 1])) {
+		return;
+	}
+	uint32_t i = *nv < k ? (*nv)++ : k - 1;
+	for (; i > 0 && key(v[i - 1]) > ks; i--) {
+		v[i] = v[i - 1];
+	}
+	v[i] = s;
+}
+
 static bool mergeable(uint32_t s)
 {
 	nocopy_seg *g = &nocopy_a->segs[s];
@@ -95,15 +115,9 @@ static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 {
 	uint32_t nv = 0;
 	SH_SEGS(sh, s) {
-		size_t l = nocopy_a->segs[s].live;
-		if (!mergeable(s) || l > COMPACT_MAX || (nv == MERGE_N && l >= nocopy_a->segs[v[MERGE_N - 1]].live)) {
-			continue;
+		if (mergeable(s) && seg_live(s) <= COMPACT_MAX) {
+			keep_least(v, &nv, MERGE_N, s, seg_live);
 		}
-		uint32_t k = nv < MERGE_N ? nv++ : MERGE_N - 1; /* keep v sorted by live */
-		for (; k > 0 && nocopy_a->segs[v[k - 1]].live > l; k--) {
-			v[k] = v[k - 1];
-		}
-		v[k] = s;
 	}
 	*live = 0;
 	uint32_t n = 0;
@@ -130,14 +144,7 @@ static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared, u
 			}
 			continue;
 		}
-		if (nv == K && g->born >= nocopy_a->segs[v[K - 1]].born) {
-			continue;
-		}
-		uint32_t k = nv < K ? nv++ : K - 1; /* keep v sorted by born */
-		for (; k > 0 && nocopy_a->segs[v[k - 1]].born > g->born; k--) {
-			v[k] = v[k - 1];
-		}
-		v[k] = s;
+		keep_least(v, &nv, K, s, seg_born);
 	}
 	if (run == UINT32_MAX || (nv && nocopy_a->segs[run].born >= nocopy_a->segs[v[0]].born)) {
 		return nv;
@@ -181,7 +188,7 @@ static uint8_t rank_cut(const uint32_t *v, uint32_t nv, size_t budget, size_t *s
 	size_t by[NOCOPY_HOT_MAX + 1] = {0};
 	for (uint32_t i = 0; i < nv; i++) {
 		SEG_FOREACH(v[i], e) {
-			if (e->live && !nocopy_expired(e)) {
+			if (alive(e)) {
 				by[__atomic_load_n(&e->hot, __ATOMIC_RELAXED)] += e->size;
 			}
 		}
@@ -205,7 +212,7 @@ static void move_survivors(nocopy_shard *sh, const uint32_t *v, uint32_t nv, siz
 			if (!budget) {
 				break;
 			}
-			if (!e->live || nocopy_expired(e)) {
+			if (!alive(e)) {
 				continue;
 			}
 			if (lossy) {
@@ -235,7 +242,7 @@ static void evict_rest(nocopy_shard *sh, const uint32_t *v, uint32_t nv)
 	bool lost = false;
 	for (uint32_t i = 0; i < nv && !lost; i++) {
 		SEG_FOREACH(v[i], e) {
-			if (e->live && !nocopy_expired(e)) {
+			if (alive(e)) {
 				lost = true;
 				break;
 			}

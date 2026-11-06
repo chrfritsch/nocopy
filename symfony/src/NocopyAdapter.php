@@ -24,8 +24,9 @@ class NocopyAdapter extends AbstractAdapter
 
     public function __construct(string $namespace = '', int $defaultLifetime = 0, ?string $version = null)
     {
-        $with = \function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none (the nocopy extension is not loaded)';
-        if ('host' !== $with && 'valkey' !== $with) {
+        $with = self::sharedWith();
+        if (null === $with) {
+            $with = \function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none (the nocopy extension is not loaded)';
             // a process with a cache of its own would serve what other processes already changed
             throw new CacheException(\sprintf('nocopy: this %s process does not share the cache (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this app, and run the console as the user that starts php-fpm.', \PHP_SAPI, $with));
         }
@@ -47,7 +48,7 @@ class NocopyAdapter extends AbstractAdapter
             // clear before marking: marking first would let another process read the old build's version in between
             if (!$hit) {
                 $this->clear();
-                nocopy_put($marker, true, $this->valkey ? self::PERM_TTL : 0);
+                nocopy_put($marker, true, $this->ttl(0));
             }
         }
     }
@@ -55,7 +56,7 @@ class NocopyAdapter extends AbstractAdapter
     /** AbstractAdapter::createSystemCache() with nocopy in APCu's place; Symfony's own where this process does not share nocopy. */
     public static function createSystemCache(string $namespace, int $defaultLifetime, string $version, string $directory, ?LoggerInterface $logger = null): AdapterInterface
     {
-        if (!\in_array(\function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none', ['host', 'valkey'], true)) {
+        if (null === self::sharedWith()) {
             return parent::createSystemCache($namespace, $defaultLifetime, $version, $directory, $logger);
         }
         $files = new PhpFilesAdapter($namespace, $defaultLifetime, $directory, true);
@@ -92,9 +93,7 @@ class NocopyAdapter extends AbstractAdapter
                     $ttl = -1; // already expired: return it, keep nothing
                 }
             }
-            if (0 === $ttl && $this->valkey) {
-                $ttl = self::PERM_TTL;
-            }
+            $ttl = $this->ttl($ttl);
 
             return $value;
         }, $this->lifetime, $beta);
@@ -134,6 +133,20 @@ class NocopyAdapter extends AbstractAdapter
     // false: AbstractAdapter retries key by key and logs the failures
     protected function doSave(array $values, int $lifetime): array|bool
     {
-        return nocopy_put_multiple($values, 0 === $lifetime && $this->valkey ? self::PERM_TTL : $lifetime);
+        return nocopy_put_multiple($values, $this->ttl($lifetime));
+    }
+
+    /** 'host' or 'valkey'; null: this process does not share a nocopy cache. */
+    private static function sharedWith(): ?string
+    {
+        $with = \function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none';
+
+        return 'host' === $with || 'valkey' === $with ? $with : null;
+    }
+
+    /** A ttl as stored: 0 (forever) is PERM_TTL under Valkey. */
+    private function ttl(int $ttl): int
+    {
+        return 0 === $ttl && $this->valkey ? self::PERM_TTL : $ttl;
     }
 }

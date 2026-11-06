@@ -39,13 +39,19 @@ static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_reques
 
 /* ---- nocopy_* ---- */
 
-static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
+/* false (thrown): a negative ttl in argument arg, or no worker slot. */
+static bool write_ok(uint32_t arg, zend_long ttl)
 {
 	if (ttl < 0) {
-		zend_argument_value_error(3, "must be greater than or equal to 0");
-		RETURN_THROWS();
+		zend_argument_value_error(arg, "must be greater than or equal to 0");
+		return false;
 	}
-	if (!nocopy_tracked()) {
+	return nocopy_tracked();
+}
+
+static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
+{
+	if (!write_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	const nocopy_opts o = {.ttl = ttl, .add_only = add_only};
@@ -56,7 +62,8 @@ static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, 
 	RETURN_BOOL(st == NOCOPY_OK);
 }
 
-PHP_FUNCTION(nocopy_put)
+/* nocopy_put / nocopy_add (string $key, mixed $value, int $ttl = 0) */
+static void put_fn(INTERNAL_FUNCTION_PARAMETERS, bool add_only)
 {
 	zend_string *key;
 	zval *val;
@@ -69,24 +76,11 @@ PHP_FUNCTION(nocopy_put)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	put_impl(key, val, ttl, false, return_value);
+	put_impl(key, val, ttl, add_only, return_value);
 }
 
-PHP_FUNCTION(nocopy_add)
-{
-	zend_string *key;
-	zval *val;
-	zend_long ttl = 0;
-
-	ZEND_PARSE_PARAMETERS_START(2, 3)
-		Z_PARAM_STR(key)
-		Z_PARAM_ZVAL(val)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_LONG(ttl)
-	ZEND_PARSE_PARAMETERS_END();
-
-	put_impl(key, val, ttl, true, return_value);
-}
+PHP_FUNCTION(nocopy_put) { put_fn(INTERNAL_FUNCTION_PARAM_PASSTHRU, false); }
+PHP_FUNCTION(nocopy_add) { put_fn(INTERNAL_FUNCTION_PARAM_PASSTHRU, true); }
 
 PHP_FUNCTION(nocopy_inc)
 {
@@ -236,11 +230,7 @@ PHP_FUNCTION(nocopy_put_multiple)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (ttl < 0) {
-		zend_argument_value_error(2, "must be greater than or equal to 0");
-		RETURN_THROWS();
-	}
-	if (!nocopy_tracked()) {
+	if (!write_ok(2, ttl)) {
 		RETURN_THROWS();
 	}
 	const nocopy_opts o = {.ttl = ttl};
@@ -266,11 +256,7 @@ PHP_FUNCTION(nocopy_remember)
 		Z_PARAM_DOUBLE(beta)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (ttl < 0) {
-		zend_argument_value_error(3, "must be greater than or equal to 0");
-		RETURN_THROWS();
-	}
-	if (!nocopy_tracked()) {
+	if (!write_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	if (Z_TYPE_P(fn) != IS_OBJECT || Z_OBJCE_P(fn) != zend_ce_closure) {
@@ -439,15 +425,10 @@ static bool short_lived_sapi(void)
 	return false;
 }
 
-static ZEND_INI_MH(OnShmSize)
+/* A byte size (K, M, G) into the size_t at mh_arg1. */
+static ZEND_INI_MH(OnSize)
 {
-	arena_size = (size_t) zend_ini_parse_quantity_warn(new_value, entry->name);
-	return SUCCESS;
-}
-
-static ZEND_INI_MH(OnLocalSize)
-{
-	nocopy_local_size = (size_t) zend_ini_parse_quantity_warn(new_value, entry->name);
+	*(size_t *) mh_arg1 = (size_t) zend_ini_parse_quantity_warn(new_value, entry->name);
 	return SUCCESS;
 }
 
@@ -467,10 +448,10 @@ static ZEND_INI_MH(OnSerializer)
 }
 
 PHP_INI_BEGIN()
-	PHP_INI_ENTRY("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnShmSize)
+	PHP_INI_ENTRY1("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnSize, &arena_size)
 	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
-	PHP_INI_ENTRY("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnLocalSize)
+	PHP_INI_ENTRY1("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnSize, &nocopy_local_size)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
 #ifdef HAVE_NOCOPY_VALKEY
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)

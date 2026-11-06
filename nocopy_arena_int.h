@@ -12,7 +12,7 @@ extern uint32_t *nocopy_ghosts[NOCOPY_MAX_SHARDS]; /* per shard, as many as slot
 static inline char *seg_start(uint32_t s) { return nocopy_seg_base + ((size_t) s << nocopy_seg_shift); }
 static inline nocopy_slot slot_make(const nocopy_entry *e) { return (uint64_t) nocopy_slot_tag(e->h) << 32 | (uint32_t) (((const char *) e - (const char *) nocopy_a) >> 3); }
 static inline nocopy_slot *tab_of(const nocopy_shard *sh) { return nocopy_tabs[sh->idx]; }
-static inline bool owns(const nocopy_shard *sh, uint32_t s) { return sh->own[s >> 6] >> (s & 63) & 1; }
+static inline bool owns(const nocopy_shard *sh, uint32_t s) { return nocopy_segs_has(sh->own, s); }
 /* Segments per shard if memory were split evenly: what a shard may reclaim from others, and the largest entry. */
 static inline uint32_t nocopy_fair(void) { return nocopy_fair_segs; }
 

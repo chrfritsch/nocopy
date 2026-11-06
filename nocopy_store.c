@@ -91,6 +91,26 @@ static void local_drop(nocopy_local *l)
 	l->e = NULL;
 }
 
+/* l holds this version of e's copy: it may be shared. */
+static zend_always_inline bool local_hit(nocopy_local *l, const nocopy_entry *e)
+{
+	if (l && l->e == e && l->seq == e->seq) {
+		l->visited = true;
+		return true;
+	}
+	return false;
+}
+
+/* TinyLFU's doorkeeper: true on e's second sighting in l (keep a copy), the first is only remembered. */
+static zend_always_inline bool local_again(nocopy_local *l, const nocopy_entry *e)
+{
+	if (!l || l->seen == e) {
+		return l != NULL;
+	}
+	l->seen = e;
+	return false;
+}
+
 /* Over budget: SIEVE evicts copies not used since the hand last passed (2 rounds at most: the first clears every bit). */
 static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 {
@@ -117,20 +137,15 @@ static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 {
 	nocopy_local *l = NOCOPY_G(local_ok) && e->size <= nocopy_local_size ? local_way(e) : NULL;
-	if (l && l->e == e && l->seq == e->seq) {
-		l->visited = true;
+	if (local_hit(l, e)) {
 		return nocopy_graph_tpl_out(rv, Z_PTR(l->v));
 	}
-	if (l && l->seen == e) {
-		void *t = nocopy_graph_tpl(e);
-		if (t) {
-			zval z;
-			ZVAL_PTR(&z, t);
-			local_put(l, e, &z);
-			return nocopy_graph_tpl_out(rv, t);
-		}
-	} else if (l) {
-		l->seen = e;
+	void *t = local_again(l, e) ? nocopy_graph_tpl(e) : NULL;
+	if (t) {
+		zval z;
+		ZVAL_PTR(&z, t);
+		local_put(l, e, &z);
+		return nocopy_graph_tpl_out(rv, t);
 	}
 	return nocopy_graph_out(rv, v, true);
 }
@@ -146,14 +161,23 @@ nocopy_status nocopy_publish(nocopy_put *p, bool add_only)
 	}
 }
 
+nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+{
+	nocopy_put p;
+	nocopy_status s = nocopy_build(&p, key, val, o);
+	if (s != NOCOPY_OK) {
+		return s;
+	}
+	p.e->user = user;
+	return nocopy_publish(&p, o->add_only);
+}
+
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
 	if (UNEXPECTED(nocopy_detour)) {
 		return nocopy_a ? nocopy_vk_store(key, val, o, 0) : nocopy_build(NULL, key, val, o);
 	}
-	nocopy_put p;
-	nocopy_status s = nocopy_build(&p, key, val, o);
-	return s == NOCOPY_OK ? nocopy_publish(&p, o->add_only) : s;
+	return nocopy_put_local(key, val, o, 0);
 }
 
 static zend_always_inline bool drop_local(const char *k, size_t len)
@@ -204,6 +228,20 @@ void nocopy_clear_all(void)
 	nocopy_clear();
 }
 
+/* Shard locked: key's live entry, or NULL. */
+static nocopy_entry *live_entry(nocopy_shard *sh, zend_string *key, zend_ulong h)
+{
+	nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
+	return e && !nocopy_expired(e) ? e : NULL;
+}
+
+/* e's integer, changed in place under the shard lock (lock-free readers copy the word), or NULL: not an integer. */
+static zval *entry_long(nocopy_entry *e)
+{
+	zval *v = entry_val(e);
+	return Z_TYPE_P(v) == IS_LONG && !(e->flags & ENTRY_SERIALIZED) ? v : NULL;
+}
+
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	if (UNEXPECTED(nocopy_detour)) {
@@ -214,15 +252,14 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 	nocopy_shard *sh = nocopy_shard_of(h);
 	for (;;) {
 		nocopy_lock(sh);
-		nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-		if (e && !nocopy_expired(e)) {
-			zval *v = entry_val(e);
-			bool is_long = Z_TYPE_P(v) == IS_LONG && !(e->flags & ENTRY_SERIALIZED);
-			if (is_long) {
-				*out = __atomic_add_fetch(&Z_LVAL_P(v), delta, __ATOMIC_RELAXED); /* in place: lock-free readers copy this word */
+		nocopy_entry *e = live_entry(sh, key, h);
+		if (e) {
+			zval *v = entry_long(e);
+			if (v) {
+				*out = __atomic_add_fetch(&Z_LVAL_P(v), delta, __ATOMIC_RELAXED);
 			}
 			nocopy_unlock(sh);
-			return is_long;
+			return v != NULL;
 		}
 		nocopy_unlock(sh);
 		zval init;
@@ -245,9 +282,9 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 	zend_ulong h = zend_string_hash_val(key);
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
-	nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	zval *v = e ? entry_val(e) : NULL;
-	bool ok = e && !nocopy_expired(e) && !(e->flags & ENTRY_SERIALIZED) && Z_TYPE_P(v) == IS_LONG && Z_LVAL_P(v) == old;
+	nocopy_entry *e = live_entry(sh, key, h);
+	zval *v = e ? entry_long(e) : NULL;
+	bool ok = v && Z_LVAL_P(v) == old;
 	if (ok) {
 		__atomic_store_n(&Z_LVAL_P(v), nw, __ATOMIC_RELAXED);
 	}
@@ -285,19 +322,12 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
 		} else if (copy) {
 			nocopy_local *l = local_slot(e, v);
-			if (l && l->e == e && l->seq == e->seq) {
+			if (local_hit(l, e)) {
 				ZVAL_COPY(rv, &l->v); /* same version as last time: share it, COW keeps it intact */
-				l->visited = true;
 			} else {
-				nocopy_keys *keys = &NOCOPY_G(keys);
-				if (Z_TYPE_P(v) == IS_ARRAY) {
-					keys_reset(keys);
-				}
 				nocopy_copy_out(rv, v);
-				if (l && l->seen == e) {
+				if (local_again(l, e)) {
 					local_put(l, e, rv);
-				} else if (l) {
-					l->seen = e;
 				}
 			}
 		} else {
@@ -369,7 +399,7 @@ bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed
 	zval *v;
 	bool all = true;
 	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
-		zend_string *key = k ? zend_string_copy(k) : zend_long_to_str((zend_long) h);
+		zend_string *key = nocopy_key_of(k, h);
 		if (nocopy_store(key, v, o) != NOCOPY_OK) {
 			all = false;
 			nocopy_mark_failed(failed, key);
@@ -445,11 +475,7 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 		nocopy_vk_store(key, rv, o, user);
 		return;
 	}
-	nocopy_put p;
-	if (nocopy_build(&p, key, rv, o) == NOCOPY_OK) {
-		p.e->user = user;
-		nocopy_publish(&p, o->add_only);
-	}
+	nocopy_put_local(key, rv, o, user);
 }
 
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv)

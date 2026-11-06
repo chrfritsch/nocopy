@@ -62,16 +62,35 @@ class NocopyBackend implements CacheBackendInterface {
     return $this->sitePrefix . '::' . $this->bin . '::' . $cid;
   }
 
+  protected function keys(array $cids): array {
+    return array_map(fn ($cid) => $this->key((string) $cid), $cids);
+  }
+
   // Read on every call: another request may have cleared the bin.
   // Lost (new bin, eviction): a fresh version. That only costs misses, a default could revive deleted items.
   // $found: a nocopy_get_multiple() result that asked for versionKey() too.
   protected function version(?array $found = NULL): string {
     $version = $found === NULL ? nocopy_get($this->versionKey()) : $found[$this->versionKey()] ?? NULL;
-    if (!is_string($version)) {
-      $version = bin2hex(random_bytes(6));
-      nocopy_put($this->versionKey(), $version);
-    }
+    return is_string($version) ? $version : $this->newVersion();
+  }
+
+  private function newVersion(): string {
+    $version = bin2hex(random_bytes(6));
+    nocopy_put($this->versionKey(), $version);
     return $version;
+  }
+
+  // key => stored item, for the keys written under the bin's current version. With nocopy.valkey every local miss in one round trip.
+  protected function fetchCurrent(array $keys): array {
+    $found = nocopy_get_multiple([$this->versionKey(), ...$keys]);
+    $version = $this->version($found);
+    $items = [];
+    foreach ($keys as $key) {
+      if (($found[$key][self::VERSION] ?? NULL) === $version) {
+        $items[$key] = $found[$key];
+      }
+    }
+    return $items;
   }
 
   // One colon: no cid key can match it.
@@ -90,12 +109,9 @@ class NocopyBackend implements CacheBackendInterface {
     foreach ($cids as $cid) {
       $keys[$this->key((string) $cid)] = $cid;
     }
-    // The bin version in the same lookup; with nocopy.valkey every local miss in one round trip.
-    $found = nocopy_get_multiple([$this->versionKey(), ...array_keys($keys)]);
-    $version = $this->version($found);
-    foreach ($keys as $key => $cid) {
-      if (($found[$key][self::VERSION] ?? NULL) === $version && !isset($this->delayedDeletions[$cid])) {
-        $raw[$cid] = $found[$key];
+    foreach ($this->fetchCurrent(array_keys($keys)) as $key => $item) {
+      if (!isset($this->delayedDeletions[$keys[$key]])) {
+        $raw[$keys[$key]] = $item;
       }
     }
     if ($raw && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
@@ -189,12 +205,12 @@ class NocopyBackend implements CacheBackendInterface {
 
   // With nocopy.valkey: one UNLINK.
   protected function doDelete(array $cids): void {
-    nocopy_delete_multiple(array_map(fn ($cid) => $this->key((string) $cid), $cids));
+    nocopy_delete_multiple($this->keys($cids));
   }
 
   // Old items stay until rewritten (same key), evicted or expired.
   public function deleteAll() {
-    nocopy_put($this->versionKey(), bin2hex(random_bytes(6)));
+    $this->newVersion();
   }
 
   public function invalidate($cid) {
@@ -203,16 +219,11 @@ class NocopyBackend implements CacheBackendInterface {
 
   public function invalidateMultiple(array $cids) {
     $past = $this->time->getRequestTime() - 1;
-    $keys = array_map(fn ($cid) => $this->key((string) $cid), $cids);
-    $found = nocopy_get_multiple([$this->versionKey(), ...$keys]);
-    $version = $this->version($found);
-    $items = [];
-    foreach ($keys as $key) {
-      if (($found[$key][self::VERSION] ?? NULL) === $version) {
-        $items[$key] = $found[$key];
-        $items[$key][self::EXPIRE] = $past;
-      }
+    $items = $this->fetchCurrent($this->keys($cids));
+    foreach ($items as &$item) {
+      $item[self::EXPIRE] = $past;
     }
+    unset($item);
     if ($items) {
       nocopy_put_multiple($items, $this->ttl($past));
     }

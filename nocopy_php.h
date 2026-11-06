@@ -96,13 +96,16 @@ typedef struct {
 _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
 
+/* A HashTable key as a string (release it). */
+static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
+
 typedef int (*nocopy_igb_ser_fn)(uint8_t **ret, size_t *ret_len, zval *z);
 typedef int (*nocopy_igb_unser_fn)(const uint8_t *buf, size_t buf_len, zval *z);
 extern bool nocopy_use_igbinary; /* nocopy.serializer=igbinary, and igbinary resolved (MINIT) */
 extern nocopy_igb_ser_fn nocopy_igb_ser;
 extern nocopy_igb_unser_fn nocopy_igb_unser;
 void nocopy_value_minit(void); /* with an arena: its shared empty array */
-void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value, with NOCOPY_G(keys): keys_reset() it first for an array */
+void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value (NOCOPY_G(keys) shares its deduped keys) */
 bool nocopy_graph_out(zval *rv, const zval *v, bool copy); /* an ENTRY_GRAPH value: its objects rebuilt; false: a class is gone or changed */
 void nocopy_classes_clear(void); /* at request end */
 void *nocopy_graph_tpl(const nocopy_entry *e); /* copy mode: a private template of e's graph, NULL if a class is gone */
@@ -140,6 +143,7 @@ bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */
 /* Sizes and fills the value's entry. NOCOPY_OK: p holds it, ready for nocopy_publish(). p NULL (no arena): only the checks. */
 nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o);
 nocopy_status nocopy_publish(nocopy_put *p, bool add_only);
+nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* build + publish, with the compute time; needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
 bool nocopy_serialize(zval *val, zval *out, bool *igb);
 bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags);

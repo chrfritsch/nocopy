@@ -197,6 +197,11 @@ void nocopy_stats(nocopy_stats_t *s);
 /* ---- inline read path ---- */
 
 static inline const char *nocopy_key(const nocopy_entry *e) { return (const char *) e + e->koff; }
+/* Segment bitmaps of NOCOPY_SEG_WORDS words: pins, ownership, reclaim's sets. */
+static inline uint64_t nocopy_segbit(uint32_t s) { return (uint64_t) 1 << (s & 63); }
+static inline bool nocopy_segs_has(const uint64_t *m, uint32_t s) { return m[s >> 6] >> (s & 63) & 1; }
+static inline void nocopy_segs_add(uint64_t *m, uint32_t s) { m[s >> 6] |= nocopy_segbit(s); }
+static inline void nocopy_segs_del(uint64_t *m, uint32_t s) { m[s >> 6] &= ~nocopy_segbit(s); }
 static inline uint32_t nocopy_seg_of(const void *p) { return (uint32_t) (((const char *) p - nocopy_seg_base) >> nocopy_seg_shift); }
 /* Fibonacci mix, top bits: the shard */
 static inline uint32_t nocopy_shard_idx(uint64_t h) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & nocopy_shard_mask; }
@@ -248,7 +253,7 @@ static inline void nocopy_unlock(nocopy_shard *sh) { __atomic_store_n(&sh->lock,
 static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 {
 	uint32_t s = nocopy_seg_of(p), w = s >> 6;
-	uint64_t b = (uint64_t) 1 << (s & 63);
+	uint64_t b = nocopy_segbit(s);
 	if (c->mine[w] & b) {
 		return false;
 	}
@@ -263,8 +268,7 @@ static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 /* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_keep_release(). */
 static inline void nocopy_keep(nocopy_ctx *c, const void *p)
 {
-	uint32_t s = nocopy_seg_of(p);
-	c->keep[s >> 6] |= (uint64_t) 1 << (s & 63);
+	nocopy_segs_add(c->keep, nocopy_seg_of(p));
 }
 
 static inline void nocopy_drop_transient(nocopy_ctx *c)
@@ -329,12 +333,12 @@ static inline __attribute__((always_inline)) bool nocopy_key_eq(const char *a, c
 	return !memcmp(a, b, n);
 }
 
-/* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
- * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
 /* An expired entry that a lease waiter may still be served: expired less than its TTL ago. */
 static inline bool nocopy_stale_ok(const nocopy_entry *e) { return e->expires && (time_t) (2 * e->expires - e->created) >= nocopy_now(); }
 
-/* stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). */
+/* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
+ * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe.
+ * stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). */
 static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
 {
 	uint32_t si = nocopy_shard_idx(h); /* not sh - shards: that divides by sizeof(nocopy_shard) */

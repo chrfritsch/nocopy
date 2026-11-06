@@ -140,7 +140,7 @@ static bool seg_claim(nocopy_shard *sh, uint32_t s)
 	if (!__atomic_compare_exchange_n(&nocopy_a->owner[s], &z, (uint8_t) (sh->idx + 1), false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
 		return false;
 	}
-	sh->own[s >> 6] |= (uint64_t) 1 << (s & 63);
+	nocopy_segs_add(sh->own, s);
 	__atomic_store_n(&sh->nown, sh->nown + 1, __ATOMIC_RELAXED);
 	return true;
 }
@@ -148,7 +148,7 @@ static bool seg_claim(nocopy_shard *sh, uint32_t s)
 /* s is FREE and zeroed (but gen). */
 static void seg_release(nocopy_shard *sh, uint32_t s)
 {
-	sh->own[s >> 6] &= ~((uint64_t) 1 << (s & 63));
+	nocopy_segs_del(sh->own, s);
 	__atomic_store_n(&sh->nown, sh->nown - 1, __ATOMIC_RELAXED);
 	__atomic_store_n(&nocopy_a->owner[s], 0, __ATOMIC_RELEASE);
 }
@@ -194,7 +194,7 @@ static void reclaim(nocopy_shard *sh)
 	uint64_t dead[NOCOPY_SEG_WORDS] = {0};
 	SH_SEGS(sh, s) {
 		if (nocopy_a->segs[s].state == SEG_DEAD) {
-			dead[s >> 6] |= (uint64_t) 1 << (s & 63);
+			nocopy_segs_add(dead, s);
 		}
 	}
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
@@ -223,10 +223,13 @@ static void reclaim(nocopy_shard *sh)
 	}
 	bool blocked = false;
 	SH_SEGS(sh, s) {
-		if ((dead[s >> 6] & ~held[s >> 6]) >> (s & 63) & 1) {
-			seg_free(sh, s);
-		} else if (dead[s >> 6] >> (s & 63) & 1) {
+		if (!nocopy_segs_has(dead, s)) {
+			continue;
+		}
+		if (nocopy_segs_has(held, s)) {
 			blocked = true;
+		} else {
+			seg_free(sh, s);
 		}
 	}
 	if (blocked) {
@@ -440,6 +443,7 @@ static void wip_set(nocopy_ctx *c, const nocopy_entry *e)
 }
 
 static nocopy_entry *wip_entry(uint32_t w) { return (nocopy_entry *) ((char *) nocopy_a + ((size_t) w << 3)); }
+static void wip_clear(uint32_t slot) { __atomic_store_n(&nocopy_a->workers[slot].wip, 0, __ATOMIC_RELAXED); }
 
 /* NULL: in the pool. A wip entry's segment stays with its shard: the entry keeps it pending. */
 static nocopy_shard *seg_shard(uint32_t s)
@@ -448,19 +452,23 @@ static nocopy_shard *seg_shard(uint32_t s)
 	return o ? &nocopy_a->shards[o - 1] : NULL;
 }
 
+/* The entry worker slot i is filling in sh, or NULL. */
+static nocopy_entry *wip_in(uint32_t i, const nocopy_shard *sh)
+{
+	uint32_t w = __atomic_load_n(&nocopy_a->workers[i].wip, __ATOMIC_RELAXED);
+	return w && seg_shard(nocopy_seg_of(wip_entry(w))) == sh ? wip_entry(w) : NULL;
+}
+
 /* sh locked. Aborts the unfinished entries in sh of writers that died outside the lock. */
 static void wip_reap(nocopy_shard *sh)
 {
 	uint32_t nw = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_ACQUIRE);
 	for (uint32_t i = 0; i < nw; i++) {
-		uint32_t w = __atomic_load_n(&nocopy_a->workers[i].wip, __ATOMIC_RELAXED);
-		if (!w || seg_shard(nocopy_seg_of(wip_entry(w))) != sh) {
-			continue;
-		}
-		uint64_t o = __atomic_load_n(&nocopy_a->workers[i].owner, __ATOMIC_RELAXED);
-		if (o != nocopy_self && (!o || nocopy_owner_dead(o))) {
-			__atomic_store_n(&nocopy_a->workers[i].wip, 0, __ATOMIC_RELAXED);
-			nocopy_abort(sh, wip_entry(w));
+		nocopy_entry *e = wip_in(i, sh);
+		uint64_t o = e ? __atomic_load_n(&nocopy_a->workers[i].owner, __ATOMIC_RELAXED) : 0;
+		if (e && o != nocopy_self && (!o || nocopy_owner_dead(o))) {
+			wip_clear(i);
+			nocopy_abort(sh, e);
 		}
 	}
 }
@@ -474,12 +482,12 @@ static void wip_abort(int slot)
 	}
 	nocopy_shard *sh = seg_shard(nocopy_seg_of(wip_entry(w)));
 	if (!sh) {
-		__atomic_store_n(&nocopy_a->workers[slot].wip, 0, __ATOMIC_RELAXED);
+		wip_clear((uint32_t) slot);
 		return;
 	}
 	nocopy_lock(sh);
 	if (__atomic_load_n(&nocopy_a->workers[slot].wip, __ATOMIC_RELAXED) == w) { /* not reaped meanwhile */
-		__atomic_store_n(&nocopy_a->workers[slot].wip, 0, __ATOMIC_RELAXED);
+		wip_clear((uint32_t) slot);
 		nocopy_abort(sh, wip_entry(w));
 	}
 	nocopy_unlock(sh);
@@ -507,7 +515,7 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 	uint32_t nown = 0;
 	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
 		if (__atomic_load_n(&nocopy_a->owner[s], __ATOMIC_ACQUIRE) == sh->idx + 1) {
-			sh->own[s >> 6] |= (uint64_t) 1 << (s & 63);
+			nocopy_segs_add(sh->own, s);
 			nown++;
 		}
 	}
@@ -561,14 +569,14 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 	}
 	uint32_t nw = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_ACQUIRE);
 	for (uint32_t i = 0; i < nw; i++) { /* entries being filled outside the lock stay pending */
-		uint32_t w = __atomic_load_n(&nocopy_a->workers[i].wip, __ATOMIC_RELAXED);
-		if (!w || seg_shard(nocopy_seg_of(wip_entry(w))) != sh) {
+		nocopy_entry *e = wip_in(i, sh);
+		if (!e) {
 			continue;
 		}
 		if (__atomic_load_n(&nocopy_a->workers[i].owner, __ATOMIC_RELAXED) == dead) {
-			__atomic_store_n(&nocopy_a->workers[i].wip, 0, __ATOMIC_RELAXED); /* the holder itself, between relock and commit */
+			wip_clear(i); /* the holder itself, between relock and commit */
 		} else {
-			nocopy_a->segs[nocopy_seg_of(wip_entry(w))].pending++;
+			nocopy_a->segs[nocopy_seg_of(e)].pending++;
 		}
 	}
 	SH_SEGS(sh, s) {
@@ -610,6 +618,12 @@ static __attribute__((cold, noinline)) bool rebalance(nocopy_shard *sh)
 	return true;
 }
 
+static nocopy_entry *reclaim_alloc(nocopy_shard *sh, size_t total, int b, time_t exp)
+{
+	reclaim(sh);
+	return nocopy_seg_alloc(sh, total, false, b, exp);
+}
+
 /* sh locked (dropped meanwhile by rebalance). Expire, reclaim, take back its share, merge until `total` bytes fit, or give up. */
 nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t now)
 {
@@ -622,25 +636,21 @@ nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t no
 	}
 	nocopy_entry *e = nocopy_seg_alloc(sh, total, false, b, exp);
 	if (!e) {
-		reclaim(sh);
-		e = nocopy_seg_alloc(sh, total, false, b, exp);
+		e = reclaim_alloc(sh, total, b, exp);
 	}
 	while (!e && nocopy_expire_step(sh, now, 4096)) { /* under pressure: catch up on expiry before copying live data */
-		reclaim(sh);
-		e = nocopy_seg_alloc(sh, total, false, b, exp);
+		e = reclaim_alloc(sh, total, b, exp);
 	}
 	if (!e && sh->wip_checked != now) {
 		sh->wip_checked = now;
 		wip_reap(sh); /* segments held back by dead writers' unfinished entries */
-		reclaim(sh);
-		e = nocopy_seg_alloc(sh, total, false, b, exp);
+		e = reclaim_alloc(sh, total, b, exp);
 	}
 	for (uint32_t tries = 2 * nocopy_fair(); !e && tries && sh->nown < nocopy_fair() - nocopy_fair() / 16 && rebalance(sh); tries--) {
 		e = nocopy_seg_alloc(sh, total, false, b, exp);
 	}
 	for (uint32_t tries = 2 * nocopy_fair(); !e && tries && nocopy_merge(sh, false); tries--) {
-		reclaim(sh);
-		e = nocopy_seg_alloc(sh, total, false, b, exp);
+		e = reclaim_alloc(sh, total, b, exp);
 	}
 	return e;
 }
@@ -904,11 +914,13 @@ static int named_fd = -1;
 static char named_name[64];
 static struct stat named_st; /* the listener's, see nocopy_arena_unhold */
 
+static bool same_file(const struct stat *a, const struct stat *b) { return a->st_dev == b->st_dev && a->st_ino == b->st_ino; }
+
 static bool same_object(const char *name, int fd)
 {
 	struct stat a, b;
 	int cur = shm_open(name, O_RDONLY, 0);
-	bool same = cur >= 0 && fstat(fd, &a) == 0 && fstat(cur, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+	bool same = cur >= 0 && fstat(fd, &a) == 0 && fstat(cur, &b) == 0 && same_file(&a, &b);
 	if (cur >= 0) {
 		close(cur);
 	}
@@ -1137,10 +1149,10 @@ bool nocopy_arena_current(void)
 #ifdef __linux__
 	char path[80];
 	snprintf(path, sizeof path, "/dev/shm%s", named_name); /* stat needs no permission on the object: fpm workers run as another user */
-	return stat(path, &b) == 0 && b.st_dev == named_st.st_dev && b.st_ino == named_st.st_ino;
+	return stat(path, &b) == 0 && same_file(&b, &named_st);
 #else
 	int cur = shm_open(named_name, O_RDONLY, 0);
-	bool same = cur >= 0 && fstat(cur, &b) == 0 && b.st_dev == named_st.st_dev && b.st_ino == named_st.st_ino;
+	bool same = cur >= 0 && fstat(cur, &b) == 0 && same_file(&b, &named_st);
 	if (cur >= 0) {
 		close(cur);
 	} else if (errno == EACCES) {
