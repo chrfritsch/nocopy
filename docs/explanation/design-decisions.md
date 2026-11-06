@@ -177,8 +177,12 @@ Also nodes: classes with `__serialize`/`__unserialize` (user and internal: `Date
 `SplObjectStorage`; `props[0]` is the array, `__unserialize` called on fetch), user classes with `__wakeup` (slots, then the call)
 and enums (the case). `bench/objects.php`, 100 `Order` objects with a `DateTimeImmutable` and an enum: 85.9 / 83.8 µs ->
 48.9 / 47.1 µs (zero / copy); `DateTime::__unserialize` parsing its string is most of the rest. Like arrays, nodes don't
-dedup equal strings (igbinary does). `ab.sh` store object (plain slots) 180 -> 190 ns for the kind checks (243 ns serialized). Other objects (`__sleep`, `Serializable`, internal classes without `__serialize`,
-dynamic properties, lazy, closures) and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
+dedup equal strings (igbinary does). `stdClass` and dynamic properties too: the properties table is stored as an array, and
+each fetch gives the object a private copy of it (one bucket memcpy; its strings and arrays stay zero-copy), not the arena's
+immutable table: the engine separates such tables on its own writes, but its `(object)` cast still duplicates them, and an
+extension writing a table in place would corrupt the cache. `bench/objects.php`, `json_decode` of 100 rows (200 objects):
+42.2 / 41.8 -> 8.2 / 9.5 µs (zero / copy). `ab.sh` store object (plain slots) 180 -> 190 ns for the kind checks (243 ns serialized). Other objects (`__sleep`, `Serializable`, internal classes without `__serialize`,
+lazy, closures) and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
 in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
 Copy mode keeps a private **template** of a graph in the kept-copy table on its second sighting (the block's bytes with

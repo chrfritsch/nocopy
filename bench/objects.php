@@ -19,6 +19,7 @@ $cases = [
     'one object' => $mk(1),
     '100 objects' => array_map($mk, range(1, 100)),
     '100 orders (date, enum)' => array_map(fn($i) => new Order($i, new DateTimeImmutable("2026-01-01 +$i hours"), $i % 2 ? Status::Open : Status::Paid, "note $i"), range(1, 100)),
+    'json_decode, 100 rows' => json_decode(json_encode(array_map(fn($i) => ['id' => $i, 'name' => "Product $i", 'tags' => ['a', "t$i"], 'cat' => ['id' => $i % 3, 'name' => 'Books']], range(1, 100)))),
     '100 rows + 1 object' => ['rows' => array_map($row, range(1, 100)), 'cat' => $cats[0]],
 ];
 $dc = function_exists('deepclone_to_array');

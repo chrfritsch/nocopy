@@ -56,6 +56,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t cls;
+	uint32_t dyn; /* 1: props[nprops] is its dynamic properties (an array) */
 	zval props[];
 } nc_obj;
 
@@ -73,6 +74,7 @@ static zend_always_inline uint32_t *graph_hooks(const nc_graph *g) { return grap
 static zend_always_inline size_t graph_head(uint32_t ncls, uint32_t nobj, uint32_t nhooks) { return sizeof(nc_graph) + ncls * sizeof(nc_class) + (nobj + nhooks) * sizeof(uint32_t); }
 static zend_always_inline size_t obj_size(uint32_t nprops) { return offsetof(nc_obj, props) + nprops * sizeof(zval); }
 
+static zend_always_inline uint32_t obj_nz(const nc_class *c, const nc_obj *o) { return c[o->cls].nprops + o->dyn; }
 static zend_always_inline uint32_t kind_nprops(const zend_class_entry *ce, uint32_t kind) { return kind <= K_WAKEUP ? (uint32_t) ce->default_properties_count : 1; }
 
 /* The kind (as serialize() treats the class) and a hash of what must not change: for slots, their names, visibility, types. */
@@ -84,7 +86,7 @@ static uint64_t class_fp_compute(zend_class_entry *ce)
 			| ZEND_ACC_ANON_CLASS | ZEND_ACC_NOT_SERIALIZABLE))
 		|| (data && (!ce->__serialize || !ce->__unserialize))
 		|| (!data && (ce->serialize || ce->unserialize || zend_hash_str_exists(&ce->function_table, ZEND_STRL("__sleep"))
-			|| ce->type != ZEND_USER_CLASS || ce->create_object || ce->default_object_handlers != &std_object_handlers)))) {
+			|| (ce->type != ZEND_USER_CLASS && ce != zend_standard_class_def) || ce->create_object || ce->default_object_handlers != &std_object_handlers)))) {
 		return 0;
 	}
 	uint32_t kind = ce->ce_flags & ZEND_ACC_ENUM ? K_ENUM : data ? K_DATA
@@ -277,6 +279,34 @@ static bool has_dynamic(const HashTable *props)
 	return false;
 }
 
+/* The dynamic properties: stdClass's table itself, else a copy without the slots (kept in data, by handle). */
+static zend_array *dyn_props(graph_b *g, zend_object *o)
+{
+	if (!o->ce->default_properties_count) {
+		return o->properties;
+	}
+	zval *d = zend_hash_index_find(&g->data, o->handle);
+	if (d) {
+		return Z_ARR_P(d);
+	}
+	zval a;
+	array_init(&a);
+	zend_string *k;
+	zend_ulong h;
+	zval *v;
+	ZEND_HASH_FOREACH_KEY_VAL(o->properties, h, k, v) {
+		if (Z_TYPE_P(v) != IS_INDIRECT) {
+			Z_TRY_ADDREF_P(v);
+			if (k) {
+				zend_hash_add_new(Z_ARR(a), k, v);
+			} else {
+				zend_hash_index_add_new(Z_ARR(a), h, v);
+			}
+		}
+	} ZEND_HASH_FOREACH_END();
+	return Z_ARR_P(zend_hash_index_add_new(&g->data, o->handle, &a));
+}
+
 /* SIZE_OBJECT: no node for it, so the whole value is serialized. */
 __attribute__((noinline)) static size_status size_object(sizing *z, zend_object *o, int depth)
 {
@@ -291,12 +321,12 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	}
 	zend_class_entry *ce = o->ce;
 	uint32_t kind = fp_kind(class_fp(ce));
-	if (!kind || zend_object_is_lazy(o)
-		|| (kind <= K_WAKEUP && (o->handlers != &std_object_handlers || (o->properties && has_dynamic(o->properties))))) {
+	if (!kind || zend_object_is_lazy(o) || (kind <= K_WAKEUP && o->handlers != &std_object_handlers)) {
 		return SIZE_OBJECT;
 	}
 	zend_long i = Z_LVAL(idx);
-	if (kind == K_WAKEUP || kind == K_DATA) {
+	bool dyn = kind <= K_WAKEUP && o->properties && has_dynamic(o->properties);
+	if (kind == K_WAKEUP || kind == K_DATA || (dyn && ce->default_properties_count)) {
 		graph_b_hooks(g);
 	}
 	if (!zend_hash_index_exists(&g->cls, (zend_ulong) (uintptr_t) ce)) {
@@ -304,7 +334,7 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 		zend_hash_index_add_new(&g->cls, (zend_ulong) (uintptr_t) ce, &idx);
 		z->n += 2 * SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(ce->name)));
 	}
-	z->n += SALIGN(obj_size(kind_nprops(ce, kind)));
+	z->n += SALIGN(obj_size(kind_nprops(ce, kind) + dyn));
 	size_status st = SIZE_OK;
 	if (kind == K_ENUM) {
 		z->n += SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN_P(zend_enum_fetch_case_name(o))));
@@ -331,6 +361,11 @@ __attribute__((noinline)) static size_status size_object(sizing *z, zend_object 
 	} else {
 		for (int k = 0; k < ce->default_properties_count && st == SIZE_OK; k++) {
 			st = size_zval(z, OBJ_PROP_NUM(o, k), depth + 1);
+		}
+		if (dyn && st == SIZE_OK) {
+			zval dv;
+			ZVAL_ARR(&dv, dyn_props(g, o));
+			st = size_zval(z, &dv, depth + 1);
 		}
 	}
 	if (st == SIZE_OK && (kind == K_WAKEUP || kind == K_DATA)) {
@@ -448,9 +483,11 @@ __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 		zend_class_entry *ce = o->ce;
 		zend_long ck = Z_LVAL_P(zend_hash_index_find(&p->g->cls, (zend_ulong) (uintptr_t) ce));
 		uint32_t kind = (uint32_t) (ck & K_MASK);
-		nc_obj *n = take(p, obj_size(kind_nprops(ce, kind)));
+		bool dyn = kind <= K_WAKEUP && o->properties && has_dynamic(o->properties);
+		nc_obj *n = take(p, obj_size(kind_nprops(ce, kind) + dyn));
 		graph_off(p->graph)[i] = (uint32_t) ((char *) n - (char *) p->graph);
 		n->cls = (uint32_t) (ck >> 3);
+		n->dyn = dyn;
 		if (kind == K_ENUM) {
 			ZVAL_STR(&n->props[0], Z_STR_P(zend_enum_fetch_case_name(o)));
 			persist_zval(p, &n->props[0]);
@@ -461,6 +498,11 @@ __attribute__((noinline)) static void persist_object(persist *p, zval *z)
 			for (int k = 0; k < ce->default_properties_count; k++) {
 				ZVAL_COPY_VALUE(&n->props[k], OBJ_PROP_NUM(o, k));
 				persist_zval(p, &n->props[k]);
+			}
+			if (dyn) {
+				zval *d = &n->props[ce->default_properties_count];
+				ZVAL_ARR(d, dyn_props(p->g, o));
+				persist_zval(p, d);
 			}
 		}
 	}
@@ -616,7 +658,7 @@ void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 	}
 	for (uint32_t i = 0; i < g->nobj; i++) {
 		nc_obj *o = graph_obj(g, i);
-		for (uint32_t k = 0; k < c[o->cls].nprops; k++) {
+		for (uint32_t k = 0; k < obj_nz(c, o); k++) {
 			rebase_zval(&r, &o->props[k]);
 		}
 	}
@@ -796,6 +838,23 @@ static bool graph_classes(const nc_graph *g, zend_class_entry **ces)
 	return true;
 }
 
+/* Dynamic properties into a private table (the engine may write a properties table in place). */
+static void graph_dyn(gout *o, zend_object *obj, const zval *src)
+{
+	zval d;
+	if (Z_TYPE_P(src) == NC_SPINE || o->mode == G_COPY) {
+		graph_zval(o, &d, src);
+	} else {
+		ZVAL_ARR(&d, zend_array_dup(Z_ARR_P(src)));
+	}
+	if (!obj->ce->default_properties_count) {
+		obj->properties = Z_ARR(d);
+		return;
+	}
+	zend_hash_copy(rebuild_object_properties_internal(obj), Z_ARR(d), zval_add_ref);
+	zend_array_release(Z_ARR(d));
+}
+
 /* __wakeup/__unserialize, inner first, as unserialize() runs them: after one throws, the rest are marked as never constructed. */
 static bool graph_hooks_run(zend_object **objs, zval *data, const uint32_t *hooks, uint32_t n)
 {
@@ -869,6 +928,9 @@ static bool graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmo
 				for (uint32_t k = 0; k < c[n->cls].nprops; k++) {
 					graph_zval(&o, &dst[k], &n->props[k]);
 					Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&n->props[k]) & IS_PROP_UNINIT) : 0;
+				}
+				if (n->dyn) {
+					graph_dyn(&o, objs[i], &n->props[c[n->cls].nprops]);
 				}
 			}
 		}
@@ -981,7 +1043,7 @@ void *nocopy_graph_tpl(const nocopy_entry *e)
 	nc_class *c = graph_cls(&t->g);
 	for (uint32_t i = 0; i < t->g.nobj; i++) {
 		nc_obj *o = graph_obj(&t->g, i);
-		for (uint32_t k = 0; k < c[o->cls].nprops; k++) {
+		for (uint32_t k = 0; k < obj_nz(c, o); k++) {
 			tpl_zval(keys, &o->props[k]);
 		}
 	}
@@ -995,7 +1057,7 @@ void nocopy_graph_tpl_free(void *p)
 	nc_class *c = graph_cls(&t->g);
 	for (uint32_t i = 0; i < t->g.nobj; i++) {
 		nc_obj *o = graph_obj(&t->g, i);
-		for (uint32_t k = 0; k < c[o->cls].nprops; k++) {
+		for (uint32_t k = 0; k < obj_nz(c, o); k++) {
 			tpl_free_zval(&o->props[k]);
 		}
 	}
