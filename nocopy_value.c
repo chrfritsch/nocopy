@@ -760,7 +760,17 @@ typedef struct {
 	gmode mode;
 } gout;
 
-static void graph_zval(gout *o, zval *dst, const zval *src);
+static void graph_zval_slow(gout *o, zval *dst, const zval *src);
+
+/* No object or spine, not copy mode: shared without a call (arena values carry no refcount flag). */
+static zend_always_inline void graph_zval(gout *o, zval *dst, const zval *src)
+{
+	if (EXPECTED(o->mode != G_COPY && Z_TYPE_P(src) != NC_OREF && Z_TYPE_P(src) != NC_SPINE)) {
+		ZVAL_COPY(dst, src);
+	} else {
+		graph_zval_slow(o, dst, src);
+	}
+}
 
 /* A private copy of a spine: objects and spines below get built, the rest stays shared or is copied. */
 static void graph_contents(gout *o, zend_array *a)
@@ -789,7 +799,7 @@ static void graph_contents(gout *o, zend_array *a)
 	}
 }
 
-static void graph_zval(gout *o, zval *dst, const zval *src)
+__attribute__((noinline)) static void graph_zval_slow(gout *o, zval *dst, const zval *src)
 {
 	switch (Z_TYPE_P(src)) {
 		case NC_OREF:
