@@ -177,6 +177,10 @@ Other objects (internal classes, `__serialize`/`__sleep`/`__wakeup`/`Serializabl
 and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
 in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
+Copy mode keeps a private **template** of a graph in the kept-copy table on its second sighting (the block's bytes with
+its strings and arrays copied out, classes resolved); later fetches build the objects from it, sharing those values by
+refcount (COW). `bench/objects.php` copy mode: one object 249 -> 104 ns, 100 objects 16.2 -> 5.3 µs, 100 arrays + 1 object
+9.0 µs -> 67 ns; `ab.sh` fetch object copy 131 -> 72 ns, other fetches within ±0.3 ns.
 
 **The Drupal module requires the polyfill.** Without APCu, `function_exists('apcu_fetch')` is false, so Composer's class loader
 (`setApcuPrefix`) and Drupal's FileCache fall back to the file system: 807 `faccessat` per logged-in request vs 65 with the

@@ -105,6 +105,9 @@ void nocopy_value_minit(void); /* with an arena: its shared empty array */
 void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value, with NOCOPY_G(keys): keys_reset() it first for an array */
 bool nocopy_graph_out(zval *rv, const zval *v, bool copy); /* an ENTRY_GRAPH value: its objects rebuilt; false: a class is gone or changed */
 void nocopy_classes_clear(void); /* at request end */
+void *nocopy_graph_tpl(const nocopy_entry *e); /* copy mode: a private template of e's graph, NULL if a class is gone */
+void nocopy_graph_tpl_out(zval *rv, void *tpl);
+void nocopy_graph_tpl_free(void *tpl);
 
 /* ---- module state the store reads (set in MINIT / INI) ---- */
 extern size_t nocopy_local_size; /* nocopy.local_size */

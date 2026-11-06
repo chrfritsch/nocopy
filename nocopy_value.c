@@ -616,22 +616,29 @@ void nocopy_copy_out(zval *dst, const zval *src)
 
 /* ---- leaving shared memory: graphs ---- */
 
+typedef enum {
+	G_ZERO, /* values stay the arena's */
+	G_COPY, /* copy mode: no arena pointer may escape */
+	G_TPL,  /* from a template: its values are private, shared by refcount */
+} gmode;
+
 typedef struct {
 	nocopy_keys *keys;
 	zend_object **objs;
-	bool copy; /* copy mode: no arena pointer may escape */
+	gmode mode;
 } gout;
 
 static void graph_zval(gout *o, zval *dst, const zval *src);
 
-/* A private copy of a spine: objects and spines below get built, the rest stays shared (zero-copy) or is copied. */
+/* A private copy of a spine: objects and spines below get built, the rest stays shared or is copied. */
 static void graph_contents(gout *o, zend_array *a)
 {
+	bool copy = o->mode == G_COPY;
 	zval t;
 	if (HT_IS_PACKED(a)) {
 		zval *v;
 		ZEND_HASH_PACKED_FOREACH_VAL(a, v) {
-			if (o->copy || Z_TYPE_P(v) == NC_OREF || Z_TYPE_P(v) == NC_SPINE) {
+			if (copy || Z_TYPE_P(v) == NC_OREF || Z_TYPE_P(v) == NC_SPINE) {
 				graph_zval(o, &t, v);
 				ZVAL_COPY_VALUE(v, &t);
 			}
@@ -639,10 +646,10 @@ static void graph_contents(gout *o, zend_array *a)
 	} else {
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
-			if (o->copy && b->key && in_arena(b->key)) {
+			if (copy && b->key && in_arena(b->key)) {
 				unshare_key(o->keys, a, b);
 			}
-			if (o->copy || Z_TYPE(b->val) == NC_OREF || Z_TYPE(b->val) == NC_SPINE) {
+			if (copy || Z_TYPE(b->val) == NC_OREF || Z_TYPE(b->val) == NC_SPINE) {
 				graph_zval(o, &t, &b->val);
 				ZVAL_COPY_VALUE(&b->val, &t);
 			}
@@ -657,12 +664,14 @@ static void graph_zval(gout *o, zval *dst, const zval *src)
 			ZVAL_OBJ_COPY(dst, o->objs[Z_LVAL_P(src)]);
 			break;
 		case NC_SPINE:
-			ZVAL_ARR(dst, zend_array_dup(Z_ARR_P(src)));
+			ZVAL_ARR(dst, zend_array_dup(Z_ARR_P(src))); /* a template's spine: dup addrefs its values */
 			graph_contents(o, Z_ARR_P(dst));
 			break;
 		default:
-			if (o->copy) {
+			if (o->mode == G_COPY) {
 				copy_out(o->keys, dst, src);
+			} else if (o->mode == G_TPL) {
+				ZVAL_COPY(dst, src);
 			} else {
 				ZVAL_COPY_VALUE(dst, src);
 			}
@@ -686,44 +695,151 @@ static zend_class_entry *graph_class(const nc_class *c)
 	return ce;
 }
 
+/* All classes before any object: autoloading may run user code. */
+static bool graph_classes(const nc_graph *g, zend_class_entry **ces)
+{
+	for (uint32_t i = 0; i < g->ncls; i++) {
+		if (!(ces[i] = graph_class(&graph_cls(g)[i]))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/* Runs no user code (no constructor, classes resolved). */
+static void graph_build(zval *rv, const nc_graph *g, zend_class_entry **ces, gmode mode)
+{
+	const nc_class *c = graph_cls(g);
+	zend_object *objs_s[16], **objs = g->nobj <= 16 ? objs_s : emalloc(g->nobj * sizeof(*objs));
+	for (uint32_t i = 0; i < g->nobj; i++) {
+		objs[i] = zend_objects_new(ces[graph_obj(g, i)->cls]);
+	}
+	gout o = {.keys = &NOCOPY_G(keys), .objs = objs, .mode = mode};
+	if (mode == G_COPY) {
+		keys_reset(o.keys);
+	}
+	for (uint32_t i = 0; i < g->nobj; i++) {
+		nc_obj *n = graph_obj(g, i);
+		zval *dst = objs[i]->properties_table;
+		for (uint32_t k = 0; k < c[n->cls].nprops; k++) {
+			graph_zval(&o, &dst[k], &n->props[k]);
+			Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&n->props[k]) & IS_PROP_UNINIT) : 0;
+		}
+	}
+	graph_zval(&o, rv, &g->root);
+	for (uint32_t i = 0; i < g->nobj; i++) {
+		OBJ_RELEASE(objs[i]);
+	}
+	if (objs != objs_s) {
+		efree(objs);
+	}
+}
+
 bool nocopy_graph_out(zval *rv, const zval *v, bool copy)
 {
 	const nc_graph *g = Z_PTR_P(v);
-	const nc_class *c = graph_cls(g);
 	zend_class_entry *ces_s[8], **ces = g->ncls <= 8 ? ces_s : emalloc(g->ncls * sizeof(*ces));
-	bool ok = true;
-	for (uint32_t i = 0; i < g->ncls && ok; i++) {
-		ok = (ces[i] = graph_class(&c[i])) != NULL; /* all before any object: autoloading may run user code */
-	}
+	bool ok = graph_classes(g, ces);
 	if (ok) {
-		zend_object *objs_s[16], **objs = g->nobj <= 16 ? objs_s : emalloc(g->nobj * sizeof(*objs));
-		for (uint32_t i = 0; i < g->nobj; i++) {
-			objs[i] = zend_objects_new(ces[graph_obj(g, i)->cls]);
-		}
-		gout o = {.keys = &NOCOPY_G(keys), .objs = objs, .copy = copy};
-		if (copy) {
-			keys_reset(o.keys);
-		}
-		for (uint32_t i = 0; i < g->nobj; i++) {
-			nc_obj *n = graph_obj(g, i);
-			zval *dst = objs[i]->properties_table;
-			for (uint32_t k = 0; k < c[n->cls].nprops; k++) {
-				graph_zval(&o, &dst[k], &n->props[k]);
-				Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&n->props[k]) & IS_PROP_UNINIT) : 0;
-			}
-		}
-		graph_zval(&o, rv, &g->root);
-		for (uint32_t i = 0; i < g->nobj; i++) {
-			OBJ_RELEASE(objs[i]);
-		}
-		if (objs != objs_s) {
-			efree(objs);
-		}
+		graph_build(rv, g, ces, copy ? G_COPY : G_ZERO);
 	}
 	if (ces != ces_s) {
 		efree(ces);
 	}
 	return ok;
+}
+
+/* ---- copy mode: a graph's private template, kept in the local table ---- */
+
+/* A private copy of the graph's bytes (offsets stay valid), its values made private and its classes resolved. */
+typedef struct {
+	zend_class_entry **ces;
+	nc_graph g; /* followed by the rest of the block */
+} nc_tpl;
+
+/* Private copy of an arena value, keeping graph markers: spines become private arrays. */
+static void tpl_zval(nocopy_keys *keys, zval *z)
+{
+	if (Z_TYPE_P(z) == NC_SPINE) {
+		zend_array *a = zend_array_dup(Z_ARR_P(z));
+		if (HT_IS_PACKED(a)) {
+			zval *v;
+			ZEND_HASH_PACKED_FOREACH_VAL(a, v) {
+				tpl_zval(keys, v);
+			} ZEND_HASH_FOREACH_END();
+		} else {
+			Bucket *b;
+			ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
+				if (b->key && in_arena(b->key)) {
+					unshare_key(keys, a, b);
+				}
+				tpl_zval(keys, &b->val);
+			} ZEND_HASH_FOREACH_END();
+		}
+		Z_ARR_P(z) = a;
+	} else if (Z_TYPE_P(z) != NC_OREF) {
+		unshare_zval(keys, z);
+	}
+}
+
+static void tpl_free_zval(zval *z)
+{
+	if (Z_TYPE_P(z) == NC_SPINE) {
+		zend_array *a = Z_ARR_P(z);
+		zval *v;
+		ZEND_HASH_FOREACH_VAL(a, v) {
+			if (Z_TYPE_P(v) == NC_SPINE) {
+				tpl_free_zval(v); /* the array's destructor skips them: not refcounted */
+			}
+		} ZEND_HASH_FOREACH_END();
+		zend_array_destroy(a);
+	} else {
+		zval_ptr_dtor(z);
+	}
+}
+
+void *nocopy_graph_tpl(const nocopy_entry *e)
+{
+	const nc_graph *g = Z_PTR_P(entry_val((nocopy_entry *) e));
+	size_t n = e->size - (size_t) ((const char *) g - (const char *) e);
+	nc_tpl *t = emalloc(offsetof(nc_tpl, g) + n + g->ncls * sizeof(zend_class_entry *));
+	memcpy(&t->g, g, n);
+	t->ces = (zend_class_entry **) ((char *) &t->g + n);
+	if (!graph_classes(&t->g, t->ces)) {
+		efree(t);
+		return NULL;
+	}
+	nocopy_keys *keys = &NOCOPY_G(keys);
+	keys_reset(keys);
+	nc_class *c = graph_cls(&t->g);
+	for (uint32_t i = 0; i < t->g.nobj; i++) {
+		nc_obj *o = graph_obj(&t->g, i);
+		for (uint32_t k = 0; k < c[o->cls].nprops; k++) {
+			tpl_zval(keys, &o->props[k]);
+		}
+	}
+	tpl_zval(keys, &t->g.root);
+	return t;
+}
+
+void nocopy_graph_tpl_free(void *p)
+{
+	nc_tpl *t = p;
+	nc_class *c = graph_cls(&t->g);
+	for (uint32_t i = 0; i < t->g.nobj; i++) {
+		nc_obj *o = graph_obj(&t->g, i);
+		for (uint32_t k = 0; k < c[o->cls].nprops; k++) {
+			tpl_free_zval(&o->props[k]);
+		}
+	}
+	tpl_free_zval(&t->g.root);
+	efree(t);
+}
+
+void nocopy_graph_tpl_out(zval *rv, void *p)
+{
+	nc_tpl *t = p;
+	graph_build(rv, &t->g, t->ces, G_TPL);
 }
 
 /* ---- serializing ---- */

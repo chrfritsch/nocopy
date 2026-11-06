@@ -46,6 +46,11 @@ try { $g[0]->id = 9; } catch (Error $e) { echo get_class($e), "\n"; }
 $g[0]->list[1]['x'] = 'changed';
 $g[2]->name = 'changed';
 var_dump(nocopy_get('graph')[0]->list[1]['x'], nocopy_get('graph')[2]->name);
+for ($i = 0; $i < 4; $i++) { $g = nocopy_get('graph'); $g[0]->list[1]['x'] .= '!'; $g[0]->list[] = $i; $g[] = 'extra'; $m = nocopy_get('mixed'); $m['rows'][0]['k'] .= '!'; }
+var_dump($g[0]->list[1]['x'], count($g[0]->list), count($g), $m['rows'][0]['k'] === str_repeat('v', 40) . '!');
+nocopy_put('g2', $vals['graph']);
+nocopy_put('graph', [new Cat(5, 'new')]);
+var_dump(nocopy_get('graph')[0]->name, nocopy_get('graph')[0]->name);
 nocopy_put('wakes', new Wakes);
 var_dump(nocopy_get('wakes')->n);
 CODE;
@@ -56,7 +61,7 @@ echo serve('<?php ' . $classes . $test . <<<'CODE'
 ob_start(); debug_zval_dump(nocopy_get('mixed')['rows']); echo str_contains(ob_get_clean(), 'interned') ? "rows shared\n" : "rows copied\n";
 CODE);
 echo "-- autoloaded, re-entrant\n";
-echo serve('<?php spl_autoload_register(function ($c) { nocopy_put("side", [$c]); nocopy_get("mixed"); if (!class_exists("Base", false)) eval(' . var_export($classes, true) . '); }); $g = nocopy_get("graph"); var_dump($g[0]->self === $g[0], $g[2]->name, nocopy_get("side"));');
+echo serve('<?php spl_autoload_register(function ($c) { nocopy_put("side", [$c]); nocopy_get("mixed"); if (!class_exists("Base", false)) eval(' . var_export($classes, true) . '); }); $g = nocopy_get("g2"); var_dump($g[0]->self === $g[0], $g[2]->name, nocopy_get("side"));');
 echo "-- class changed\n";
 echo serve('<?php class Cat { public function __construct(public string $id, public string $name) {} } var_dump(nocopy_get("mixed", $hit), $hit);');
 ?>
@@ -78,6 +83,12 @@ bool(false)
 Error
 string(1) "y"
 string(5) "Books"
+string(2) "y!"
+int(4)
+int(4)
+bool(true)
+string(3) "new"
+string(3) "new"
 int(1)
 -- zero-copy
 graph: same
@@ -94,6 +105,12 @@ bool(false)
 Error
 string(1) "y"
 string(5) "Books"
+string(2) "y!"
+int(4)
+int(4)
+bool(true)
+string(3) "new"
+string(3) "new"
 int(1)
 rows shared
 -- autoloaded, re-entrant

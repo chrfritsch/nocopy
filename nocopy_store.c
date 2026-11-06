@@ -29,6 +29,8 @@ bool nocopy_tracked(void)
 /* ---- copy mode: private copies kept for the request ---- */
 
 /* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
+static zend_always_inline nocopy_local *local_way(const nocopy_entry *e);
+
 static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const zval *v)
 {
 	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
@@ -36,6 +38,21 @@ static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const 
 	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
 		return NULL;
 	}
+	return local_way(e);
+}
+
+/* Graphs keep a template (IS_PTR): objects are rebuilt from it on every fetch. */
+static void local_val_free(zval *v)
+{
+	if (Z_TYPE_P(v) == IS_PTR) {
+		nocopy_graph_tpl_free(Z_PTR_P(v));
+	} else {
+		zval_ptr_dtor(v);
+	}
+}
+
+static zend_always_inline nocopy_local *local_way(const nocopy_entry *e)
+{
 	if (UNEXPECTED(!NOCOPY_G(local))) {
 		NOCOPY_G(local) = ecalloc(NOCOPY_LOCAL, sizeof(nocopy_local));
 	}
@@ -60,7 +77,7 @@ static void local_flush(void)
 {
 	for (int i = 0; i < NOCOPY_LOCAL; i++) {
 		if (NOCOPY_G(local)[i].e) {
-			zval_ptr_dtor(&NOCOPY_G(local)[i].v);
+			local_val_free(&NOCOPY_G(local)[i].v);
 			NOCOPY_G(local)[i].e = NULL;
 		}
 	}
@@ -70,7 +87,7 @@ static void local_flush(void)
 static void local_drop(nocopy_local *l)
 {
 	NOCOPY_G(local_bytes) -= l->size;
-	zval_ptr_dtor(&l->v);
+	local_val_free(&l->v);
 	l->e = NULL;
 }
 
@@ -94,6 +111,30 @@ static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
 	l->visited = false;
 	ZVAL_COPY(&l->v, copy);
 	NOCOPY_G(local_bytes) += e->size;
+}
+
+/* Copy mode: from the kept template if this version has one; a second sighting keeps one. */
+static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
+{
+	nocopy_local *l = NOCOPY_G(local_ok) && e->size <= nocopy_local_size ? local_way(e) : NULL;
+	if (l && l->e == e && l->seq == e->seq) {
+		l->visited = true;
+		nocopy_graph_tpl_out(rv, Z_PTR(l->v));
+		return true;
+	}
+	if (l && l->seen == e) {
+		void *t = nocopy_graph_tpl(e);
+		if (t) {
+			zval z;
+			ZVAL_PTR(&z, t);
+			local_put(l, e, &z);
+			nocopy_graph_tpl_out(rv, t);
+			return true;
+		}
+	} else if (l) {
+		l->seen = e;
+	}
+	return nocopy_graph_out(rv, v, true);
 }
 
 /* ---- writes ---- */
@@ -236,11 +277,11 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 		if (UNEXPECTED(e->flags & (ENTRY_SERIALIZED | ENTRY_GRAPH))) {
 			if (e->flags & ENTRY_SERIALIZED) {
 				hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+			} else if (copy) {
+				hit = graph_copy_fetch(e, v, rv);
 			} else {
-				hit = nocopy_graph_out(rv, v, copy);
-				if (!copy) {
-					nocopy_keep(c, e);
-				}
+				hit = nocopy_graph_out(rv, v, false);
+				nocopy_keep(c, e);
 			}
 		} else if (Z_TYPE_P(v) < IS_STRING) {
 			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
