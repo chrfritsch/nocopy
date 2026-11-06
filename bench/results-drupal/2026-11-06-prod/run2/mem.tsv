@@ -1,0 +1,7 @@
+config	workers	rss_mb	pss_mb	private_mb	pss_total_mb	php_peak_mb	valkey_rss_mb
+apcu-all	8	71.1	13.5	4.5	108.3	3.5	8.0
+nocopy-all	8	70.5	12.8	3.5	102.8	1.8	6.8
+nocopy-all-dbtags	8	70.8	12.9	3.5	102.8	1.8	7.0
+nocopy-valkey	8	71.9	12.7	3.5	101.9	1.8	16.8
+redis	8	64.9	12.2	4.1	97.8	3.5	15.8
+stock	8	65.0	13.3	5.2	106.3	3.5	8.2

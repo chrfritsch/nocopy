@@ -1,7 +1,7 @@
 # python3 bench/sfchart.py: docs/reference/symfony-ceiling{,-dark}.svg from the ./dev sfbench numbers below
 X0, X1, MAX = 150, 690, 20000
-HELLO = (17147, 17467)  # empty page, APCu / nocopy config
-ROWS = [('products?page=3', 15295, 4820), ('product/77', 16285, 3746)]  # nocopy, APCu (no marshaller)
+HELLO = (18182, 16660)  # empty page, APCu / nocopy config
+ROWS = [('products?page=3', 17430, 4542), ('product/77', 15801, 4416)]  # nocopy, APCu (no marshaller)
 THEMES = {
     '': dict(pri='#1f2328', sec='#59636e', on1='#ffffff', s1='#2a78d6', s2='#eb6834', grid='#e6eaef', axis='#818b98', band='#59636e'),
     '-dark': dict(pri='#f0f6fc', sec='#9198a1', on1='#0d1117', s1='#3987e5', s2='#d95926', grid='#262c36', axis='#656c76', band='#9198a1'),

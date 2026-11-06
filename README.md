@@ -49,21 +49,22 @@ around. Your code never notices.
 | Read an array with 1,000 rows (vs APCu) | 200 µs | **12 ns** |
 | Read an int / a 100-byte string (vs APCu) | 28.2 / 34.4 ns | 11.0 / 11.5 ns |
 | Reads per second, 8 workers in parallel (vs APCu) | 3.7 M | **350 M** |
-| Symfony app, cache-heavy page (vs APCu) | 4,820 req/s (28% of an empty page) | **15,295 req/s (88%)** |
-| Drupal 11, one server (vs stock): anonymous / logged-in node page | 3,814 / 702 req/s | **10,929 / 1,050 req/s** |
-| Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,515 / 608 req/s | **9,958 / 1,100 req/s** |
-| Drupal 11, database queries per logged-in request (vs stock) | 29–31 | **7** |
+| Symfony app, cache-heavy page (vs APCu) | 4,542 req/s (25% of an empty page) | **17,430 req/s (~100%)** |
+| Drupal 11, one server (vs stock): anonymous / logged-in node page | 4,671 / 835 req/s | **12,145 / 1,122 req/s** |
+| Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,837 / 634 req/s | **12,538 / 1,152 req/s** |
+| Drupal 11, JSON:API list of 20 articles, logged in (vs stock) | 1,200 req/s | **2,084 req/s** |
+| Drupal 11, database queries per logged-in request (vs stock) | 18–31 | **7** |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/reference/symfony-ceiling-dark.svg">
-  <img alt="Symfony cache-heavy pages: nocopy 15,295 and 16,285 req/s, 88% and 93% of an empty page (~17,300); APCu 4,820 and 3,746 req/s, 28% and 22%" src="docs/reference/symfony-ceiling.svg" width="720">
+  <img alt="Symfony cache-heavy pages: nocopy 17,430 and 15,801 req/s, about all of an empty page (~17,000); APCu 4,542 and 4,416 req/s, 25% and 24%" src="docs/reference/symfony-ceiling.svg" width="720">
 </picture>
 
 Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
 **The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,
 entity lists). If your pages barely touch the cache, you won't see a difference. Objects are rebuilt from their
-stored properties without unserializing (except `__sleep` or `Serializable`: serialized, as in APCu).
+stored properties without unserializing (except `Serializable` and most internal classes: serialized, as in APCu).
 
 On Drupal, most of the gain comes from something else: because php-fpm, Drush and cron share one cache that survives
 restarts, every cache bin and cache tag can move out of the database. Not copying adds little there

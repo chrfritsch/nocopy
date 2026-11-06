@@ -1,5 +1,5 @@
 #!/bin/sh
-# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, nine cache configs, anonymous / logged-in / editor / cold start.
+# Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB (production PHP as for ./dev sfbench: OPcache sized up, realpath cache, optimized autoloader), nine cache configs, anonymous / logged-in (front page, node, term, JSON:API list of 20 articles) / editor / cold start.
 #   docker run --rm --shm-size=1g --cap-add=SYS_PTRACE -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
 # MEM_ONLY=1: per-worker memory after warm-up and a fixed load only (mem.tsv), no throughput runs.
 # PERF_ONLY=1 (needs --privileged): after warm-up, perf over the whole container while ab loads a node page, anonymous and logged in:
@@ -52,9 +52,12 @@ fi
 # drupal/redis 2.x (alpha, so not what composer picks): swapped in for the redis2 config only
 [ -d /site/redis2 ] || { mkdir -p /tmp/r2 && curl -sL https://ftp.drupal.org/files/projects/redis-2.0.0-alpha2.tar.gz | tar xz -C /tmp/r2 && mv /tmp/r2/redis /site/redis2; } || exit 1
 $DRUSH en redis -y >/dev/null 2>&1   # its services; the bins only use it in the redis config
+$DRUSH en jsonapi -y >/dev/null 2>&1   # its normalizations are cached as objects (CacheableNormalization)
 nodes=$($DRUSH sqlq 'select count(*) from node'); echo "nodes: $nodes"
 [ "$nodes" -ge 1000 ] || { echo "content generation failed"; exit 1; }
 rm -rf $D/web/modules/contrib/nocopy && mkdir -p $D/web/modules/contrib && cp -r /src/drupal $D/web/modules/contrib/nocopy
+# production autoloader; not --classmap-authoritative: Drupal adds module namespaces at runtime (addPsr4)
+(cd $D && composer dump-autoload -q --optimize) || exit 1
 cp /src/bench/drupal/settings.*.php /src/bench/drupal/*.services.yml /src/bench/drupal/IgbinarySerialize.php $D/web/sites/default/
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
@@ -65,7 +68,7 @@ chown -R www-data $D/web/sites/default/files
 NIDS=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 25" | tr '\n' ' ')
 NODE=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 1 offset 40")
 TERM=$($DRUSH sqlq "select tid from taxonomy_term_field_data order by tid limit 1 offset 2")
-URLS="/ /node/$NODE /taxonomy/term/$TERM"
+URLS="/ /node/$NODE /taxonomy/term/$TERM /jsonapi/node/article?page%5Blimit%5D=20"
 
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/drupal.conf <<'NGX'
@@ -126,7 +129,8 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   rm -rf $D/web/modules/contrib/redis && cp -r /site/redis$([ $cfg = redis2 ] && echo 2 || echo 1) $D/web/modules/contrib/redis
   fpm_stop 2>/dev/null
   printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = %s\naccess.log = /dev/null\npm.status_path = /fpm-status\n' "$W" > /usr/local/etc/php-fpm.d/zz-bench.conf
-  printf '%s\n' "$EXT" "apc.shm_size=256M" "apc.entries_hint=50000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" "opcache.memory_consumption=256" > /usr/local/etc/php/conf.d/zz-bench.ini
+  printf '%s\n' "$EXT" "apc.shm_size=256M" "apc.entries_hint=50000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" "opcache.memory_consumption=256" \
+    "opcache.max_accelerated_files=32531" "opcache.interned_strings_buffer=32" "realpath_cache_size=4096K" "realpath_cache_ttl=600" > /usr/local/etc/php/conf.d/zz-bench.ini
   cp $D/web/sites/default/settings.$SET.php $D/web/sites/default/settings.bench.php
   valkey-cli flushall >/dev/null; rm -f /dev/shm/nocopy-bench.*
   $DRUSH cr >/dev/null 2>&1   # the database bins; shared memory starts empty with php-fpm

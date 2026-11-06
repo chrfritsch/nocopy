@@ -1,0 +1,7 @@
+config	probe_bytes
+apcu-all	5032
+nocopy-all	144448
+nocopy-all-dbtags	144448
+nocopy-valkey	144448
+redis	5032
+stock	115104

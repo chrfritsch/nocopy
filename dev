@@ -26,7 +26,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   bench                       micro benchmarks vs APCu
   sfbench                     Symfony app (bench/sfapp) under nginx + fpm, APCu vs nocopy (WORKERS, REQS, CONC)
   stampede [workers secs ttl ms]
-  drupal-bench                Drupal under nginx + fpm, 8 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
+  drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
   hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
 
