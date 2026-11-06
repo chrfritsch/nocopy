@@ -49,7 +49,7 @@ around. Your code never notices.
 | Read an array with 1,000 rows (vs APCu) | 200 µs | **12 ns** |
 | Read an int / a 100-byte string (vs APCu) | 28.2 / 34.4 ns | 11.0 / 11.5 ns |
 | Reads per second, 8 workers in parallel (vs APCu) | 3.7 M | **350 M** |
-| Symfony app, cache-heavy page (vs APCu) | 4,820 req/s | **15,295 req/s** |
+| Symfony app, cache-heavy page (vs APCu) | 4,820 req/s (28% of an empty page) | **15,295 req/s (88%)** |
 | Drupal 11, one server (vs stock): anonymous / logged-in node page | 3,814 / 702 req/s | **10,929 / 1,050 req/s** |
 | Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,515 / 608 req/s | **9,958 / 1,100 req/s** |
 | Drupal 11, database queries per logged-in request (vs stock) | 29–31 | **7** |

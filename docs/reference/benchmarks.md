@@ -39,9 +39,11 @@ cache, preload, `--classmap-authoritative`, `.container.dumper.inline_factories`
 | cache-heavy page (`product/77`) | 3,299 | 3,746 | **16,285** |
 | no cache (`hello`) | 16,543 | 17,147 | 17,467 |
 | validator (`validate`) | 9,567 | 9,215 | 8,964 |
+| `products` as a share of `hello` | 21% | 28% | **88%** |
+| `product/77` as a share of `hello` | 20% | 22% | **93%** |
 
-Cache-heavy pages reach what a page without cache does on this host (~17,000 req/s), so the ratio is capped by the host, not
-by nocopy. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
+`hello` returns `ok` with no cache: it is what the host serves with the cache costing nothing. nocopy's cache-heavy pages
+reach 88-93% of it, so a faster nocopy could add at most 7-14%: the ratio to APCu is capped by the host, not by nocopy. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
 (nocopy) on `products`, with a `hello` ceiling of ~9,400.
 
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
