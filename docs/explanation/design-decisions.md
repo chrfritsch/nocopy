@@ -173,8 +173,12 @@ copy mode: one object 881 / 911 ns unserialized -> 112 / 249 ns, 100 objects 82.
 object 243 -> 182 ns; other stores 0-3% slower (int, string, failing add: within noise of runs; 1k-row arrays ~2%), fetches unchanged.
 symfony/php-ext-deepclone's payload stored zero-copy (`deepclone_from_array(nocopy_get())`, 0.8.9) was 473 ns / 10.2 µs for
 the first two: it walks a portable array format and checks every property by name, which a cache on one host need not do.
-Other objects (internal classes, `__serialize`/`__sleep`/`__wakeup`/`Serializable`, dynamic properties, lazy, enums, closures)
-and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
+Also nodes: classes with `__serialize`/`__unserialize` (user and internal: `DateTime*`, `ArrayObject`,
+`SplObjectStorage`; `props[0]` is the array, `__unserialize` called on fetch), user classes with `__wakeup` (slots, then the call)
+and enums (the case). `bench/objects.php`, 100 `Order` objects with a `DateTimeImmutable` and an enum: 85.9 / 83.8 µs ->
+48.9 / 47.1 µs (zero / copy); `DateTime::__unserialize` parsing its string is most of the rest. Like arrays, nodes don't
+dedup equal strings (igbinary does). `ab.sh` store object (plain slots) 180 -> 190 ns for the kind checks (243 ns serialized). Other objects (`__sleep`, `Serializable`, internal classes without `__serialize`,
+dynamic properties, lazy, closures) and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
 in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
 Copy mode keeps a private **template** of a graph in the kept-copy table on its second sighting (the block's bytes with

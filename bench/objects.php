@@ -10,12 +10,15 @@ class Product {
     private array $meta = ['source' => 'import', 'flags' => [1, 2, 3]];
     public function __construct(public int $id, public string $name, protected string $desc, public array $tags, public ?Category $cat, public float $price) {}
 }
+enum Status: string { case Open = 'o'; case Paid = 'p'; }
+final class Order { public function __construct(public int $id, public DateTimeImmutable $at, public Status $status, public string $note) {} }
 $cats = [new Category(1, 'Books'), new Category(2, 'Music'), new Category(3, 'Games')];
 $mk = fn($i) => new Product($i, "Product $i", str_repeat("Description of product $i. ", 4), ['a', 'b', "t$i"], $cats[$i % 3], $i * 1.5);
 $row = fn($i) => ['id' => $i, 'name' => "Product $i", 'desc' => str_repeat("Description of product $i. ", 4), 'tags' => ['a', 'b', "t$i"]];
 $cases = [
     'one object' => $mk(1),
     '100 objects' => array_map($mk, range(1, 100)),
+    '100 orders (date, enum)' => array_map(fn($i) => new Order($i, new DateTimeImmutable("2026-01-01 +$i hours"), $i % 2 ? Status::Open : Status::Paid, "note $i"), range(1, 100)),
     '100 rows + 1 object' => ['rows' => array_map($row, range(1, 100)), 'cat' => $cats[0]],
 ];
 $dc = function_exists('deepclone_to_array');

@@ -23,12 +23,15 @@ The hits as `key => value`; missing keys are left out. With `nocopy.valkey`, all
 ### `nocopy_put(string $key, mixed $value, int $ttl = 0): bool`
 
 Stores `$value`. Arrays, strings, integers, floats, booleans and `null` are stored as they are (zero-copy on fetch).
-Plain objects are stored as their property slots and rebuilt on fetch without unserializing: instances of user classes
-without `__serialize`/`__unserialize`/`__sleep`/`__wakeup`/`Serializable`, dynamic properties or lazy state. Identities,
-cycles, private, readonly and uninitialized properties are kept; strings and arrays in their properties stay zero-copy, and
-so do arrays next to them. A fetch after the class was changed (another property layout) or can't be loaded is a miss.
-A value containing any other object, a reference shared between elements, or nested deeper than 64 levels is stored serialized
-(with `nocopy.serializer`), as in APCu, and unserialized on every fetch. A resource warns and returns `false`.
+Objects are stored as nodes and rebuilt on fetch without unserializing, with the results and the `__wakeup`/`__unserialize`
+calls (and their order) of `unserialize()`: user classes as their property slots (then `__wakeup()` if declared), classes with
+`__serialize`/`__unserialize` (also internal ones: `DateTime*`, `ArrayObject`, `SplObjectStorage`, ...) as `__serialize()`'s
+array, enums as their case. Identities, cycles, private, readonly and uninitialized properties are kept; strings and arrays
+stay zero-copy, and so do arrays next to the objects. A fetch after a class was changed (another property layout), can't be
+loaded or lost the enum case is a miss; a `__wakeup`/`__unserialize` that throws makes it a miss with the exception thrown.
+A value containing any other object (`__sleep`, `Serializable`, dynamic properties, lazy, internal classes without
+`__serialize`), a reference shared between elements, or nested deeper than 64 levels is stored serialized (with
+`nocopy.serializer`), as in APCu, and unserialized on every fetch. A resource warns and returns `false`.
 A negative `$ttl` throws a `ValueError`. Returns `false` when the value does not fit (larger than a shard) or there is no shared cache.
 
 ### `nocopy_add(string $key, mixed $value, int $ttl = 0): bool`

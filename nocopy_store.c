@@ -119,8 +119,7 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 	nocopy_local *l = NOCOPY_G(local_ok) && e->size <= nocopy_local_size ? local_way(e) : NULL;
 	if (l && l->e == e && l->seq == e->seq) {
 		l->visited = true;
-		nocopy_graph_tpl_out(rv, Z_PTR(l->v));
-		return true;
+		return nocopy_graph_tpl_out(rv, Z_PTR(l->v));
 	}
 	if (l && l->seen == e) {
 		void *t = nocopy_graph_tpl(e);
@@ -128,8 +127,7 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 			zval z;
 			ZVAL_PTR(&z, t);
 			local_put(l, e, &z);
-			nocopy_graph_tpl_out(rv, t);
-			return true;
+			return nocopy_graph_tpl_out(rv, t);
 		}
 	} else if (l) {
 		l->seen = e;

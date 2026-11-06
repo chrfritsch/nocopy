@@ -62,9 +62,8 @@ around. Your code never notices.
 Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
 **The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,
-entity lists). If your pages barely touch the cache, you won't see a difference. Plain objects (no custom
-serialization, no dynamic properties) are rebuilt from their properties without unserializing; other objects are stored
-serialized, as in APCu.
+entity lists). If your pages barely touch the cache, you won't see a difference. Objects are rebuilt from their
+stored properties without unserializing (except `__sleep`, `Serializable` or dynamic properties: serialized, as in APCu).
 
 On Drupal, most of the gain comes from something else: because php-fpm, Drush and cron share one cache that survives
 restarts, every cache bin and cache tag can move out of the database. Not copying adds little there

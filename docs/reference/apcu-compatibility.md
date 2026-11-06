@@ -7,7 +7,7 @@ is loaded and APCu is not. How to set it up: [Migrate from APCu](../how-to/migra
 
 | APCu | Polyfill |
 |---|---|
-| `apcu_store`, `apcu_add` (key or array) | yes; plain objects stored as property slots, others serialized, as in APCu |
+| `apcu_store`, `apcu_add` (key or array) | yes; most objects stored as nodes (property slots, `__serialize` arrays, enum cases), the rest serialized, as in APCu |
 | `apcu_fetch` (key or array), `apcu_exists`, `apcu_delete` (key or array) | yes |
 | `apcu_inc`, `apcu_dec`, `apcu_cas` | yes |
 | `apcu_clear_cache` | yes; clears the shared cache, php-fpm's included |

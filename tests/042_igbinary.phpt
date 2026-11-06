@@ -22,7 +22,7 @@ var_dump(count($r['arr']));
 nocopy_put('o', new ArrayObject([1, 2]), 0);
 var_dump(nocopy_get('o')->count());
 var_dump(nocopy_inc('o'));
-$o = new ArrayObject(array_fill(0, 1000, str_repeat('x', 100)));
+$o = (object) ['l' => array_fill(0, 1000, str_repeat('x', 100))]; // stdClass: still serialized (ArrayObject is a graph node now)
 $used = nocopy_stats()['used'];
 nocopy_put('dedup', $o, 0);
 var_dump(nocopy_stats()['used'] - $used < 20000); // igbinary dedups strings, serialize() would need ~110 KB

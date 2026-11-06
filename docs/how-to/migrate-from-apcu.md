@@ -15,9 +15,10 @@ Replace calls one to one:
 | `apcu_entry($k, $fn, $ttl)` | `nocopy_remember($k, $fn, $ttl)` (single flight across workers) |
 | `apcu_fetch(array $keys)` / `apcu_store(array)` | `nocopy_get_multiple` / `nocopy_put_multiple` |
 
-Arrays and scalars are never serialized: that is where zero-copy comes from. Plain objects (user classes without
-`__serialize`/`__sleep`/`__wakeup`/`Serializable` or dynamic properties) are not serialized either: a fetch rebuilds them from
-their stored properties, whose strings and arrays stay zero-copy. Other objects are stored serialized, as in APCu.
+Arrays and scalars are never serialized: that is where zero-copy comes from. Most objects aren't either: a fetch rebuilds
+them from their stored properties (or `__serialize()` array, or enum case), whose strings and arrays stay zero-copy, and runs
+`__wakeup`/`__unserialize` as `unserialize()` would. Objects with `__sleep`, `Serializable` or dynamic properties are stored
+serialized, as in APCu.
 
 For frameworks: [Symfony bundle](symfony.md), [Drupal module](../../drupal/README.md).
 
