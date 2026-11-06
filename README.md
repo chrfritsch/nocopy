@@ -54,6 +54,11 @@ around. Your code never notices.
 | Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,515 / 608 req/s | **9,958 / 1,100 req/s** |
 | Drupal 11, database queries per logged-in request (vs stock) | 29–31 | **7** |
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/reference/symfony-ceiling-dark.svg">
+  <img alt="Symfony cache-heavy pages: nocopy 15,295 and 16,285 req/s, 88% and 93% of an empty page (~17,300); APCu 4,820 and 3,746 req/s, 28% and 22%" src="docs/reference/symfony-ceiling.svg" width="720">
+</picture>
+
 Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
 **The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,

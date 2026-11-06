@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 232" width="720" height="232" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" role="img">
+<title>Symfony cache-heavy pages: products?page=3: nocopy 15,295 req/s (88% of an empty page), APCu 4,820 (28%); product/77: nocopy 16,285 req/s (93% of an empty page), APCu 3,746 (22%). An empty page serves 17,147 to 17,467 req/s.</title>
+<text fill="#1f2328" x="0" y="18" font-size="14" font-weight="600">Symfony, cache-heavy pages (req/s, php-fpm, 8 workers)</text>
+<rect fill="#2a78d6" x="0" y="34" width="12" height="12" rx="2"/><text fill="#1f2328" x="18" y="44">nocopy (bundle)</text>
+<rect fill="#eb6834" x="130" y="34" width="12" height="12" rx="2"/><text fill="#1f2328" x="148" y="44">APCu (no marshaller)</text>
+<line stroke="#e6eaef" x1="150.0" y1="72" x2="150.0" y2="178"/><text fill="#59636e" font-size="11" x="150.0" y="194" text-anchor="middle">0k</text>
+<line stroke="#e6eaef" x1="285.0" y1="72" x2="285.0" y2="178"/><text fill="#59636e" font-size="11" x="285.0" y="194" text-anchor="middle">5k</text>
+<line stroke="#e6eaef" x1="420.0" y1="72" x2="420.0" y2="178"/><text fill="#59636e" font-size="11" x="420.0" y="194" text-anchor="middle">10k</text>
+<line stroke="#e6eaef" x1="555.0" y1="72" x2="555.0" y2="178"/><text fill="#59636e" font-size="11" x="555.0" y="194" text-anchor="middle">15k</text>
+<line stroke="#e6eaef" x1="690.0" y1="72" x2="690.0" y2="178"/><text fill="#59636e" font-size="11" x="690.0" y="194" text-anchor="middle">20k</text>
+<rect fill="#59636e" opacity=".35" x="613.0" y="66" width="8.6" height="112"/>
+<text fill="#59636e" x="621.6" y="60" text-anchor="end">empty page, no cache: the host's limit</text>
+<text fill="#1f2328" x="140" y="103" text-anchor="end">products?page=3</text>
+<path fill="#2a78d6" d="M150,82h409.0a4,4 0 0 1 4,4v8a4,4 0 0 1 -4,4h-409.0z"/>
+<text fill="#ffffff" font-weight="600" x="555.0" y="94" text-anchor="end">15,295 (88%)</text>
+<path fill="#eb6834" d="M150,100h126.1a4,4 0 0 1 4,4v8a4,4 0 0 1 -4,4h-126.1z"/>
+<text fill="#1f2328" x="286.1" y="112">4,820 (28%)</text>
+<text fill="#1f2328" x="140" y="159" text-anchor="end">product/77</text>
+<path fill="#2a78d6" d="M150,138h435.7a4,4 0 0 1 4,4v8a4,4 0 0 1 -4,4h-435.7z"/>
+<text fill="#ffffff" font-weight="600" x="581.7" y="150" text-anchor="end">16,285 (93%)</text>
+<path fill="#eb6834" d="M150,156h97.1a4,4 0 0 1 4,4v8a4,4 0 0 1 -4,4h-97.1z"/>
+<text fill="#1f2328" x="257.1" y="168">3,746 (22%)</text>
+<line stroke="#818b98" x1="150" y1="72" x2="150" y2="178"/>
+<text fill="#59636e" font-size="11" x="0" y="222">(%) = share of the empty page. Docker on arm64, PHP 8.5, 2026-11-06, ./dev sfbench.</text>
+</svg>

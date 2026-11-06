@@ -42,7 +42,12 @@ cache, preload, `--classmap-authoritative`, `.container.dumper.inline_factories`
 | `products` as a share of `hello` | 21% | 28% | **88%** |
 | `product/77` as a share of `hello` | 20% | 22% | **93%** |
 
-`hello` returns `ok` with no cache: it is what the host serves with the cache costing nothing. nocopy's cache-heavy pages
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="symfony-ceiling-dark.svg">
+  <img alt="Symfony cache-heavy pages: nocopy 15,295 and 16,285 req/s, 88% and 93% of an empty page (~17,300); APCu 4,820 and 3,746 req/s, 28% and 22%" src="symfony-ceiling.svg" width="720">
+</picture>
+
+Chart from `bench/sfchart.py` (numbers inside it). `hello` returns `ok` with no cache: it is what the host serves with the cache costing nothing. nocopy's cache-heavy pages
 reach 88-93% of it, so a faster nocopy could add at most 7-14%: the ratio to APCu is capped by the host, not by nocopy. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
 (nocopy) on `products`, with a `hello` ceiling of ~9,400.
 
