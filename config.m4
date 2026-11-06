@@ -11,6 +11,13 @@ PHP_ARG_ENABLE([nocopy-valkey],
   [yes],
   [no])
 
+PHP_ARG_ENABLE([nocopy-lto],
+  [whether to build nocopy with link-time optimization],
+  [AS_HELP_STRING([--disable-nocopy-lto],
+    [nocopy: build without -flto (shared builds use it when the compiler links with it)])],
+  [yes],
+  [no])
+
 AS_VAR_IF([PHP_NOCOPY], [no],, [
   AC_DEFINE([HAVE_NOCOPY], [1],
     [Define to 1 if the PHP extension 'nocopy' is available.])
@@ -34,12 +41,26 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
       lv_sources="$lv_sources tls.c"
     ], [AC_MSG_WARN([OpenSSL not found: nocopy.valkey without TLS])])
   ])
+  dnl LTO inlines the arena into the fetch and store paths (ab.sh: fetches +2-4%, inc +10%); shared only, PHP itself links without it
+  nocopy_lto=
+  AS_VAR_IF([PHP_NOCOPY_LTO], [no],, [AS_VAR_IF([ext_shared], [no],, [
+    for f in -flto=auto -flto; do
+      AC_MSG_CHECKING([whether $CC links with $f])
+      nocopy_save_cflags=$CFLAGS nocopy_save_ldflags=$LDFLAGS
+      CFLAGS="$CFLAGS $f" LDFLAGS="$LDFLAGS $f"
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])], [nocopy_lto=$f])
+      CFLAGS=$nocopy_save_cflags LDFLAGS=$nocopy_save_ldflags
+      AS_VAR_IF([nocopy_lto], [], [AC_MSG_RESULT([no])], [AC_MSG_RESULT([yes]); break])
+    done
+  ])])
+  dnl -Wc,: libtool drops a bare -flto from the link line for clang (whose objects are then bitcode)
+  AS_VAR_IF([nocopy_lto], [],, [NOCOPY_SHARED_LIBADD="$NOCOPY_SHARED_LIBADD -Wc,$nocopy_lto"])
   PHP_SUBST([NOCOPY_SHARED_LIBADD])
 
   PHP_NEW_EXTENSION([nocopy],
     [$nocopy_sources],
     [$ext_shared],,
-    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden $lv_cflags])
+    [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden $nocopy_lto $lv_cflags])
 
   AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
     lv=third_party/libvalkey

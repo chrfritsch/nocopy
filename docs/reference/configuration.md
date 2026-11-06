@@ -44,5 +44,6 @@ Only in builds with the Valkey tier (default; absent with `--disable-nocopy-valk
 |---|---|
 | `--enable-nocopy` | Build the extension (default with `phpize`) |
 | `--disable-nocopy-valkey` | Leave out the Valkey tier and OpenSSL; no `nocopy.valkey*` settings |
+| `--disable-nocopy-lto` | Build without link-time optimization (on for shared builds when the compiler links with `-flto`; fetches 1-4% slower without) |
 
 TLS for Valkey is built when OpenSSL 1.1.1+ (headers and `pkg-config`) is found.

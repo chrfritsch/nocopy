@@ -284,7 +284,8 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
 
-void nocopy_fetch_multi(HashTable *keys, HashTable *out)
+/* noinline: under LTO, inlined into nocopy_get_multiple, copy mode got 14% slower */
+__attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 {
 	if (UNEXPECTED(nocopy_detour)) {
 		if (nocopy_a) {

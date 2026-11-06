@@ -145,6 +145,15 @@ re-running itself with `apcu_*` rewritten (fetch int 11.7 ns zero-copy, without 
 **Objects are always stored serialized**, as in APCu, with no `$serialize` flag on writes. With the flag, every caller in
 the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 
+## Build
+
+**One translation unit for the PHP layers.** `nocopy.c` includes `nocopy_value.c` and `nocopy_store.c`, which still compile alone (tidy).
+Built as three, `nocopy_*` stopped inlining the store: fetch miss -5%, failing add -6%; as one, `ab.sh` read/write within noise.
+
+**LTO in shared builds** (`--disable-nocopy-lto` turns it off), which inlines the arena into the fetch and store paths. `ab.sh` best of 5,
+copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
+inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.
+
 ## Code style
 
 Code comments are one short line, or none.
