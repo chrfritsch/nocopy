@@ -1,0 +1,7 @@
+config	anonymous_sees_cli_save	logged_in_sees_cli_save
+apcu-all	0	0
+nocopy-all	2	3
+nocopy-all-dbtags	2	3
+nocopy-valkey	2	3
+redis	2	3
+stock	2	3

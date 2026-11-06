@@ -15,7 +15,7 @@ Simple `put` / `get` functions, one cache shared by every PHP worker on the mach
 
 ```php
 nocopy_put('products', $rows);      // 1,000 rows
-$rows = nocopy_get('products');     // APCu: ~200 µs. nocopy: ~13 ns. Any size.
+$rows = nocopy_get('products');     // APCu: ~200 µs. nocopy: ~12 ns. Any size.
 ```
 
 > **Status:** works and is tested, not released yet: build from source ([status and roadmap](docs/status.md)).
@@ -34,7 +34,7 @@ flowchart LR
         A1[(shared memory)] -- "copy every element<br/>~200 µs" --> A2[your request]
     end
     subgraph nocopy
-        N1[(shared memory)] -- "hand over a pointer<br/>~13 ns" --> N2[your request]
+        N1[(shared memory)] -- "hand over a pointer<br/>~12 ns" --> N2[your request]
     end
 ```
 
@@ -46,12 +46,12 @@ around. Your code never notices.
 
 | | without nocopy | with nocopy |
 |---|---:|---:|
-| Read an array with 1,000 rows (vs APCu) | 202 µs | **13 ns** |
-| Read an int / a 100-byte string (vs APCu) | 28.6 / 34.9 ns | 13.0 / 13.0 ns |
-| Reads per second, 8 workers in parallel (vs APCu) | 3.8 M | **221 M** |
+| Read an array with 1,000 rows (vs APCu) | 200 µs | **12 ns** |
+| Read an int / a 100-byte string (vs APCu) | 28.2 / 34.4 ns | 11.0 / 11.5 ns |
+| Reads per second, 8 workers in parallel (vs APCu) | 3.7 M | **350 M** |
 | Symfony app, cache-heavy page (vs APCu) | 3,815 req/s | **8,924 req/s** |
-| Drupal 11, one server (vs stock): anonymous / logged-in node page | 4,980 / 909 req/s | **11,870 / 1,107 req/s** |
-| Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 5,105 / 628 req/s | **12,244 / 1,202 req/s** |
+| Drupal 11, one server (vs stock): anonymous / logged-in node page | 3,814 / 702 req/s | **10,929 / 1,050 req/s** |
+| Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,515 / 608 req/s | **9,958 / 1,100 req/s** |
 | Drupal 11, database queries per logged-in request (vs stock) | 29–31 | **7** |
 
 Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).

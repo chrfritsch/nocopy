@@ -1,0 +1,7 @@
+config	first_ms	settled_at_request	warm_p50_ms	nocopy_used_bytes
+apcu-all	632.4	3	7	0
+nocopy-all	194.5	2	7	11143528
+nocopy-all-dbtags	188.8	2	7	11101736
+nocopy-valkey	195.7	2	6	6907896
+redis	192.0	2	11	0
+stock	227.2	2	10	0

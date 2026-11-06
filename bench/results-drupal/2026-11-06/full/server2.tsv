@@ -1,0 +1,4 @@
+config	first_ms	p50_ms_requests_6_30	logged_in_sees_save_on_a	anonymous_sees_save_on_a
+nocopy-valkey	206.1	6.2	1	1
+redis	230.9	7.9	1	1
+redis2	211.2	8.6	1	1

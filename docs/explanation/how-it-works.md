@@ -11,7 +11,7 @@ fetch, every time. Readers also take a lock, so throughput drops as workers are 
 PHP's opcache already shares arrays between processes without copying: it stores them as **immutable** structures that
 PHP knows not to modify or free. nocopy stores cached arrays and strings the same way, in one shared-memory arena that all
 php-fpm workers (or ZTS threads) map at the same address. `nocopy_get()` then returns a pointer straight into shared memory:
-no copy, no unserialize, no lock. A 1,000-row array costs 13 ns, the same as an integer.
+no copy, no unserialize, no lock. A 1,000-row array costs 12 ns, about the same as an integer.
 
 ```mermaid
 flowchart LR

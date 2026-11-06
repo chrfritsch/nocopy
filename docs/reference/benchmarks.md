@@ -7,13 +7,13 @@ Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`,
 
 | | APCu | nocopy (copy) | nocopy (zero-copy) |
 |---|---:|---:|---:|
-| fetch int / 100 B string | 28.6 / 34.9 ns | 15.5 / 19.9 ns | 13.0 / 13.0 ns |
-| fetch array, 1k rows | 202 µs | 91 µs | **13 ns** |
-| store int / 100 B string | 55.7 / 81.8 ns | 29.3 / 34.6 ns | same as copy |
-| parallel fetch int, 8 workers | 3.8 M ops/s | 154 M ops/s | **221 M ops/s** |
+| fetch int / 100 B string | 28.2 / 34.4 ns | 11.6 / 19.5 ns | 11.0 / 11.5 ns |
+| fetch array, 1k rows | 200 µs | 13 ns (kept copy) | **12 ns** |
+| store int / 100 B string | 56.5 / 81.3 ns | 27.2 / 28.9 ns | same as copy |
+| parallel fetch int, 8 workers | 3.7 M ops/s | 266 M ops/s | **350 M ops/s** |
 
-Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): fetching 1k rows the second time costs
-12.8 ns instead of 68 µs.
+2026-11-06. Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): that is what the bench's
+repeated fetch measures; the first fetch of 1k rows costs ~68 µs.
 
 **Cross-check on Graviton4** (AWS c8g.xlarge, Kubernetes pod capped at 3 vCPU, PHP 8.5.12, same `docker/bench.sh`, 2026-11-05):
 absolute times are higher for both, the ratios hold.
@@ -44,22 +44,21 @@ capped by the host, not by nocopy. Pages that barely touch the cache gain nothin
 
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 
-2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host, one full run on 2026-11-05
-([raw numbers](../../bench/results-drupal/2026-11-05)). igbinary in every config except stock. Each row changes one
-thing against the one above it:
+2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host; median of 3 interleaved runs on 2026-11-06
+([raw numbers](../../bench/results-drupal/2026-11-06)). igbinary in every config except stock, nocopy configs load the `apcu_*`
+polyfill as the Drupal module does. Each row changes one thing against the one above it:
 
 | | anonymous `/` | logged-in `/` / node | DB statements anon / logged-in | first request after fpm restart | Drush save visible on the web |
 |---|---:|---:|---:|---:|:---:|
-| stock: DB bins, APCu fast layer | 4,980 req/s | 994 / 909 req/s | 7 / 29-31 | 181 ms | yes |
-| apcu-all: all bins in APCu, tags in DB | 7,361 req/s | 1,156 / 1,086 req/s | 5 / 12-13 | 490 ms | **no** |
-| nocopy-all-dbtags: all bins in nocopy, tags in DB | 8,340 req/s | 1,218 / 980 req/s | 5 / 12-13 | 164 ms | yes |
-| nocopy-all: bins and tags in nocopy | **11,870 req/s** | **1,249 / 1,107 req/s** | **0 / 7** | 160 ms | yes |
+| stock: DB bins, APCu fast layer | 3,814 req/s | 886 / 702 req/s | 7 / 29-31 | 219 ms | yes |
+| apcu-all: all bins in APCu, tags in DB | 5,561 req/s | 1,076 / 933 req/s | 5 / 12-13 | 605 ms | **no** |
+| nocopy-all-dbtags: all bins in nocopy, tags in DB | 7,839 req/s | **1,200 / 1,050 req/s** | 5 / 12-13 | 192 ms | yes |
+| nocopy-all: bins and tags in nocopy | **10,929 req/s** | 1,133 / **1,050 req/s** | **0 / 7** | 188 ms | yes |
 
-- **Bins out of the database** (stock → apcu-all): +48% anonymous, +16-19% logged-in. Any memory cache gets this.
-- **No copy on read** (apcu-all → nocopy-all-dbtags): +13% anonymous, +5% / -10% logged-in, within the noise of one
-  run. Drupal pages read few large arrays per request, unlike the Symfony page above.
-- **Tags out of the database** (nocopy-all-dbtags → nocopy-all): +42% anonymous (the page cache hit needs no query at
-  all), +3% / +13% logged-in.
+- **Bins out of the database** (stock → apcu-all): +46% anonymous, +21% / +33% logged-in. Any memory cache gets this.
+- **No copy on read** (apcu-all → nocopy-all-dbtags): +41% anonymous, +12% / +13% logged-in.
+- **Tags out of the database** (nocopy-all-dbtags → nocopy-all): +39% anonymous (the page cache hit needs no query at
+  all); logged-in the same within the noise (-6% / 0%).
 - apcu-all is only a measuring point: Drush and cron write to their own APCu, so their saves never reach php-fpm, and
   the cache starts empty after every fpm restart. What nocopy adds over it is one cache for every process that survives
   restarts, which is what makes moving all bins off the database safe.
@@ -68,18 +67,20 @@ Editor loop under reader load (p50; save / edit form / view after save) and read
 
 | | stock | apcu-all | nocopy-all-dbtags | nocopy-all |
 |---|---:|---:|---:|---:|
-| editor | 30 / 47 / 40 ms | 29 / 33 / 20 ms | 29 / 34 / 21 ms | **23 / 34 / 20 ms** |
-| readers | 563 req/s | 716 req/s | 696 req/s | 699 req/s |
+| editor | 31 / 50 / 43 ms | 30 / 35 / 22 ms | 28 / 33 / 21 ms | **23 / 33 / 21 ms** |
+| readers | 497 req/s | 626 req/s | 691 req/s | **730 req/s** |
 
-**Measured before nocopy's Drupal module required the `apcu_*` polyfill**, so the nocopy rows above lack what APCu configs get
-for free: Drupal's class loader and FileCache cache in `apcu_*` when `apcu_fetch()` exists, and without it Composer checks the file
-system for every class (strace: 807 `faccessat` per logged-in request, 65 with the polyfill, 68 with APCu). nocopy-all without and
-with the polyfill, 2026-11-06, median of 3 interleaved runs (req/s): logged-in `/` 986 -> 1,290, node 1,042 -> 1,266,
-term 1,039 -> 1,326; anonymous `/` 8,536 -> 11,568, node 9,180 -> 12,803, term 10,551 -> 12,159; without it, runs varied up to 2x
-(file-system lookups from 8 workers). The table needs a rerun with it.
+Without the `apcu_*` polyfill Drupal's class loader and FileCache find no `apcu_fetch()` and Composer checks the file system
+for every class (strace: 807 `faccessat` per logged-in request, 65 with the polyfill, 68 with APCu). nocopy-all without and with
+it, median of 3 interleaved runs (req/s): logged-in `/` 986 -> 1,290, node 1,042 -> 1,266, term 1,039 -> 1,326; anonymous `/`
+8,536 -> 11,568, node 9,180 -> 12,803, term 10,551 -> 12,159.
 
-Not in the table: stock + igbinary is the same as stock (4,934 / 962 req/s), and so is nocopy as chainedfast's fast
-layer (`nocopy-fast` 5,127 / 883 req/s, with `routes` 4,816 / 975 req/s). Chainedfast asks the database for each bin's
+The host ran ~20% slower than on 2026-11-05 (stock 3,814 vs 4,980 req/s anonymous), so compare within a run. A full run of all
+ten configs the same day ([full](../../bench/results-drupal/2026-11-06/full)) caught nocopy-all in a slow window (4,247 req/s),
+which the three runs did not reproduce.
+
+Not in the table (full run, stock there 4,221 / 906 req/s): stock + igbinary is the same as stock (4,407 / 1,009 req/s), and so
+is nocopy as chainedfast's fast layer (`nocopy-fast` 4,454 / 997 req/s, with `routes` 4,574 / 980 req/s). Chainedfast asks the database for each bin's
 last write on every request, and those bins were never the bottleneck.
 
 ### Memory per php-fpm worker
@@ -103,21 +104,21 @@ copied into the worker's heap. Small next to opcache and Drupal's own heap: thes
 
 ## Drupal 11, several servers: nocopy + Valkey vs drupal/redis
 
-Same run. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
+Same runs. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
 igbinary, APCu chainedfast in front of bootstrap/config/discovery.
 
 | | drupal/redis | nocopy + Valkey |
 |---|---:|---:|
-| anonymous `/` | 5,105 req/s | **12,244 req/s** |
-| logged-in `/` / node | 688 / 628 req/s | **1,340 / 1,202 req/s** |
-| editor: save / edit form / view after save (p50) | 26 / 40 / 28 ms | **23 / 34 / 21 ms** |
-| readers served during editing | 447 req/s | **711 req/s** |
-| first request after fpm restart | 170 ms | 158 ms |
-| second server joining: first request / p50 of requests 6-30 | 161 / 6.8 ms | 167 / **4.2 ms** |
+| anonymous `/` | 4,515 req/s | **9,958 req/s** |
+| logged-in `/` / node | 638 / 608 req/s | **1,292 / 1,100 req/s** |
+| editor: save / edit form / view after save (p50) | 28 / 42 / 32 ms | **23 / 34 / 22 ms** |
+| readers served during editing | 390 req/s | **727 req/s** |
+| first request after fpm restart | 202 ms | 196 ms |
+| second server joining: first request / p50 of requests 6-30 | 209 / 8.4 ms | 222 / **5.3 ms** |
 
 Both have 0 / 7 database statements per anonymous / logged-in request: the difference is reading local zero-copy copies
-instead of a network round trip and unserialize per item. drupal/redis 2.0-alpha2 is slower than 1.11 here (3,323 / 702
-req/s). A web save on server A and a Drush save both show up on server B in both setups.
+instead of a network round trip and unserialize per item. drupal/redis 2.0-alpha2 is no faster than 1.11 (full run: 2,826 / 636
+vs 2,750 / 532 req/s). A web save on server A and a Drush save both show up on server B in both setups.
 
 ## Batches (`nocopy_get_multiple` / `put_multiple`), one host
 

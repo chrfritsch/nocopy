@@ -1,0 +1,7 @@
+traffic	url	req_s	p50_ms	p99_ms	failed	queries_per_req
+anonymous	/	4338.88	2	4	0	0.0
+logged-in	/	659.49	11	30	0	7.0
+anonymous	/node/76	4714.04	2	3	0	0.0
+logged-in	/node/76	608.47	12	25	0	7.0
+anonymous	/taxonomy/term/3	3898.17	2	5	0	0.0
+logged-in	/taxonomy/term/3	548.24	13	31	0	7.0

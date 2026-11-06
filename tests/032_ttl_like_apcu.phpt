@@ -6,7 +6,7 @@ nocopy
 nocopy.shm_name=/nocopy-t032
 --FILE--
 <?php
-while (fmod(microtime(true), 1) > 0.05) usleep(1000);
+while (($f = fmod(microtime(true), 1)) < 0.02 || $f > 0.05) usleep(1000); // past the coarse clock's tick lag
 nocopy_put('k', 1, 1);
 $t0 = microtime(true);
 foreach ([1.5, 2.2] as $at) {
