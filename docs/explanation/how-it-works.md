@@ -59,7 +59,7 @@ APCu wipes everything when it runs out of memory. nocopy evicts gradually, in th
 [Segcache](https://www.usenix.org/conference/nsdi21/presentation/yang-juncheng):
 
 1. Expired entries are swept a few at a time on every write.
-2. Sparse segments are compacted: their live entries move together.
+2. Segments with enough dead space (overwritten or deleted entries) are compacted: their live entries move forward, nothing is lost.
 3. Otherwise the oldest segments are merged: entries read since they were written move forward, the rest are evicted.
    A small read counter per entry decides who stays; a "ghost" list remembers recently evicted keys and protects them
    when they come back.

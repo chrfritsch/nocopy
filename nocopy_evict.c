@@ -4,6 +4,7 @@
 
 #define MERGE_N 4 /* segments merged into at most one segment's worth of survivors */
 #define PICK_N 32 /* eviction chooses among this many oldest segments */
+#define COMPACT_MAX (nocopy_seg_size / 4 * 3) /* a segment this full or less is compacted alone rather than evicting */
 
 /* The entries of segment s. A walk may run past unlinks that make s DEAD: only reclaim() frees it, under this lock. */
 #define SEG_FOREACH(s, e) \
@@ -89,22 +90,27 @@ static bool mergeable(uint32_t s)
 	return g->state == SEG_SEALED && g->run == 1 && !g->pending;
 }
 
-/* Compaction victims: sealed segments at <= 1/4 live, together <= one segment (*live). 0 if fewer than two: one is just moved, not freed. */
+/* Compaction victims: the sparsest sealed segments, together <= one segment (*live), or the sparsest alone up to COMPACT_MAX. */
 static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 {
 	uint32_t nv = 0;
-	*live = 0;
 	SH_SEGS(sh, s) {
-		if (nv == MERGE_N) {
-			break;
-		}
 		size_t l = nocopy_a->segs[s].live;
-		if (mergeable(s) && l <= nocopy_seg_size / 4 && *live + l <= nocopy_seg_size) {
-			*live += l;
-			v[nv++] = s;
+		if (!mergeable(s) || l > COMPACT_MAX || (nv == MERGE_N && l >= nocopy_a->segs[v[MERGE_N - 1]].live)) {
+			continue;
 		}
+		uint32_t k = nv < MERGE_N ? nv++ : MERGE_N - 1; /* keep v sorted by live */
+		for (; k > 0 && nocopy_a->segs[v[k - 1]].live > l; k--) {
+			v[k] = v[k - 1];
+		}
+		v[k] = s;
 	}
-	return nv >= 2 ? nv : 0;
+	*live = 0;
+	uint32_t n = 0;
+	for (; n < nv && *live + nocopy_a->segs[v[n]].live <= nocopy_seg_size; n++) {
+		*live += nocopy_a->segs[v[n]].live;
+	}
+	return n >= 2 || (n && *live <= COMPACT_MAX) ? n : 0;
 }
 
 /* The K oldest sealed segments, oldest first, or the oldest big entry's run alone if it is older.

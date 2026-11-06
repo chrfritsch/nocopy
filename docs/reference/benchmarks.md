@@ -115,26 +115,26 @@ request, `w` = share of hits rewritten.
 
 | Workload | Memory | nocopy | APCu | Valkey LRU | Valkey LFU |
 |---|---|---|---|---|---|
-| Zipf, fp 1.5 | 32M | 94.2 | 86.7 | 96.1 | 96.2 |
-| | 64M | 93.6 | 87.1 | 96.4 | 96.5 |
-| Zipf, fp 1.5, 0.5 one-off puts | 32M | 89.5 | 72.5 | 80.6 | 90.5 |
-| | 64M | 91.2 | 73.6 | 82.4 | 91.8 |
-| Zipf, fp 3 | 32M | 86.6 | 78.0 | 87.7 | 89.1 |
-| | 64M | 85.8 | 79.1 | 88.5 | 89.6 |
-| Zipf, fp 1.5, 20% of hits rewritten | 32M | 87.4 | 86.7 | 96.1 | 96.2 |
-| | 64M | 85.4 | 87.1 | 96.4 | 96.5 |
-| Loop, fp 1.1 | 32M | 60.8 | 0 | 100 | 100 |
-| | 64M | 72.1 | 0 | 100 | 100 |
-| Loop, fp 1.5 | 32M | 25.1 | 0 | 49.1 | 63.9 |
-| | 64M | 41.1 | 0 | 36.7 | 64.5 |
+| Zipf, fp 1.5 | 32M | 94.6 | 86.7 | 96.1 | 96.2 |
+| | 64M | 94.1 | 87.1 | 96.4 | 96.4 |
+| Zipf, fp 1.5, 0.5 one-off puts | 32M | 89.8 | 72.5 | 80.6 | 91.7 |
+| | 64M | 91.6 | 73.6 | 82.4 | 90.7 |
+| Zipf, fp 3 | 32M | 87.2 | 78.0 | 87.7 | 89.1 |
+| | 64M | 86.3 | 79.1 | 88.5 | 89.6 |
+| Zipf, fp 1.5, 20% of hits rewritten | 32M | 91.4 | 86.7 | 96.1 | 96.2 |
+| | 64M | 90.9 | 87.1 | 96.4 | 96.5 |
+| Loop, fp 1.1 | 32M | 72.0 | 0 | 100 | 100 |
+| | 64M | 76.2 | 0 | 100 | 100 |
+| Loop, fp 1.5 | 32M | 28.8 | 0 | 48.9 | 63.9 |
+| | 64M | 49.3 | 0 | 37.6 | 64.5 |
 
 - **APCu** empties the whole cache when it is full (`apc.ttl=0`, the default): 8-64 expunges per run, and a loop over
   slightly more than fits never hits.
-- **Valkey holds ~20% more entries** in the same memory: 32M filled with 500-byte values keeps 58,400 in Valkey,
-  48,800 in nocopy (~690 bytes each, with the slot table, merge headroom and segment tails). That is most of its lead on
+- **Valkey holds ~15% more entries** in the same memory: 32M filled with 500-byte values keeps 58,400 in Valkey,
+  50,900 in nocopy (600-byte blocks, ~660 bytes each with the slot table and free segments). That is most of its lead on
   plain Zipf and why `loop 1.1` fits whole. `maxmemory` counts allocated bytes only: Valkey's RSS was 38-40 MB at 32M
   and 70-71 MB at 64M, the process and allocator overhead come on top.
-- **Rewrites** cost nocopy 7-8 points: an overwrite leaves the old copy as dead bytes in its segment until a merge.
+- **Rewrites** cost nocopy 3 points: an overwrite leaves the old copy as dead bytes until its segment is compacted.
   APCu and Valkey free it in place.
 - **One-off keys**: nocopy (ghost list, frequency-aware merge) is level with LFU and 9 points above LRU.
 - Valkey is a network hop: 4-8 µs a request here over loopback TCP, against 0.2-0.7 µs for nocopy and APCu.

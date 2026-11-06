@@ -46,7 +46,7 @@ static igb_ser_fn igb_ser;
 static igb_unser_fn igb_unser;
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
-/* The arena block: core header, the value, then the key string and the value's out-of-line parts. */
+/* The arena block: core header, the value, then the key's bytes and the value's out-of-line parts. */
 typedef struct {
 	nocopy_entry h;
 	zval val;
@@ -54,7 +54,7 @@ typedef struct {
 
 /* nocopy_entry.user: nocopy_remember's compute time, ms (XFetch) */
 
-#define KEY_OFF (SALIGN(sizeof(php_entry)) + _ZSTR_HEADER_SIZE) /* the key string comes first after the zval */
+#define KEY_OFF SALIGN(sizeof(php_entry)) /* the key's bytes come first after the zval: only compared, never a zend_string */
 _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 
 static inline zval *entry_val(nocopy_entry *e) { return &((php_entry *) e)->val; }
@@ -282,16 +282,14 @@ static void persist_zval(persist *p, zval *z)
 	}
 }
 
-/* Fills e after its header: the key string (at KEY_OFF), then the value. */
+/* Fills e after its header: the key's bytes (at KEY_OFF), then the value. */
 static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, nocopy_keys *keys)
 {
 	if (Z_TYPE_P(val) == IS_ARRAY) {
 		keys_reset(keys);
 	}
 	persist p = {.cursor = (char *) e + SALIGN(sizeof(php_entry)), .keys = *keys};
-	zend_string *k = persist_str(&p, key);
-	ZEND_ASSERT(ZSTR_VAL(k) == (char *) e + e->koff);
-	(void) k;
+	memcpy(take(&p, ZSTR_LEN(key)), ZSTR_VAL(key), ZSTR_LEN(key));
 	ZVAL_COPY_VALUE(entry_val(e), val);
 	persist_zval(&p, entry_val(e));
 	ZEND_ASSERT(p.cursor == (char *) e + e->size);
@@ -543,7 +541,7 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 		z.n = SALIGN(_ZSTR_STRUCT_SIZE(Z_STRLEN(ser)));
 	}
 
-	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(_ZSTR_STRUCT_SIZE(ZSTR_LEN(key))) + z.n;
+	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;
 	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
 		o->ttl);
 	if (e) {

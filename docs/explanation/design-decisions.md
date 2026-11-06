@@ -88,6 +88,17 @@ per-segment sum of the entries' read estimates kept up to date on every `hot` bu
 Zipf 91.2 -> 92.2 / 92.9 -> 93.9, Zipf + 0.5 one-hit wonders 80.1 -> 88.0 / 83.2 -> 89.4, loop 1.1x 25 -> 49 / 25 -> 50, loop 1.5x 25 -> 25 / 18 -> 25;
 20% overwrites 84.9 -> 84.0 / 87.3 -> 87.2. Puts under eviction and fetches unchanged. Always taking the oldest keeps scans from sticking.
 
+**Compact a segment alone up to 3/4 live**, not only segments at <= 1/4 that fit together into one: rewrites spread
+their dead copies evenly, and at 20% of hits rewritten only 63% of the taken segments were live, so merge evicted while a
+third of the arena was dead. `bench/hitratio.php` 32M / 64M, 20% rewrites 87.4 -> 91.0 / 85.3 -> 90.5, 50% rewrites
+84.3 -> 90.2 / 83.6 -> 89.8; workloads without rewrites unchanged. It copies more (20% rewrites: 184 -> 808 MB moved):
+`ab.sh` ttl churn stores 2.37 -> 2.17 M/s, stores > 50 us 1.3k -> 3.6k, the slowest unchanged; other writes and fetches unchanged.
+Up to 1/2 live: +1 / +4 points; up to 7/8: +1 more point than 3/4 for twice the copying.
+
+**Keys stored as bytes, not `zend_string`s:** a block's key is only compared, so its 24-byte header and NUL went
+(500-byte value: 624 -> 600 bytes). 32M / 64M: Zipf 94.1 -> 94.6 / 93.6 -> 94.1, loop 1.1x 57 -> 76 / 72 -> 76,
+loop 1.5x 25 -> 35 / 41 -> 49 (on top of the compaction change).
+
 **Ghost list (S3-FIFO):** one 32-bit tag per slot. Measured with `bench/hitratio.php`: no ghost loses 2 points on mixed
 loads and all hits on scans.
 

@@ -22,7 +22,7 @@ if ($be === 'redis') {
     'redis' => [function ($k, &$hit) use ($rd) { $r = $rd->get($k); $hit = $r !== false; return $hit ? $r : null; }, fn ($k, $v) => $rd->set($k, $v)],
 };
 for ($b = 0; $b < $nb; $b++) $put("big$b", $big);
-$per = 640; // bytes an entry takes in the arena (header + zval + key + 500 B)
+$per = 640; // footprint unit: an entry's bytes before keys were stored raw (now 600); kept so results stay comparable
 $keys = (int) ((nocopy_stats()['size'] - $nb * strlen($big)) * $fp / $per);
 $reqs = 40 * $keys;
 mt_srand(42);
