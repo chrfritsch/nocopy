@@ -68,7 +68,7 @@ case $cmd in
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g nocopy-drupal /src/docker/hitratio-compare.sh ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
-              run --shm-size=1g -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
+              run --shm-size=1g --cap-add=SYS_PTRACE -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \
                 '/src/docker/build.sh && printf "extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy-shell\n" > /usr/local/etc/php/conf.d/zz-nocopy.ini && cd /src && exec bash' ;;
   stub)       img; docker run --rm -v "$PWD":/src -w /src "nocopy-linux:$PHP" php /usr/local/lib/php/build/gen_stub.php nocopy.stub.php ;;

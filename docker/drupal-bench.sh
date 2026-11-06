@@ -1,6 +1,7 @@
 #!/bin/sh
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, ten cache configs, anonymous / logged-in / editor / cold start.
-#   docker run --rm --shm-size=1g -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
+#   docker run --rm --shm-size=1g --cap-add=SYS_PTRACE -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
+# MEM_ONLY=1: per-worker memory after warm-up and a fixed load only (mem.tsv), no throughput runs.
 # Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-fast-routes nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"
 #   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
@@ -66,7 +67,8 @@ rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/conf.d/drupal.conf <<'NGX'
 server { listen 8099; root /site/d/web; access_log off;
   location / { try_files $uri /index.php?$query_string; }
-  location ~ \.php$ { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; } }
+  location ~ \.php$ { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; }
+  location = /fpm-status { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_NAME /fpm-status; fastcgi_param SCRIPT_FILENAME /fpm-status; } }
 server { listen 8098; root /site/d/web; access_log off;
   location / { try_files $uri /index.php?$query_string; }
   location ~ \.php$ { fastcgi_pass 127.0.0.1:9002; include fastcgi_params; fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name; } }
@@ -123,7 +125,7 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   echo "== $cfg"
   rm -rf $D/web/modules/contrib/redis && cp -r /site/redis$([ $cfg = redis2 ] && echo 2 || echo 1) $D/web/modules/contrib/redis
   fpm_stop 2>/dev/null
-  printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = %s\naccess.log = /dev/null\n' "$W" > /usr/local/etc/php-fpm.d/zz-bench.conf
+  printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = %s\naccess.log = /dev/null\npm.status_path = /fpm-status\n' "$W" > /usr/local/etc/php-fpm.d/zz-bench.conf
   printf '%s\n' "$EXT" "apc.shm_size=256M" "apc.entries_hint=50000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" "opcache.memory_consumption=256" > /usr/local/etc/php/conf.d/zz-bench.ini
   cp $D/web/sites/default/settings.$SET.php $D/web/sites/default/settings.bench.php
   valkey-cli flushall >/dev/null; rm -f /dev/shm/nocopy-bench.*
@@ -131,6 +133,16 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   fpm_start; login
   for u in $URLS; do for i in 1 2 3; do curl -s -o /dev/null "$B$u"; curl -s -o /dev/null -b /tmp/ck "$B$u"; done; done
   ab -q -n 500 -c "$C" -C "$SID" "$B/node/$NODE" >/dev/null 2>&1; ab -q -n 2000 -c "$C" "$B/" >/dev/null 2>&1
+
+  # per worker, MB: RSS, PSS (shared pages split among their users), private (USS); PHP peak of its last request; Valkey's RSS
+  for u in $URLS; do ab -q -n 400 -c "$C" "$B$u" >/dev/null 2>&1; ab -q -n 400 -c "$C" -C "$SID" "$B$u" >/dev/null 2>&1; done
+  m=$(pgrep -f 'php-fpm: master' | head -1)
+  for p in $(pgrep -P "$m"); do awk '/^Rss/{r=$2} /^Pss:/{s=$2} /^Private_(Clean|Dirty)/{u+=$2} END{print r, s, u}' /proc/$p/smaps_rollup; done > /tmp/mem.txt
+  peak=$(curl -s "$B/fpm-status?full&json" | php -r '$p = json_decode(stream_get_contents(STDIN), true)["processes"]; echo round(array_sum(array_column($p, "last request memory")) / count($p) / 1048576, 1);')
+  vk=$(valkey-cli info memory | awk -F: '/^used_memory_rss:/{printf "%.1f", $2 / 1048576}')
+  awk -v c=$cfg -v k="$peak" -v v="$vk" '{r+=$1; s+=$2; u+=$3; n++} END{printf "%s\t%d\t%.1f\t%.1f\t%.1f\t%.1f\t%s\t%s\n", c, n, r/n/1024, s/n/1024, u/n/1024, s/1024, k, v}' /tmp/mem.txt > /out/mem.tsv.$cfg
+  cat /out/mem.tsv.$cfg
+  [ -n "$MEM_ONLY" ] && continue
 
   out=/out/$cfg.tsv; printf 'traffic\turl\treq_s\tp50_ms\tp99_ms\tfailed\tqueries_per_req\n' > $out
   for u in $URLS; do
@@ -191,5 +203,6 @@ rm -f /usr/local/etc/php/conf.d/zz-bench.ini
 { printf 'config\tfirst_ms\tp50_ms_requests_6_30\tlogged_in_sees_save_on_a\tanonymous_sees_save_on_a\n'; cat /out/server2.tsv.* 2>/dev/null; } > /out/server2.tsv
 { printf 'config\tanonymous_sees_cli_save\tlogged_in_sees_cli_save\n'; cat /out/cli.tsv.* 2>/dev/null; } > /out/cli.tsv
 { printf 'config\tprobe_bytes\n'; cat /out/serializer.tsv.* 2>/dev/null; } > /out/serializer.tsv
-rm -f /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.* /out/cli.tsv.* /out/server2.tsv.*
+{ printf 'config\tworkers\trss_mb\tpss_mb\tprivate_mb\tpss_total_mb\tphp_peak_mb\tvalkey_rss_mb\n'; cat /out/mem.tsv.* 2>/dev/null; } > /out/mem.tsv
+rm -f /out/mem.tsv.* /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.* /out/cli.tsv.* /out/server2.tsv.*
 mariadb-admin shutdown

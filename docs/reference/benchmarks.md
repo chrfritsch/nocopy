@@ -75,6 +75,25 @@ Not in the table: stock + igbinary is the same as stock (4,934 / 962 req/s), and
 layer (`nocopy-fast` 5,127 / 883 req/s, with `routes` 4,816 / 975 req/s). Chainedfast asks the database for each bin's
 last write on every request, and those bins were never the bottleneck.
 
+### Memory per php-fpm worker
+
+`MEM_ONLY=1 CONFIGS="stock apcu-all nocopy-all redis nocopy-valkey" ./dev drupal-bench`: 8 workers, after warm-up and
+400 anonymous + 400 logged-in requests to each of 3 pages, from `/proc/<pid>/smaps_rollup`. Private = pages only that
+worker holds (its PHP heap, copies of cached values); PSS adds its share of the pages it shares (opcache, the cache's
+shared memory). Two runs, equal to 0.1 MB.
+
+| Config | Private MB / worker | PSS MB / worker | PSS, 8 workers | Valkey RSS |
+|---|---|---|---|---|
+| stock (APCu for 3 bins, the rest in MariaDB) | 7.2 | 14.2 | 113.5 | |
+| apcu-all | 5.6 | 13.4 | 107.5 | |
+| redis (drupal/redis 1.11) | 5.1 | 12.1 | 97.1 | 14.5 (+6.3 data) |
+| nocopy-all | 4.1 | 11.5 | 92.3 | |
+| nocopy-valkey | 4.2 | 11.6 | 93.1 | 15.8 (+7.6 data) |
+
+nocopy keeps 1.5 MB less private memory per worker than APCu and 1 MB less than drupal/redis: fetched values are not
+copied into the worker's heap. Small next to opcache and Drupal's own heap: these pages use ~3.5 MB of PHP memory per request
+(php-fpm's `last request memory`, in 2 MB chunks), so the cache's copies are a part of that, not a multiple.
+
 ## Drupal 11, several servers: nocopy + Valkey vs drupal/redis
 
 Same run. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
