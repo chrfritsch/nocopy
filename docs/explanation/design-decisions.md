@@ -158,6 +158,13 @@ string), two runs: hit with `expiresAfter` 1,958 / 2,097 -> 190 / 217 ns, hit wi
 miss + store 3,534 / 3,415 -> 1,559 / 1,481 ns. Not carried over: `$metadata` (left empty; ChainAdapter takes it from the pools
 below), `$item->isHit()` on an early refresh (always false), `setCallbackWrapper()`, a pending `saveDeferred()` of the same key.
 
+**The bundle puts nocopy in front of Symfony's system pools** (`framework.cache.system`, prepended, so an app's own setting
+wins): `AbstractAdapter::createSystemCache()` chains APCu before PHP files only when APCu is loaded, so a nocopy app ran its
+validator, serializer and property-info metadata from PHP files alone. `NocopyAdapter::createSystemCache()` builds the same
+chain with nocopy (versioned by `container.build_id`, so a deploy reads no old metadata from the arena that outlived it), and
+Symfony's own where the process does not share nocopy. `./dev sfbench`, `validate`, req/s, APCu / nocopy: before 9,286 / 8,182
+(default pool) and 10,252 / 8,187 (raw pool), after 9,100 / 9,047 and 9,347 / 9,499.
+
 ## APCu
 
 **Compatibility as a PHP polyfill**, not in the extension. The extension keeps only `apc.enabled`/`apc.enable_cli`

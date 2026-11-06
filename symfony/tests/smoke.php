@@ -47,6 +47,12 @@ $k = new SmokeKernel('prod', false);
 $k->boot();
 $c = $k->getContainer();
 
+$sys = $c->get('cache.system');
+$first = (new ReflectionProperty(Symfony\Component\Cache\Adapter\ChainAdapter::class, 'adapters'))->getValue($sys)[0];
+assert($first instanceof Chrfritsch\NocopyBundle\NocopyAdapter, 'system pools: nocopy in front of PHP files');
+$sys->save($sys->getItem('s')->set(1));
+assert($first->getItem('s')->isHit(), 'system pool roundtrip');
+
 $id = new ReflectionMethod(Symfony\Component\Cache\Adapter\AbstractAdapter::class, 'getId');
 foreach (['cache.app', 'my.pool'] as $name) {
     $pool = $c->get($name);

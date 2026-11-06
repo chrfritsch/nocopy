@@ -70,5 +70,7 @@ then load a page that uses the cache twice and check `nocopy_stats()['hits']` gr
   value, and hits refresh early ([XFetch](../reference/functions.md#nocopy_rememberstring-key-callable-callback-int-ttl--0-float-beta--10-mixed)).
   `expiresAfter()`, `$save = false` and `$beta` work as in Symfony; `setCallbackWrapper()` is not used, and `$metadata` comes back empty.
 - Multi-key reads and writes (`getItems()`, deferred saves) are one call each; with Valkey, one round trip.
+- Symfony's system pools (validator, serializer, property info) get nocopy in front of their PHP files, as Symfony does
+  with APCu; `framework.cache.system` in your config overrides it.
 - Each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
 - Under FrankenPHP worker mode, nocopy switches to copy mode automatically (the kernel keeps values across requests).

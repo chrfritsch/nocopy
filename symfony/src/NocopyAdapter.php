@@ -2,7 +2,11 @@
 
 namespace Chrfritsch\NocopyBundle;
 
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Cache\Adapter\AbstractAdapter;
+use Symfony\Component\Cache\Adapter\AdapterInterface;
+use Symfony\Component\Cache\Adapter\ChainAdapter;
+use Symfony\Component\Cache\Adapter\PhpFilesAdapter;
 use Symfony\Component\Cache\CacheItem;
 use Symfony\Component\Cache\Exception\CacheException;
 use Symfony\Component\Cache\Exception\InvalidArgumentException;
@@ -46,6 +50,22 @@ class NocopyAdapter extends AbstractAdapter
                 nocopy_put($marker, true, $this->valkey ? self::PERM_TTL : 0);
             }
         }
+    }
+
+    /** AbstractAdapter::createSystemCache() with nocopy in APCu's place; Symfony's own where this process does not share nocopy. */
+    public static function createSystemCache(string $namespace, int $defaultLifetime, string $version, string $directory, ?LoggerInterface $logger = null): AdapterInterface
+    {
+        if (!\in_array(\function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none', ['host', 'valkey'], true)) {
+            return parent::createSystemCache($namespace, $defaultLifetime, $version, $directory, $logger);
+        }
+        $files = new PhpFilesAdapter($namespace, $defaultLifetime, $directory, true);
+        $nocopy = new self($namespace, intdiv($defaultLifetime, 5), $version);
+        if (null !== $logger) {
+            $files->setLogger($logger);
+            $nocopy->setLogger($logger);
+        }
+
+        return new ChainAdapter([$nocopy, $files]);
     }
 
     /** Single flight, stale-while-revalidate and early refresh in nocopy_remember, instead of Symfony's file locks and value wrappers. */

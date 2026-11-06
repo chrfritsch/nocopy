@@ -38,7 +38,7 @@ stored as graph nodes (the morning's run before them: nocopy 15,295 / 16,285 / 1
 | cache-heavy page (`products?page=3`) | 3,167 | 4,542 | **17,430** |
 | cache-heavy page (`product/77`) | 3,205 | 4,416 | **15,801** |
 | no cache (`hello`) | 14,521 | 18,182 | 16,660 |
-| validator (`validate`) | 9,286 | 10,252 | 8,182 |
+| validator (`validate`)¹ | 9,100 | 9,347 | 9,047 |
 | `products` as a share of `hello` | 22% | 25% | **~100%** |
 | `product/77` as a share of `hello` | 22% | 24% | **95%** |
 
@@ -49,8 +49,8 @@ stored as graph nodes (the morning's run before them: nocopy 15,295 / 16,285 / 1
 
 Chart from `bench/sfchart.py` (numbers inside it). `hello` returns `ok` with no cache: it is what the host serves with the cache costing nothing. nocopy's cache-heavy pages
 reach 95-100% of it (`products` above nocopy's own `hello` is run-to-run noise, ~5%), so a faster nocopy has nothing left to add: the ratio to APCu is capped by the host, not by nocopy.
-`validate` reads the validator's class metadata (objects) on every request: nocopy rebuilds them per fetch, 12-20% below APCu here
-(3-6% in the morning's run). Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
+¹ A later run, with the bundle putting nocopy in front of Symfony's system pools. Before, those pools ran on PHP files alone
+(Symfony chains APCu in front only when APCu is loaded) and `validate` was 12-20% below APCu: 9,286 / 10,252 / 8,182. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
 (nocopy) on `products`, with a `hello` ceiling of ~9,400.
 
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
