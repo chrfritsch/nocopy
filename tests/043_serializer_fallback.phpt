@@ -10,7 +10,7 @@ nocopy.serializer=igbinary
 --FILE--
 <?php
 var_dump(ini_get('nocopy.serializer'));
-nocopy_put('o', new ArrayObject([1, 2]), 0, true);
+nocopy_put('o', new ArrayObject([1, 2]), 0);
 var_dump(nocopy_get('o')->count());
 ?>
 --CLEAN--

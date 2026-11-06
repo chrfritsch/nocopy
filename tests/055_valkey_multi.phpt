@@ -13,7 +13,7 @@ nocopy.valkey_prefix=t055:
 require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/valkey.inc';
 apcu_clear_cache();
-var_dump(nocopy_put_multiple(['a' => [1, 2], 'n' => 5, 'o' => new ArrayObject([3])], 60, true));
+var_dump(nocopy_put_multiple(['a' => [1, 2], 'n' => 5, 'o' => new ArrayObject([3])], 60));
 var_dump(ord(vk('GET', 't055:a')[0]), vk('GET', 't055:n'), vk('PTTL', 't055:a') > 50000);
 
 // another server's writes: only in Valkey, not local here

@@ -14,7 +14,7 @@ var_dump(nocopy_get('c'), nocopy_get('nope'));        // arity 1
 try { nocopy_put('x', 1, -1); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
 try { nocopy_get(1); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nocopy_put('x', 1, '5'); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
-try { nocopy_put('x', new \stdClass); } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(nocopy_put('x', new \stdClass), nocopy_get('x') instanceof \stdClass);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t040*')); ?>
@@ -26,4 +26,5 @@ NULL
 nocopy_put(): Argument #3 ($ttl) must be greater than or equal to 0
 nocopy_get(): Argument #1 ($key) must be of type string, int given
 nocopy_put(): Argument #3 ($ttl) must be of type int, string given
-nocopy_put(): Argument #2 ($value) must not contain objects or resources
+bool(true)
+bool(true)

@@ -8,15 +8,15 @@ Replace calls one to one:
 
 | APCu | nocopy |
 |---|---|
-| `apcu_store($k, $v, $ttl)` | `nocopy_put($k, $v, $ttl)`; objects need `serialize: true` |
+| `apcu_store($k, $v, $ttl)` | `nocopy_put($k, $v, $ttl)` |
 | `apcu_fetch($k, $ok)` | `nocopy_get($k, $ok)` |
 | `apcu_add` / `apcu_delete` / `apcu_clear_cache` | `nocopy_add` / `nocopy_delete` / `nocopy_clear` |
 | `apcu_inc` / `apcu_dec` / `apcu_cas` | `nocopy_inc($k, $step)` (negative to subtract) / `nocopy_cas` |
 | `apcu_entry($k, $fn, $ttl)` | `nocopy_remember($k, $fn, $ttl)` (single flight across workers) |
 | `apcu_fetch(array $keys)` / `apcu_store(array)` | `nocopy_get_multiple` / `nocopy_put_multiple` |
 
-`nocopy_put()` throws on objects unless you pass `serialize: true` (then they are stored serialized, like APCu does). Arrays
-and scalars are never serialized: that is where zero-copy comes from.
+Objects are stored serialized, as in APCu. Arrays and scalars are never serialized: that is where zero-copy comes from,
+so an array of objects is zero-copy only once its objects are turned into arrays.
 
 For frameworks: [Symfony bundle](symfony.md), [Drupal module](../../drupal/README.md).
 

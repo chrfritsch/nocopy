@@ -940,7 +940,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *
 	if (!vk_decode(raw, rv, &expires, &user)) {
 		return false;
 	}
-	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - time(NULL)) : 0, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - time(NULL)) : 0};
 	nocopy_put p;
 	if (nocopy_build(&p, key, rv, &o) == NOCOPY_OK) {
 		p.e->user = user;

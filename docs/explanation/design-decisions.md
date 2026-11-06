@@ -131,6 +131,9 @@ arbitrarily old data.
 (Symfony's `ApcuAdapter::isSupported()` and Composer check them). `bench/run.php` measures `nocopy_*` directly by
 re-running itself with `apcu_*` rewritten (fetch int 11.7 ns zero-copy, without the polyfill's extra call).
 
+**Objects are always stored serialized**, as in APCu, with no `$serialize` flag on writes. With the flag, every caller in
+the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
+
 ## Code style
 
 Code comments are one short line, or none.

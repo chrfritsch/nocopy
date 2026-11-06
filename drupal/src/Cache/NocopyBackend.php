@@ -147,7 +147,6 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   // One nocopy_put_multiple() per TTL: with nocopy.valkey one pipeline each. Tags first, in one lookup.
-  // $serialize only serializes items holding objects; the rest stay zero-copy.
   public function setMultiple(array $items) {
     $tags = array_merge(...array_map(fn ($item) => $item['tags'] ?? [], array_values($items)));
     assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
@@ -159,7 +158,7 @@ class NocopyBackend implements CacheBackendInterface {
       $byTtl[$this->ttl($entry[self::EXPIRE])][$this->key((string) $cid)] = $entry;
     }
     foreach ($byTtl as $ttl => $entries) {
-      nocopy_put_multiple($entries, $ttl, TRUE);
+      nocopy_put_multiple($entries, $ttl);
     }
   }
 
@@ -215,7 +214,7 @@ class NocopyBackend implements CacheBackendInterface {
       }
     }
     if ($items) {
-      nocopy_put_multiple($items, $this->ttl($past), TRUE);
+      nocopy_put_multiple($items, $this->ttl($past));
     }
   }
 

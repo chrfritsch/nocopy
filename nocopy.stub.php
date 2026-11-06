@@ -5,11 +5,11 @@
  */
 
 /**
- * $serialize: objects and shared references are stored serialized instead of throwing
+ * Objects, shared references and values nested too deeply are stored serialized.
  * @frameless-function {"arity": 2}
  * @frameless-function {"arity": 3}
  */
-function nocopy_put(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
+function nocopy_put(string $key, mixed $value, int $ttl = 0): bool {}
 
 /**
  * @frameless-function {"arity": 1}
@@ -17,7 +17,7 @@ function nocopy_put(string $key, mixed $value, int $ttl = 0, bool $serialize = f
 function nocopy_get(string $key, mixed &$hit = null): mixed {}
 
 /** Stores only if the key is missing. */
-function nocopy_add(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool {}
+function nocopy_add(string $key, mixed $value, int $ttl = 0): bool {}
 
 /** Adds $step (negative: subtracts) to an integer in place; a missing key starts at $step. false: not an integer, or no room. */
 function nocopy_inc(string $key, int $step = 1, int $ttl = 0): int|false {}
@@ -37,7 +37,7 @@ function nocopy_delete_multiple(array $keys): int {}
 function nocopy_get_multiple(array $keys): array {}
 
 /** key => value, one $ttl for all; with nocopy.valkey, one pipeline. false: some were not stored. */
-function nocopy_put_multiple(array $values, int $ttl = 0, bool $serialize = false): bool {}
+function nocopy_put_multiple(array $values, int $ttl = 0): bool {}
 
 /** Fetch, or compute once across workers and store. $beta > 0 refreshes early (XFetch), scaled by the measured compute time. */
 function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}

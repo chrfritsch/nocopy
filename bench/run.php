@@ -4,8 +4,8 @@ if (extension_loaded('nocopy') && !defined('NATIVE')) {
     define('NATIVE', true);
     $src = file_get_contents(__FILE__);
     eval("namespace Native;" . strtr(substr($src, strpos($src, "\n// usage:")), [
-        'apcu_store(\'obj\', $o)' => 'nocopy_put(\'obj\', $o, 0, true)',
-        'apcu_store(\'w_obj\', $o)' => 'nocopy_put(\'w_obj\', $o, 0, true)',
+        'apcu_store(\'obj\', $o)' => 'nocopy_put(\'obj\', $o, 0)',
+        'apcu_store(\'w_obj\', $o)' => 'nocopy_put(\'w_obj\', $o, 0)',
         'apcu_fetch($k)' => 'nocopy_get_multiple($k)',
         'apcu_exists(\'int\')' => 'nocopy_get(\'int\', $hit)',
         'apcu_entry(\'int\', $f)' => 'nocopy_remember(\'int\', $f, 0, 0.0)',

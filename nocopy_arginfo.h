@@ -1,11 +1,10 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 581384ab0d0550c79e039939452d62c1664e824b */
+ * Stub hash: e8dd93d4fdb6496a46740d79549ae4fc3f6516f4 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_put, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO(0, value, IS_MIXED, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, ttl, IS_LONG, 0, "0")
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, serialize, _IS_BOOL, 0, "false")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_get, 0, 1, IS_MIXED, 0)
@@ -45,7 +44,6 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_put_multiple, 0, 1, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, values, IS_ARRAY, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, ttl, IS_LONG, 0, "0")
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, serialize, _IS_BOOL, 0, "false")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_remember, 0, 2, IS_MIXED, 0)

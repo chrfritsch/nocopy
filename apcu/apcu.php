@@ -33,11 +33,11 @@ function apcu_put(string $fn, callable $put, array|string|int $key, mixed $value
         if ($argc < 2) {
             throw new ArgumentCountError("$fn() expects at least 2 arguments, 1 given");
         }
-        return $put((string) $key, $value, $ttl, true);
+        return $put((string) $key, $value, $ttl);
     }
     $failed = [];
     foreach ($key as $k => $v) {
-        if (!$put((string) $k, $v, $ttl, true)) {
+        if (!$put((string) $k, $v, $ttl)) {
             $failed[$k] = -1;
         }
     }

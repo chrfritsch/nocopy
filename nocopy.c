@@ -106,7 +106,6 @@ typedef enum { SIZE_OK, SIZE_DEEP, SIZE_OBJECT, SIZE_RESOURCE } size_status;
 typedef struct {
 	size_t n;              /* out-of-line bytes persist_zval() will consume */
 	nocopy_keys keys;       /* this value's view of the table (after keys_reset) */
-	bool keep_shared_refs; /* a reference with refcount > 1 must stay shared: SIZE_OBJECT (serialize) */
 } sizing;
 
 static size_status size_zval(sizing *z, zval *v, int depth);
@@ -152,8 +151,8 @@ static size_status size_zval(sizing *z, zval *v, int depth)
 		case IS_UNDEF: case IS_NULL: case IS_FALSE: case IS_TRUE: case IS_LONG: case IS_DOUBLE:
 			return SIZE_OK;
 		case IS_REFERENCE:
-			if (z->keep_shared_refs && Z_REFCOUNT_P(v) > 1) {
-				return SIZE_OBJECT;
+			if (Z_REFCOUNT_P(v) > 1) {
+				return SIZE_OBJECT; /* must stay shared: serialize */
 			}
 			return size_zval(z, Z_REFVAL_P(v), depth + 1);
 		case IS_STRING:
@@ -527,19 +526,11 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 	if (Z_TYPE_P(val) == IS_ARRAY) {
 		keys_reset(keys);
 	}
-	sizing z = {.keys = *keys, .keep_shared_refs = o->objects == NOCOPY_SERIALIZE_OBJECTS};
+	sizing z = {.keys = *keys};
 	zval ser;
 	bool serialized = false, igb = false;
 	size_status st = size_zval(&z, val, 0);
 	if (st != SIZE_OK) {
-		if (o->objects == NOCOPY_REFUSE_OBJECTS) {
-			if (st == SIZE_DEEP) {
-				zend_value_error("nocopy: value is nested too deeply");
-			} else {
-				zend_argument_type_error(2, "must not contain objects or resources");
-			}
-			return NOCOPY_REFUSED;
-		}
 		if (st == SIZE_RESOURCE) {
 			php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
 			return NOCOPY_REFUSED;
@@ -655,7 +646,7 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 		nocopy_unlock(sh);
 		zval init;
 		ZVAL_LONG(&init, delta);
-		const nocopy_opts create = {.ttl = ttl, .add_only = true, .objects = NOCOPY_REFUSE_OBJECTS};
+		const nocopy_opts create = {.ttl = ttl, .add_only = true};
 		nocopy_status s = nocopy_store(key, &init, &create);
 		if (s != NOCOPY_EXISTS) {
 			*out = delta;
@@ -943,7 +934,7 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 
 /* ---- nocopy_* ---- */
 
-static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize, bool add_only, zval *return_value)
+static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
 {
 	if (ttl < 0) {
 		zend_argument_value_error(3, "must be greater than or equal to 0");
@@ -952,7 +943,7 @@ static void put_impl(zend_string *key, zval *val, zend_long ttl, bool serialize,
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const nocopy_opts o = {.ttl = ttl, .add_only = add_only, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
+	const nocopy_opts o = {.ttl = ttl, .add_only = add_only};
 	nocopy_status st = nocopy_store(key, val, &o);
 	if (EG(exception)) {
 		RETURN_THROWS();
@@ -965,17 +956,15 @@ PHP_FUNCTION(nocopy_put)
 	zend_string *key;
 	zval *val;
 	zend_long ttl = 0;
-	bool serialize = false;
 
-	ZEND_PARSE_PARAMETERS_START(2, 4)
+	ZEND_PARSE_PARAMETERS_START(2, 3)
 		Z_PARAM_STR(key)
 		Z_PARAM_ZVAL(val)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(ttl)
-		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
-	put_impl(key, val, ttl, serialize, false, return_value);
+	put_impl(key, val, ttl, false, return_value);
 }
 
 PHP_FUNCTION(nocopy_add)
@@ -983,17 +972,15 @@ PHP_FUNCTION(nocopy_add)
 	zend_string *key;
 	zval *val;
 	zend_long ttl = 0;
-	bool serialize = false;
 
-	ZEND_PARSE_PARAMETERS_START(2, 4)
+	ZEND_PARSE_PARAMETERS_START(2, 3)
 		Z_PARAM_STR(key)
 		Z_PARAM_ZVAL(val)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(ttl)
-		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
-	put_impl(key, val, ttl, serialize, true, return_value);
+	put_impl(key, val, ttl, true, return_value);
 }
 
 PHP_FUNCTION(nocopy_inc)
@@ -1079,7 +1066,7 @@ ZEND_FRAMELESS_FUNCTION(nocopy_put, 2)
 	zval tmp;
 	zend_string *key;
 	Z_FLF_PARAM_STR(1, key, tmp);
-	put_impl(key, arg2, 0, false, false, return_value);
+	put_impl(key, arg2, 0, false, return_value);
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
@@ -1091,7 +1078,7 @@ ZEND_FRAMELESS_FUNCTION(nocopy_put, 3)
 	zend_long ttl;
 	Z_FLF_PARAM_STR(1, key, tmp);
 	Z_FLF_PARAM_LONG(3, ttl);
-	put_impl(key, arg2, ttl, false, false, return_value);
+	put_impl(key, arg2, ttl, false, return_value);
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
@@ -1137,13 +1124,11 @@ PHP_FUNCTION(nocopy_put_multiple)
 {
 	HashTable *vals;
 	zend_long ttl = 0;
-	bool serialize = false;
 
-	ZEND_PARSE_PARAMETERS_START(1, 3)
+	ZEND_PARSE_PARAMETERS_START(1, 2)
 		Z_PARAM_ARRAY_HT(vals)
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(ttl)
-		Z_PARAM_BOOL(serialize)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (ttl < 0) {
@@ -1153,7 +1138,7 @@ PHP_FUNCTION(nocopy_put_multiple)
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const nocopy_opts o = {.ttl = ttl, .objects = serialize ? NOCOPY_SERIALIZE_OBJECTS : NOCOPY_REFUSE_OBJECTS};
+	const nocopy_opts o = {.ttl = ttl};
 	bool ok = nocopy_store_multi(vals, &o, NULL);
 	if (EG(exception)) {
 		RETURN_THROWS();
@@ -1184,7 +1169,7 @@ PHP_FUNCTION(nocopy_remember)
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
-	const nocopy_opts o = {.ttl = ttl, .objects = NOCOPY_SERIALIZE_OBJECTS};
+	const nocopy_opts o = {.ttl = ttl};
 	nocopy_remember(key, &fci, &fcc, &o, beta, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();

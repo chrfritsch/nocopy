@@ -1,7 +1,7 @@
 # Functions
 
 All functions work without a shared cache too (`nocopy.shm_name` unset or not attached): fetches miss, writes return `false`,
-`nocopy_remember()` computes without keeping. Errors in the arguments (an object without `$serialize`, a negative TTL) still throw.
+`nocopy_remember()` computes without keeping. Errors in the arguments (a negative TTL) still throw.
 
 Signatures come from [`nocopy.stub.php`](../../nocopy.stub.php).
 
@@ -20,18 +20,18 @@ The hits as `key => value`; missing keys are left out. With `nocopy.valkey`, all
 
 ## Write
 
-### `nocopy_put(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool`
+### `nocopy_put(string $key, mixed $value, int $ttl = 0): bool`
 
 Stores `$value`. Arrays, strings, integers, floats, booleans and `null` are stored as they are (zero-copy on fetch).
-A value containing an object throws a `TypeError`, unless `$serialize: true` stores it serialized (with `nocopy.serializer`).
-Arrays with references shared between elements are stored serialized automatically. Resources throw a `TypeError`.
+A value containing an object, a reference shared between elements, or nested deeper than 64 levels is stored serialized
+(with `nocopy.serializer`), as in APCu, and unserialized on every fetch. A resource warns and returns `false`.
 A negative `$ttl` throws a `ValueError`. Returns `false` when the value does not fit (larger than a shard) or there is no shared cache.
 
-### `nocopy_add(string $key, mixed $value, int $ttl = 0, bool $serialize = false): bool`
+### `nocopy_add(string $key, mixed $value, int $ttl = 0): bool`
 
 Like `nocopy_put()`, only if the key is missing (or expired). `false` if it exists.
 
-### `nocopy_put_multiple(array $values, int $ttl = 0, bool $serialize = false): bool`
+### `nocopy_put_multiple(array $values, int $ttl = 0): bool`
 
 `key => value`, one `$ttl` for all. `false` if some were not stored. With `nocopy.valkey`, one pipeline.
 

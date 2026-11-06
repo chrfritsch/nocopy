@@ -25,7 +25,7 @@ debug_zval_dump(nocopy_get('k'));
 // writing separates, the stored copy is untouched
 $a = nocopy_get('k'); $a['a'] = 99;
 var_dump(nocopy_get('k')['a']);
-try { nocopy_put('o', new stdClass); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(nocopy_put('o', new stdClass));
 CODE);
 ?>
 --CLEAN--
@@ -63,4 +63,4 @@ array(3) interned {
   string(3) "str" interned
 }
 int(1)
-nocopy_put(): Argument #2 ($value) must not contain objects or resources
+bool(true)

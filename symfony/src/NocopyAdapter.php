@@ -70,6 +70,6 @@ class NocopyAdapter extends AbstractAdapter
     // false: AbstractAdapter retries key by key and logs the failures
     protected function doSave(array $values, int $lifetime): array|bool
     {
-        return nocopy_put_multiple($values, 0 === $lifetime && $this->valkey ? self::PERM_TTL : $lifetime, true);
+        return nocopy_put_multiple($values, 0 === $lifetime && $this->valkey ? self::PERM_TTL : $lifetime);
     }
 }

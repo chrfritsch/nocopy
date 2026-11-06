@@ -14,7 +14,7 @@ $vals = [
     'str' => str_repeat('s', 300),
     'obj' => new P,
 ];
-foreach ($vals as $k => $v) nocopy_put($k, $v, 0, true);
+foreach ($vals as $k => $v) nocopy_put($k, $v, 0);
 $moved = nocopy_stats()['evacuated_bytes'];
 for ($i = 0; $i < 4000; $i++) { // churn: merges move the read-often values forward
     nocopy_put("t$i", str_repeat('z', 2000));

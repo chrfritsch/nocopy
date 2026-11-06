@@ -14,7 +14,7 @@ require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/valkey.inc';
 apcu_clear_cache();
 var_dump(nocopy_put('a', ['x' => [1, 2]]), nocopy_get('a'), ord(vk('GET', 't050:a')[0]));
-var_dump(nocopy_put('o', new ArrayObject([1]), 0, true), nocopy_get('o') instanceof ArrayObject);
+var_dump(nocopy_put('o', new ArrayObject([1]), 0), nocopy_get('o') instanceof ArrayObject);
 var_dump(apcu_store('n', 5), apcu_inc('n'), apcu_dec('n', 2), vk('GET', 't050:n'), apcu_cas('n', 4, 10), apcu_fetch('n'));
 var_dump(apcu_inc('fresh', 3, $ok, 100), $ok, vk('PTTL', 't050:fresh') > 90000);
 var_dump(apcu_add('a', 1), apcu_add('new', 1), apcu_fetch('new'));

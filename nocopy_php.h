@@ -61,15 +61,9 @@ ZEND_END_MODULE_GLOBALS(nocopy)
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
 #define NOCOPY_G(v) ZEND_MODULE_GLOBALS_ACCESSOR(nocopy, v)
 
-typedef enum {
-	NOCOPY_REFUSE_OBJECTS,    /* objects and resources throw; references are stored as values */
-	NOCOPY_SERIALIZE_OBJECTS, /* objects, shared references, deep values: serialize(); resources warn (APCu) */
-} nocopy_objects;
-
 typedef struct {
 	zend_long ttl; /* 0: none */
 	bool add_only; /* fail if a live entry exists */
-	nocopy_objects objects;
 } nocopy_opts;
 
 typedef enum {

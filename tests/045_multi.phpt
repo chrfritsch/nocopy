@@ -9,18 +9,14 @@ nocopy.shm_name=/nocopy-t045
 require __DIR__ . '/../apcu/apcu.php';
 var_dump(nocopy_put_multiple(['a' => [1], 'b' => 'x', 7 => 2.5], 100));
 var_dump(nocopy_get_multiple(['a', 'missing', 'b', '7', 5]));
-try {
-    nocopy_put_multiple(['p' => 1, 'o' => new stdClass, 'q' => 2]);
-} catch (TypeError $e) {
-    echo get_class($e), "\n";
-}
+var_dump(nocopy_put_multiple(['p' => 1, 'f' => STDIN, 'q' => 2]));
 var_dump(nocopy_get('p'), nocopy_get('q', $hit), $hit);
-var_dump(nocopy_put_multiple(['o' => new ArrayObject([1])], 0, true), nocopy_get('o') instanceof ArrayObject);
+var_dump(nocopy_put_multiple(['o' => new ArrayObject([1])], 0), nocopy_get('o') instanceof ArrayObject);
 var_dump(apcu_store(['c' => 1, 'd' => 2]), apcu_fetch(['c', 'd', 'nope']));
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t045*')); ?>
---EXPECT--
+--EXPECTF--
 bool(true)
 array(3) {
   ["a"]=>
@@ -33,10 +29,12 @@ array(3) {
   [7]=>
   float(2.5)
 }
-TypeError
-int(1)
-NULL
+
+Warning: nocopy_put_multiple(): nocopy: cannot store resources in %s on line %d
 bool(false)
+int(1)
+int(2)
+bool(true)
 bool(true)
 bool(true)
 array(0) {

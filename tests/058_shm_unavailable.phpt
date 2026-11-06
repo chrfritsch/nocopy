@@ -20,7 +20,7 @@ var_dump(nocopy_put_multiple(['x' => 1]), nocopy_get_multiple(['x', 'mine']));
 $calls = 0;
 $f = function () use (&$calls) { return ++$calls; };
 var_dump(nocopy_remember('r', $f), nocopy_remember('r', $f));
-try { nocopy_put('o', new stdClass); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+var_dump(nocopy_put('o', new stdClass));
 var_dump(nocopy_stats()['size'], nocopy_stats()['shm_name'], nocopy_clear());
 PHP;
 echo shell_exec('/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' . escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
@@ -47,7 +47,7 @@ array(0) {
 }
 int(1)
 int(2)
-nocopy_put(): Argument #2 ($value) must not contain objects or resources
+bool(false)
 int(0)
 NULL
 bool(true)
