@@ -13,6 +13,7 @@
 #include "SAPI.h"
 #include "zend_system_id.h"
 #include "zend_extensions.h"
+#include "zend_closures.h"
 #include "nocopy_arginfo.h"
 #include <pthread.h>
 #include <dlfcn.h>
@@ -253,14 +254,13 @@ PHP_FUNCTION(nocopy_put_multiple)
 PHP_FUNCTION(nocopy_remember)
 {
 	zend_string *key;
-	zend_fcall_info fci;
-	zend_fcall_info_cache fcc;
+	zval *fn;
 	zend_long ttl = 0;
 	double beta = 1.0;
 
 	ZEND_PARSE_PARAMETERS_START(2, 4)
 		Z_PARAM_STR(key)
-		Z_PARAM_FUNC(fci, fcc)
+		Z_PARAM_ZVAL(fn) /* not Z_PARAM_FUNC: resolving it was ~25% of a hit (perf), and a hit never calls it */
 		Z_PARAM_OPTIONAL
 		Z_PARAM_LONG(ttl)
 		Z_PARAM_DOUBLE(beta)
@@ -273,8 +273,21 @@ PHP_FUNCTION(nocopy_remember)
 	if (!nocopy_tracked()) {
 		RETURN_THROWS();
 	}
+	if (Z_TYPE_P(fn) != IS_OBJECT || Z_OBJCE_P(fn) != zend_ce_closure) {
+		char *err = NULL;
+		bool ok = zend_is_callable_ex(fn, NULL, 0, NULL, NULL, &err);
+		if (!ok) {
+			zend_argument_type_error(2, "must be a valid callback, %s", err);
+		}
+		if (err) {
+			efree(err);
+		}
+		if (!ok) {
+			RETURN_THROWS();
+		}
+	}
 	const nocopy_opts o = {.ttl = ttl};
-	nocopy_remember(key, &fci, &fcc, &o, beta, return_value);
+	nocopy_remember(key, fn, &o, beta, return_value);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}

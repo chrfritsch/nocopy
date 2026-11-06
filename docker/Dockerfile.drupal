@@ -6,3 +6,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpng-dev libj
  && docker-php-ext-configure gd --with-jpeg --with-freetype && docker-php-ext-install gd zip pdo_mysql \
  && pecl install redis </dev/null && rm -f /usr/local/etc/php/conf.d/*redis* \
  && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# perf for drupal-bench.sh PERF_ONLY=1
+RUN apt-get update && apt-get install -y --no-install-recommends linux-perf && rm -rf /var/lib/apt/lists/*

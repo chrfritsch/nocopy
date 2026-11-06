@@ -141,6 +141,10 @@ waking together after a gap longer than the TTL: requests slower than half the c
 83 -> 24 (300 ms), 158 -> 37 (32 workers); callback runs unchanged. Bounded to one TTL so an idle shard (no sweeps) never serves
 arbitrarily old data.
 
+**The callback is resolved only when it runs.** `Z_PARAM_FUNC` checked and resolved it on every call (perf: ~25% of a hit in
+`zend_is_callable_ex` and `zend_fcall_info_init`); a Closure now only gets a type check, other callables `zend_is_callable_ex`
+(still a TypeError on a hit). `ab.sh` best of 5, `apcu_entry hit` (`nocopy_remember`), copy / zero: 24.7 -> 18.7 / 24.1 -> 18.6 ns.
+
 ## APCu
 
 **Compatibility as a PHP polyfill**, not in the extension. The extension keeps only `apc.enabled`/`apc.enable_cli`

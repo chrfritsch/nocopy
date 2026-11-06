@@ -25,7 +25,8 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
 
   bench                       micro benchmarks vs APCu
   stampede [workers secs ttl ms]
-  drupal-bench                Drupal under nginx + fpm, 8 cache configs (long)
+  drupal-bench                Drupal under nginx + fpm, 8 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
+  perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
   hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
 
   stub                        regenerate nocopy_arginfo.h from nocopy.stub.php
@@ -65,10 +66,12 @@ case $cmd in
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/bench.sh ;;
   stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
+  perf)       img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
+              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g nocopy-drupal /src/docker/hitratio-compare.sh ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
-              run --shm-size=1g --cap-add=SYS_PTRACE -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
+              run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e MEM_ONLY -e PERF_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \
                 '/src/docker/build.sh && printf "extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy-shell\n" > /usr/local/etc/php/conf.d/zz-nocopy.ini && cd /src && exec bash' ;;
   stub)       img; docker run --rm -v "$PWD":/src -w /src "nocopy-linux:$PHP" php /usr/local/lib/php/build/gen_stub.php nocopy.stub.php ;;

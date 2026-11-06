@@ -2,6 +2,8 @@
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB, ten cache configs, anonymous / logged-in / editor / cold start.
 #   docker run --rm --shm-size=1g --cap-add=SYS_PTRACE -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
 # MEM_ONLY=1: per-worker memory after warm-up and a fixed load only (mem.tsv), no throughput runs.
+# PERF_ONLY=1 (needs --privileged): after warm-up, perf over the whole container while ab loads a node page, anonymous and logged in:
+#   perf-<cfg>-<anon|auth>.dso (samples by process, library) and .sym (php-fpm's top symbols). PERF_N=4000 requests each.
 # Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-fast-routes nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"
 #   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
@@ -143,6 +145,16 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   awk -v c=$cfg -v k="$peak" -v v="$vk" '{r+=$1; s+=$2; u+=$3; n++} END{printf "%s\t%d\t%.1f\t%.1f\t%.1f\t%.1f\t%s\t%s\n", c, n, r/n/1024, s/n/1024, u/n/1024, s/1024, k, v}' /tmp/mem.txt > /out/mem.tsv.$cfg
   cat /out/mem.tsv.$cfg
   [ -n "$MEM_ONLY" ] && continue
+  if [ -n "$PERF_ONLY" ]; then
+    echo -1 > /proc/sys/kernel/perf_event_paranoid
+    for k in anon auth; do
+      ck=; [ $k = auth ] && ck="-C $SID"
+      perf record -q -a -F 999 -o /tmp/p.data -- ab -q -n "${PERF_N:-4000}" -c "$C" $ck "$B/node/$NODE" 2>/dev/null | awk -v k=$k '/Requests per second/{print "  " k ": " $4 " req/s"}'
+      perf report -i /tmp/p.data --no-children --sort comm,dso --stdio 2>/dev/null | grep -E '^ +[0-9]' | head -15 > /out/perf-$cfg-$k.dso
+      perf report -i /tmp/p.data --no-children --comm php-fpm --sort dso,sym --stdio 2>/dev/null | grep -E '^ +[0-9]' | head -60 > /out/perf-$cfg-$k.sym
+    done
+    continue
+  fi
 
   out=/out/$cfg.tsv; printf 'traffic\turl\treq_s\tp50_ms\tp99_ms\tfailed\tqueries_per_req\n' > $out
   for u in $URLS; do

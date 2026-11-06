@@ -120,8 +120,8 @@ zend_long nocopy_drop_multi(HashTable *keys); /* how many existed */
 /* Integers in place under the shard lock. add: creates it as delta (ttl) if missing; false if it is not an integer or there is no room. */
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
-/* Fetch, or run fci once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
-void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, double beta, zval *rv);
+/* Fetch, or run fn once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
+void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv); /* fn: a valid callable */
 
 void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too */
 bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */

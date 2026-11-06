@@ -364,16 +364,23 @@ static void lease_drop(void)
 	nocopy_lease_drop(NOCOPY_G(leases)[--NOCOPY_G(nleases)], NOCOPY_G(ctx).slot);
 }
 
-/* Runs the callback, measures it, stores the result with its compute time. */
-static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, zval *rv)
+/* Runs the callback (resolved only now: hits never call it), measures it, stores the result with its compute time. */
+static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 {
+	zend_fcall_info fci;
+	zend_fcall_info_cache fcc;
+	if (zend_fcall_info_init(fn, 0, &fci, &fcc, NULL, NULL) != SUCCESS) {
+		return; /* checked by the caller */
+	}
 	zval arg;
 	ZVAL_STR(&arg, key);
-	fci->param_count = 1;
-	fci->params = &arg;
-	fci->retval = rv;
+	fci.param_count = 1;
+	fci.params = &arg;
+	fci.retval = rv;
 	double t0 = now_s(CLOCK_MONOTONIC);
-	if (zend_call_function(fci, fcc) == FAILURE || EG(exception)) {
+	zend_result r = zend_call_function(&fci, &fcc);
+	zend_release_fcall_info_cache(&fcc);
+	if (r == FAILURE || EG(exception)) {
 		return;
 	}
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
@@ -393,12 +400,12 @@ static void compute(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cach
 	}
 }
 
-void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cache *fcc, const nocopy_opts *o, double beta, zval *rv)
+void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv)
 {
 	time_t exp;
 	uint32_t delta;
 	if (UNEXPECTED(nocopy_detour) && !nocopy_a) {
-		compute(key, fci, fcc, o, rv); /* no leases without an arena */
+		compute(key, fn, o, rv); /* no leases without an arena */
 		return;
 	}
 	if (fetch(key, rv, &exp, &delta)) {
@@ -414,7 +421,7 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 		}
 		zval_ptr_dtor(rv);
 		ZVAL_NULL(rv);
-		compute(key, fci, fcc, o, rv);
+		compute(key, fn, o, rv);
 		lease_drop();
 		return;
 	}
@@ -444,7 +451,7 @@ void nocopy_remember(zend_string *key, zend_fcall_info *fci, zend_fcall_info_cac
 		lease_drop(); /* stored between our miss and the lease */
 		return;
 	}
-	compute(key, fci, fcc, o, rv);
+	compute(key, fn, o, rv);
 	if (mine) {
 		lease_drop();
 	}
