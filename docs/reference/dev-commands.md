@@ -30,11 +30,12 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | Command | What it runs |
 |---|---|
 | `./dev bench` | `bench/run.php` groups ×3 for APCu, nocopy copy and zero-copy; prints medians |
+| `./dev sfbench` | `bench/sfapp` under nginx + php-fpm with Symfony's recommended production PHP settings: APCu (with and without Symfony's marshaller) vs the bundle, 4 pages, median of 3. Env: `WORKERS`, `REQS`, `CONC` |
 | `./dev stampede [workers secs ttl compute_ms]` | `bench/stampede.php`: naive vs `apcu_entry` vs `nocopy_remember` |
 | `./dev drupal-bench` | Drupal 11 under nginx + php-fpm + MariaDB, 10 cache configs; results to `bench/results-drupal/`. Env: `WORKERS`, `CONC`, `REQS`, `REQS_AUTH`, `EDITOR_T`, `CONFIGS` (see `docker/drupal-bench.sh`); `MEM_ONLY=1` memory per worker, `PERF_ONLY=1` perf over the container (CPU by process, library, symbol) |
 | `./dev perf [ops ...]` | perf profile of `bench/prof.php` hot loops (one op each), copy and zero mode; top symbols, `ANNOTATE="nocopy_fetch ..."` adds samples per source line; data in `.cache/perf` |
 
-Not wrapped (they need extra mounts): `docker/ab.sh` (A/B of two trees), `docker/fpm-bench.sh` (Symfony app) and `bench/sfget.php` (Symfony `get()`, bundle vs `AbstractAdapter`);
+Not wrapped (they need extra mounts): `docker/ab.sh` (A/B of two trees) and `bench/sfget.php` (Symfony `get()`, bundle vs `AbstractAdapter`);
 usage in their headers and in [Develop, test and benchmark](../how-to/develop.md#benchmark).
 
 ## Tools

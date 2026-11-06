@@ -1,6 +1,6 @@
 # Benchmark results
 
-Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`, `docker/fpm-bench.sh` and `./dev drupal-bench`
+Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`, `./dev sfbench` and `./dev drupal-bench`
 ([how](../how-to/develop.md#benchmark)). Numbers on a dedicated x86_64 box are still to come ([status](../status.md)).
 
 ## Micro benchmarks (`./dev bench`)
@@ -26,21 +26,23 @@ absolute times are higher for both, the ratios hold.
 | parallel fetch int, 8 workers | 3.6 M ops/s | 104 M ops/s | 29x / 58x (3 vCPU cap) |
 | 4 readers + 1 writer, reader throughput | 8.1 k ops/s | 1.63 M ops/s | |
 
-## Symfony (`docker/fpm-bench.sh`)
+## Symfony (`./dev sfbench`)
 
-`bench/sfapp` behind nginx + php-fpm, 8 static workers, `ab`, median of 3, cache pool without Symfony's marshaller
-(2026-11-05).
+`bench/sfapp` behind nginx + php-fpm, 8 static workers, `ab`, median of 3 (2026-11-06). PHP set up as Symfony's
+[performance guide](https://symfony.com/doc/current/performance.html) recommends: OPcache sized up, timestamps off, realpath
+cache, preload, `--classmap-authoritative`, `.container.dumper.inline_factories`. Second of two runs (the first had APCu's
+`hello` at 10,635 and `products` at 3,176 req/s; nocopy within 5%).
 
-| req/s | APCu | nocopy (copy) | nocopy (zero-copy) |
+| req/s | APCu (Symfony's marshaller) | APCu (no marshaller) | nocopy (bundle) |
 |---|---:|---:|---:|
-| cache-heavy page (`products?page=3`) | 3,815 | 4,777 | **8,924** |
-| cache-heavy page (`product/77`) | 3,595 | 4,626 | **9,182** |
-| no cache (`hello`) | 9,386 | 9,886 | 9,238 |
-| validator (`validate`) | 5,431 | 4,874 | 5,096 |
+| cache-heavy page (`products?page=3`) | 3,407 | 4,820 | **15,295** |
+| cache-heavy page (`product/77`) | 3,299 | 3,746 | **16,285** |
+| no cache (`hello`) | 16,543 | 17,147 | 17,467 |
+| validator (`validate`) | 9,567 | 9,215 | 8,964 |
 
-Zero-copy brings cache-heavy pages up to what a page without cache reaches on this host (~9,400 req/s), so the ratio is
-capped by the host, not by nocopy. Pages that barely touch the cache gain nothing. An earlier run measured 4,116 vs
-14,231 req/s on a faster day of the same host; it could not be reproduced and is retired.
+Cache-heavy pages reach what a page without cache does on this host (~17,000 req/s), so the ratio is capped by the host, not
+by nocopy. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
+(nocopy) on `products`, with a `hello` ceiling of ~9,400.
 
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 

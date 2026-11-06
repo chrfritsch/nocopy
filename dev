@@ -24,6 +24,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   ci                          everything above (what CI runs, one PHP version)
 
   bench                       micro benchmarks vs APCu
+  sfbench                     Symfony app (bench/sfapp) under nginx + fpm, APCu vs nocopy (WORKERS, REQS, CONC)
   stampede [workers secs ttl ms]
   drupal-bench                Drupal under nginx + fpm, 8 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
@@ -65,6 +66,9 @@ case $cmd in
                 echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/bench.sh ;;
+  sfbench)    a=.cache/sfapp; rm -rf "$a" && mkdir -p "$a/nocopy-bundle" && cp -r bench/sfapp/composer.json bench/sfapp/src bench/sfapp/public "$a/" && cp -r symfony/src "$a/nocopy-bundle/"
+              docker run --rm -v "$PWD/$a":/app -w /app composer:2 install -q --no-dev --classmap-authoritative '--ignore-platform-req=ext-*'
+              img; run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro "nocopy-linux:$PHP" /src/docker/fpm-bench.sh ;;
   stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
   perf)       img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
               run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;

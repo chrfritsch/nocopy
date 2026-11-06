@@ -37,6 +37,7 @@ class Kernel extends BaseKernel
         } else {
             $c->services()->set('app.cache_raw', ApcuAdapter::class)->args(['raw', 0, null, null])->public();
         }
+        $c->parameters()->set('.container.dumper.inline_factories', true);
         $c->services()->defaults()->autowire()->autoconfigure()->public()
             ->load('App\\', __DIR__)->exclude(__DIR__.'/Kernel.php');
     }

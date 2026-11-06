@@ -1,6 +1,6 @@
 #!/bin/sh
 # Inside the image: bench/sfapp (with vendor, mounted at /appsrc) behind nginx + php-fpm (static workers), load from ab, median of 3.
-#   docker run --rm --shm-size=1g -v "$PWD":/src:ro -v <app with vendor>:/appsrc:ro nocopy-linux:8.5 /src/docker/fpm-bench.sh
+# PHP set up as https://symfony.com/doc/current/performance.html recommends (OPcache, realpath cache, preload). Run via ./dev sfbench.
 /src/docker/test.sh >/dev/null 2>&1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
@@ -12,8 +12,13 @@ EOF
 nginx
 run_cfg() { name=$1; raw=$2; shift 2
   printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = %s\nclear_env = no\nenv[RAW] = %s\n' "$W" "$raw" > /usr/local/etc/php-fpm.d/zz-bench.conf
-  printf '%s\n' "$@" "apc.shm_size=256M" "apc.entries_hint=20000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" > /usr/local/etc/php/conf.d/zz-bench.ini
+  printf '%s\n' "$@" "apc.shm_size=256M" "apc.entries_hint=20000" "memory_limit=1G" "opcache.enable=1" "opcache.validate_timestamps=0" \
+    "opcache.memory_consumption=256" "opcache.max_accelerated_files=32531" "opcache.interned_strings_buffer=32" \
+    "realpath_cache_size=4096K" "realpath_cache_ttl=600" \
+    "opcache.preload=/app/var/cache/prod/App_KernelProdContainer.preload.php" "opcache.preload_user=www-data" > /usr/local/etc/php/conf.d/zz-bench.ini
   rm -rf /app/var/cache/* /dev/shm/nocopy-bench.*
+  su -s /bin/sh www-data -c 'php /app/public/index.php' >/dev/null 2>&1 # builds the container and its preload file
+  [ -f /app/var/cache/prod/App_KernelProdContainer.preload.php ] || { echo "no preload file ($name)"; exit 1; }
   php-fpm -F >/dev/null 2>&1 & fpm=$!
   sleep 2
   kill -0 $fpm 2>/dev/null || { echo "php-fpm did not start ($name)"; php-fpm -t; exit 1; }

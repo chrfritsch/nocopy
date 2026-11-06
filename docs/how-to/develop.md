@@ -76,7 +76,7 @@ php -d nocopy.shm_name=/hr -d nocopy.shm_size=4M bench/hitratio.php zipf 1.5 0
 ```
 
 Full-stack: `./dev drupal-bench` (Drupal 11 behind nginx + php-fpm + MariaDB, 8 cache configs, long; writes to
-`bench/results-drupal/`), and `docker/fpm-bench.sh` for a Symfony app (see its header).
+`bench/results-drupal/`), and `./dev sfbench` for a Symfony app.
 
 Record what you decided and why, with the numbers, in [Design decisions](../explanation/design-decisions.md).
 
