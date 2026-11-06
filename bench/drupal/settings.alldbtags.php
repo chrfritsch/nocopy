@@ -1,5 +1,6 @@
 <?php
 // nocopy for all bins and the container, tags in the database: compared with settings.apcu.php it isolates the copy on read.
+require '/src/apcu/apcu.php'; // as composer require chrfritsch/nocopy-drupal loads it: Composer's class loader and FileCache then cache in nocopy
 $class_loader->addPsr4('Drupal\\nocopy\\', $app_root . '/modules/contrib/nocopy/src');
 $settings['cache']['default'] = 'cache.backend.nocopy';
 foreach (['bootstrap', 'config', 'discovery'] as $bin) {

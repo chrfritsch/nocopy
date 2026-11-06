@@ -71,6 +71,13 @@ Editor loop under reader load (p50; save / edit form / view after save) and read
 | editor | 30 / 47 / 40 ms | 29 / 33 / 20 ms | 29 / 34 / 21 ms | **23 / 34 / 20 ms** |
 | readers | 563 req/s | 716 req/s | 696 req/s | 699 req/s |
 
+**Measured before nocopy's Drupal module required the `apcu_*` polyfill**, so the nocopy rows above lack what APCu configs get
+for free: Drupal's class loader and FileCache cache in `apcu_*` when `apcu_fetch()` exists, and without it Composer checks the file
+system for every class (strace: 807 `faccessat` per logged-in request, 65 with the polyfill, 68 with APCu). nocopy-all without and
+with the polyfill, 2026-11-06, median of 3 interleaved runs (req/s): logged-in `/` 986 -> 1,290, node 1,042 -> 1,266,
+term 1,039 -> 1,326; anonymous `/` 8,536 -> 11,568, node 9,180 -> 12,803, term 10,551 -> 12,159; without it, runs varied up to 2x
+(file-system lookups from 8 workers). The table needs a rerun with it.
+
 Not in the table: stock + igbinary is the same as stock (4,934 / 962 req/s), and so is nocopy as chainedfast's fast
 layer (`nocopy-fast` 5,127 / 883 req/s, with `routes` 4,816 / 975 req/s). Chainedfast asks the database for each bin's
 last write on every request, and those bins were never the bottleneck.

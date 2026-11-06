@@ -18,9 +18,14 @@ Then:
 
 ```sh
 composer config repositories.nocopy path /path/to/nocopy/drupal
-composer require chrfritsch/nocopy-drupal:@dev
+composer config repositories.nocopy-apcu path /path/to/nocopy/apcu
+composer require chrfritsch/nocopy-drupal:@dev chrfritsch/nocopy-apcu:@dev
 drush en nocopy
 ```
+
+The module requires nocopy's `apcu_*` polyfill: without APCu, Drupal's class loader and FileCache check `apcu_fetch()` and fall
+back to the file system. Measured (2,000 nodes, 8 workers): 807 `faccessat` per logged-in request without it, 65 with it, and
+logged-in pages +21-31%, anonymous +11-39% (median of 3 interleaved runs).
 
 ## settings.php
 

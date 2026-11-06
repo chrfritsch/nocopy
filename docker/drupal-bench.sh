@@ -4,6 +4,8 @@
 # MEM_ONLY=1: per-worker memory after warm-up and a fixed load only (mem.tsv), no throughput runs.
 # PERF_ONLY=1 (needs --privileged): after warm-up, perf over the whole container while ab loads a node page, anonymous and logged in:
 #   perf-<cfg>-<anon|auth>.dso (samples by process, library) and .sym (php-fpm's top symbols). PERF_N=4000 requests each.
+# TRACE_ONLY=1: after warm-up, strace on every php-fpm worker over 200 node page requests, anonymous and logged in:
+#   trace-<cfg>-<anon|auth>.sum (syscalls per request) and .paths (file syscalls per request by path, most first).
 # Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-fast-routes nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"
 #   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
@@ -145,6 +147,25 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   awk -v c=$cfg -v k="$peak" -v v="$vk" '{r+=$1; s+=$2; u+=$3; n++} END{printf "%s\t%d\t%.1f\t%.1f\t%.1f\t%.1f\t%s\t%s\n", c, n, r/n/1024, s/n/1024, u/n/1024, s/1024, k, v}' /tmp/mem.txt > /out/mem.tsv.$cfg
   cat /out/mem.tsv.$cfg
   [ -n "$MEM_ONLY" ] && continue
+  if [ -n "$TRACE_ONLY" ]; then
+    P=$(pgrep -P "$m" | sed 's/^/-p /' | tr '\n' ' ')
+    for k in anon auth; do
+      ck=; [ $k = auth ] && ck="-C $SID"
+      for mode in sum paths; do
+        if [ $mode = sum ]; then strace -qq -c -o /tmp/st $P & else strace -qq -e trace=%file -o /tmp/st $P & fi
+        s=$!; sleep 1
+        ab -q -n 200 -c "$C" $ck "$B/node/$NODE" >/dev/null 2>&1
+        kill -INT $s; wait $s 2>/dev/null
+        if [ $mode = sum ]; then
+          awk 'NR > 2 && $1 ~ /^[0-9.]+$/ && $NF != "total" {printf "%8.1f %s\n", $4 / 200, $NF}' /tmp/st | sort -rn > /out/trace-$cfg-$k.sum
+        else
+          sed -n 's/^[0-9 ]*\([a-z0-9_]*\)(\(AT_FDCWD, \)\{0,1\}"\([^"]*\)".*= \(-1 [A-Z]*\)\{0,1\}.*/\1 \3 \4/p' /tmp/st | sort | uniq -c | sort -rn | awk '{printf "%7.1f %s %s %s\n", $1 / 200, $2, $3, $4}' | head -40 > /out/trace-$cfg-$k.paths
+        fi
+      done
+      echo "  $k: $(awk '{s += $1} END {printf "%.0f", s}' /out/trace-$cfg-$k.sum) syscalls/request"
+    done
+    continue
+  fi
   if [ -n "$PERF_ONLY" ]; then
     echo -1 > /proc/sys/kernel/perf_event_paranoid
     for k in anon auth; do

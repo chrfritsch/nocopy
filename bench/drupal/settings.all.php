@@ -1,5 +1,6 @@
 <?php
 // nocopy for all bins and cache tag checksums, shared by every process (nocopy.shm_name or nocopy.valkey).
+require '/src/apcu/apcu.php'; // as composer require chrfritsch/nocopy-drupal loads it: Composer's class loader and FileCache then cache in nocopy
 $class_loader->addPsr4('Drupal\\nocopy\\', $app_root . '/modules/contrib/nocopy/src');
 $settings['container_yamls'][] = $app_root . '/modules/contrib/nocopy/example.services.yml';
 $settings['cache']['default'] = 'cache.backend.nocopy';

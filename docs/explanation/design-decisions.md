@@ -154,6 +154,10 @@ re-running itself with `apcu_*` rewritten (fetch int 11.7 ns zero-copy, without 
 **Objects are always stored serialized**, as in APCu, with no `$serialize` flag on writes. With the flag, every caller in
 the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 
+**The Drupal module requires the polyfill.** Without APCu, `function_exists('apcu_fetch')` is false, so Composer's class loader
+(`setApcuPrefix`) and Drupal's FileCache fall back to the file system: 807 `faccessat` per logged-in request vs 65 with the
+polyfill (strace, 2,000 nodes). Median of 3 interleaved runs, nocopy-all: logged-in +21-31%, anonymous +11-39%.
+
 ## Build
 
 **One translation unit for the PHP layers.** `nocopy.c` includes `nocopy_value.c` and `nocopy_store.c`, which still compile alone (tidy).
