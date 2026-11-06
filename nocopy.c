@@ -637,6 +637,7 @@ static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(nocopy)
 	nocopy_leases_drop();
 	NOCOPY_G(ctx).pin_refs = 0;
 	nocopy_keep_release(&NOCOPY_G(ctx));
+	nocopy_classes_clear();
 	return SUCCESS;
 }
 

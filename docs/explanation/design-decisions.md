@@ -164,8 +164,19 @@ below), `$item->isHit()` on an early refresh (always false), `setCallbackWrapper
 (Symfony's `ApcuAdapter::isSupported()` and Composer check them). `bench/run.php` measures `nocopy_*` directly by
 re-running itself with `apcu_*` rewritten (fetch int 11.7 ns zero-copy, without the polyfill's extra call).
 
-**Objects are always stored serialized**, as in APCu, with no `$serialize` flag on writes. With the flag, every caller in
-the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
+**Plain objects are stored as their property slots** (`ENTRY_GRAPH`), not serialized: a fetch resolves each class once,
+checks a fingerprint of its slot layout (names, visibility, readonly, types), creates the objects without a constructor and
+copies the slots in. Strings and arrays in them stay zero-copy, and so do object-free arrays next to them (one object no longer
+serializes the whole value). `bench/objects.php` (8.5, `Product` objects with 6 properties and a shared `Category`), zero-copy /
+copy mode: one object 881 / 911 ns unserialized -> 112 / 249 ns, 100 objects 82.8 / 88.0 µs -> 4.6 / 16.2 µs, 100 arrays +
+1 object 27.5 / 27.2 µs -> 91 ns / 9.0 µs. `ab.sh` (best of 3-7): fetch object 600 -> 77 ns zero, 620 -> 134 ns copy; store
+object 243 -> 182 ns; other stores 0-3% slower (int, string, failing add: within noise of runs; 1k-row arrays ~2%), fetches unchanged.
+symfony/php-ext-deepclone's payload stored zero-copy (`deepclone_from_array(nocopy_get())`, 0.8.9) was 473 ns / 10.2 µs for
+the first two: it walks a portable array format and checks every property by name, which a cache on one host need not do.
+Other objects (internal classes, `__serialize`/`__sleep`/`__wakeup`/`Serializable`, dynamic properties, lazy, enums, closures)
+and shared references serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
+in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
+A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
 
 **The Drupal module requires the polyfill.** Without APCu, `function_exists('apcu_fetch')` is false, so Composer's class loader
 (`setApcuPrefix`) and Drupal's FileCache fall back to the file system: 807 `faccessat` per logged-in request vs 65 with the

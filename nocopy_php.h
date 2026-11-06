@@ -65,6 +65,8 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	uint32_t local_hand; /* SIEVE hand over local */
 	bool local_ok; /* between RINIT and RSHUTDOWN */
 	nocopy_vk vk;
+	HashTable classes; /* class entry -> layout fingerprint (nocopy_value.c), this request */
+	bool classes_on;
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
@@ -101,6 +103,8 @@ extern nocopy_igb_ser_fn nocopy_igb_ser;
 extern nocopy_igb_unser_fn nocopy_igb_unser;
 void nocopy_value_minit(void); /* with an arena: its shared empty array */
 void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value, with NOCOPY_G(keys): keys_reset() it first for an array */
+bool nocopy_graph_out(zval *rv, const zval *v, bool copy); /* an ENTRY_GRAPH value: its objects rebuilt; false: a class is gone or changed */
+void nocopy_classes_clear(void); /* at request end */
 
 /* ---- module state the store reads (set in MINIT / INI) ---- */
 extern size_t nocopy_local_size; /* nocopy.local_size */
@@ -129,6 +133,7 @@ bool nocopy_drop_local(const char *k, size_t len); /* the local copy only */
 /* ---- the local store's pieces, for the Valkey tier ---- */
 #define ENTRY_SERIALIZED 1 /* val is a serialized string; unserialize on fetch */
 #define ENTRY_IGBINARY 2   /* with ENTRY_SERIALIZED: written by igbinary */
+#define ENTRY_GRAPH 4      /* val is IS_PTR to an nc_graph: plain objects as raw property slots */
 /* Sizes and fills the value's entry. NOCOPY_OK: p holds it, ready for nocopy_publish(). p NULL (no arena): only the checks. */
 nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o);
 nocopy_status nocopy_publish(nocopy_put *p, bool add_only);

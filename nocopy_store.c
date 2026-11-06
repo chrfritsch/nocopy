@@ -233,8 +233,15 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 			*exp = e->expires;
 			*delta = e->user;
 		}
-		if (e->flags & ENTRY_SERIALIZED) {
-			hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+		if (UNEXPECTED(e->flags & (ENTRY_SERIALIZED | ENTRY_GRAPH))) {
+			if (e->flags & ENTRY_SERIALIZED) {
+				hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+			} else {
+				hit = nocopy_graph_out(rv, v, copy);
+				if (!copy) {
+					nocopy_keep(c, e);
+				}
+			}
 		} else if (Z_TYPE_P(v) < IS_STRING) {
 			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
 		} else if (copy) {

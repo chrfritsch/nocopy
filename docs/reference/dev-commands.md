@@ -35,7 +35,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev drupal-bench` | Drupal 11 under nginx + php-fpm + MariaDB, 10 cache configs; results to `bench/results-drupal/`. Env: `WORKERS`, `CONC`, `REQS`, `REQS_AUTH`, `EDITOR_T`, `CONFIGS` (see `docker/drupal-bench.sh`); `MEM_ONLY=1` memory per worker, `PERF_ONLY=1` perf over the container (CPU by process, library, symbol) |
 | `./dev perf [ops ...]` | perf profile of `bench/prof.php` hot loops (one op each), copy and zero mode; top symbols, `ANNOTATE="nocopy_fetch ..."` adds samples per source line; data in `.cache/perf` |
 
-Not wrapped (they need extra mounts): `docker/ab.sh` (A/B of two trees) and `bench/sfget.php` (Symfony `get()`, bundle vs `AbstractAdapter`);
+Not wrapped (they need extra mounts): `docker/ab.sh` (A/B of two trees), `bench/sfget.php` (Symfony `get()`, bundle vs `AbstractAdapter`) and `bench/objects.php` (object fetches vs `unserialize()`, and deepclone's payload if that extension is loaded);
 usage in their headers and in [Develop, test and benchmark](../how-to/develop.md#benchmark).
 
 ## Tools

@@ -23,7 +23,11 @@ The hits as `key => value`; missing keys are left out. With `nocopy.valkey`, all
 ### `nocopy_put(string $key, mixed $value, int $ttl = 0): bool`
 
 Stores `$value`. Arrays, strings, integers, floats, booleans and `null` are stored as they are (zero-copy on fetch).
-A value containing an object, a reference shared between elements, or nested deeper than 64 levels is stored serialized
+Plain objects are stored as their property slots and rebuilt on fetch without unserializing: instances of user classes
+without `__serialize`/`__unserialize`/`__sleep`/`__wakeup`/`Serializable`, dynamic properties or lazy state. Identities,
+cycles, private, readonly and uninitialized properties are kept; strings and arrays in their properties stay zero-copy, and
+so do arrays next to them. A fetch after the class was changed (another property layout) or can't be loaded is a miss.
+A value containing any other object, a reference shared between elements, or nested deeper than 64 levels is stored serialized
 (with `nocopy.serializer`), as in APCu, and unserialized on every fetch. A resource warns and returns `false`.
 A negative `$ttl` throws a `ValueError`. Returns `false` when the value does not fit (larger than a shard) or there is no shared cache.
 
@@ -75,7 +79,7 @@ Returns the cached value, or computes it with `$callback($key)`, stores it and r
 - **Early refresh:** before the TTL ends, one worker recomputes early ([XFetch](https://doi.org/10.14778/2757807.2757813))
   with a probability that rises as expiry nears, scaled by the callback's measured run time × `$beta`. The others keep
   getting the current value. `$beta = 0` turns this and stale serving off.
-- The callback may return anything storable, objects included (stored serialized).
+- The callback may return anything storable, objects included.
 
 ## Introspection
 
