@@ -194,7 +194,12 @@ and copy mode: `bench/objects.php` 100 objects, copy / zero: 4429 / 3619 -> 3647
 objects (by handle) and classes in an open-addressing table keyed by integer (igbinary's `hash_si_ptr`: multiply + byte swap,
 linear probing, half full at most, 32 slots inline), not `HashTable`s: `prof.php` put_json 13764 -> 12173 ns, put_prods
 10592 -> 10236, put_ords 40278 -> 39054, put_obj 263 -> 247; fetches unchanged. Packing the class code into the `objs` entry
-instead (one lookup fewer) gave 1-3%. Profile after (`./dev perf get_prods ...`): a fetch of
+instead (one lookup fewer) gave 1-3%.
+What sizing learns about each object (class code, kind, dynamic properties, `__serialize()`'s array) is kept in a node array
+by object index, so persisting does one lookup per object and no `HashTable`s are built for hooks: `prof.php` best of 11,
+put_obj 240 -> 212 ns, put_ords 37.4 -> 36.0 µs, put_prods 9.79 -> 9.97 µs, put_json 11.86 -> 12.15 µs (~1 ns per plain
+object; not the free loop, regrowth or node size: 8-byte nodes with a side array made put_json 5.6% slower). Sizing still
+runs twice after `__serialize`: key dedupe depends on the walk order, and user code may store and so reuse the key table. Profile after (`./dev perf get_prods ...`): a fetch of
 100 objects is ~36% nocopy, the rest the engine creating and freeing objects; `DateTime*` objects cost ~550 ns each, over 95%
 in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup). Storing them natively
 (timestamp, microseconds, zone) would be the next lever.
