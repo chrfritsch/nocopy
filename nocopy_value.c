@@ -109,13 +109,11 @@ static zend_always_inline size_status size_root(sizing *z, zval *v)
 /* Idempotent: every process writes the same bytes. */
 void nocopy_value_minit(void)
 {
-	zend_array *a = ARENA_EMPTY;
-	uint32_t *hash = (uint32_t *) (a + 1);
-	ZEND_ASSERT(sizeof(zend_array) + 2 * sizeof(uint32_t) <= sizeof(nocopy_a->user));
-	memcpy(a, &zend_empty_array, sizeof(zend_array));
-	a->pDestructor = NULL;
-	hash[0] = hash[1] = HT_INVALID_IDX;
-	HT_SET_DATA_ADDR(a, hash);
+	nocopy_shared *s = NOCOPY_SHARED;
+	memcpy(&s->empty, &zend_empty_array, sizeof(zend_array));
+	s->empty.pDestructor = NULL;
+	s->empty_hash[0] = s->empty_hash[1] = HT_INVALID_IDX;
+	HT_SET_DATA_ADDR(&s->empty, s->empty_hash);
 }
 
 zend_string *nocopy_persist_str(persist *p, const zend_string *s)
@@ -422,7 +420,7 @@ bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 {
 	size_status st = size_root(z, val);
-	if (st == SIZE_OK && z->g->on && z->g->user) { /* again without user code: __serialize's arrays are kept */
+	if (st == SIZE_OK && graph_b_user(z->g)) { /* again without user code: __serialize's arrays are kept */
 		keys_reset(keys);
 		z->keys = *keys;
 		z->n = 0;
@@ -435,9 +433,7 @@ static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 	return st;
 }
 
-/* Sizes the value, allocates and fills its entry. NOCOPY_OK: p holds it, ready for nocopy_publish().
- * p NULL (no arena): only the checks, so a value a store would refuse is refused alike; then NOCOPY_NO_ROOM. */
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const nocopy_opts *o)
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
 	keys_reset_for(keys, val);
@@ -468,8 +464,7 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, const noc
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;
-	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size,
-		o->ttl);
+	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size, ttl);
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : graph ? ENTRY_GRAPH : 0;
 		persist_entry(e, key, val, keys, graph ? &g : NULL);

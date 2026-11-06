@@ -16,8 +16,7 @@ typedef void (*zval_fn)(void *ctx, zval *z);
 
 static zend_always_inline size_t str_size(size_t len) { return SALIGN(_ZSTR_STRUCT_SIZE(len)); }
 
-/* The empty array every entry points to: in the arena, so it has the same address in every process that maps it (unlike zend_empty_array). */
-#define ARENA_EMPTY ((zend_array *) nocopy_a->user)
+#define ARENA_EMPTY (&NOCOPY_SHARED->empty)
 
 static zend_always_inline bool in_arena(const void *p) { return (uintptr_t) p - (uintptr_t) nocopy_a < nocopy_a->size; }
 
@@ -94,6 +93,8 @@ typedef struct {
 /* Not = {0}: zeroing its tables cost every store ~3 ns. */
 static zend_always_inline void graph_b_off(graph_b *g) { g->on = g->user = false; }
 static zend_always_inline bool graph_b_used(const graph_b *g) { return g->on && (g->objs.n || g->nref); }
+/* __serialize/__sleep ran while sizing: size again without them. */
+static zend_always_inline bool graph_b_user(const graph_b *g) { return g->on && g->user; }
 
 /* ---- sizing ---- */
 

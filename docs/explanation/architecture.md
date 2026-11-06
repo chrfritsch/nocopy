@@ -8,11 +8,12 @@ Start with [How nocopy works](how-it-works.md) for the overview; this page is fo
 Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
-- `nocopy_value.c`: PHP values in and out of an arena block (size, persist, rebase, copy-out, serialize, `nocopy_build`); objects and shared references it hands to
-  `nocopy_graph.c` (class fingerprints, the graph builder, persisting and rebuilding graphs, copy mode's templates). `nocopy_value_int.h` is shared by these two only: the key table, the walk states (`sizing`, `persist`, `rebase`), the graph markers and the calls each makes into the other.
-- `nocopy_store.c`: the store API in `nocopy_php.h` (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), copy mode's private copies, leases.
-- `nocopy.c`: `nocopy_*`, INI, the module, FrankenPHP's worker hook.
-- `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy_store.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_build`/`publish`/`fetch_local`/`serialize`/`unserialize`).
+- Values, interface `nocopy_value.h` (the block layout, entry flags, the key table, `nocopy_build`, copy-out, graphs out, serialize): `nocopy_value.c` puts PHP values in and out of an arena block (size, persist, rebase, copy-out, serialize, `nocopy_build`: size, `nocopy_put_begin`, persist); objects and shared references it hands to
+  `nocopy_graph.c` (class fingerprints, the graph builder, persisting and rebuilding graphs, copy mode's templates). `nocopy_value_int.h` is shared by these two only: the walk states (`sizing`, `persist`, `rebase`), the graph builder, the graph markers and the calls each makes into the other.
+- `nocopy_php.h`: what the PHP layers share: the module globals, the layout of the arena header's `user` area (`nocopy_shared`: the empty array every entry points to, the Valkey listener's state), the store API and the Valkey seam.
+- `nocopy_store.c`: the store API (`nocopy_store`/`fetch`/`drop`/`add_long`/`cas_long`/`remember`), the write routing (`store_as`: local, Valkey, or no arena), copy mode's private copies, leases.
+- `nocopy.c`: `nocopy_*`, INI, the module, FrankenPHP's worker hook. Pins only through the arena's calls (`nocopy_drop_idle`, `nocopy_request_end`).
+- `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy_store.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_put_local`/`fetch_local`/`drop_local`) and the value layer's `serialize`/`unserialize`.
 - `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
@@ -148,7 +149,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
   No tracking: a reconnect needs no clear. Any error or timeout closes it (the reply stream would be out of step); a new attempt waits 0.5-1.5 s.
 - One listener per arena: a process of its own (double fork, `setsid`, signals reset, every inherited fd closed, stdio on /dev/null, `nocopy-valkey`), running only C:
   one connection with `CLIENT TRACKING ON BCAST PREFIX p NOLOOP`, `poll` at 100 ms, applies pushes, `PING` every second (no answer within max(1 s, timeout): reconnect).
-  Header: `vk_beat` (monotonic ms, every poll round), `vk_pid`, `vk_live` (connected). Every (re)connect bumps `inval_gen` and clears the arena: what it missed is unknown.
+  In the header's user area (`nocopy_shared`; the arena itself knows nothing of Valkey): `vk_beat` (monotonic ms, every poll round), `vk_pid`, `vk_live` (connected). Every (re)connect bumps `inval_gen` and clears the arena: what it missed is unknown.
 - `nocopy_vk_ready()` once per request (`synced`, reset in RINIT and per FrankenPHP request): command connection up, and the listener live (`vk_live` and a beat under 1 s old).
   No beat for 1 s: the first worker to swap `vk_beat` (CAS) spawns a new listener; workers wait up to the timeout for `vk_live`. A listener whose `vk_pid` is not its own exits. While not ready nothing local is served.
 - Lifetime: the listener drops its shared flock (so the segment can still be collected) and exits when `/dev/shm/<name>` no longer is its object (`nocopy_arena_current`, `stat`: fpm workers run as another user than the segment's owner).
@@ -159,6 +160,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 
 ## Invariants worth remembering
 
+- The arena (`nocopy_arena.h`) knows nothing of PHP or Valkey. The layers above change its state only through its calls (pins: `nocopy_hold`/`keep`/`drop_idle`/`request_end`; counters: `nocopy_count`), never by writing its fields; their own shared state lives in the header's `user` area (`nocopy_shared`).
 - Never allocate (emalloc, zvals) while holding a shard lock: an OOM bailout (PHP <= 8.6) or the hard-limit `_exit` (8.7+) would leave it locked for every worker. `nocopy_rebase` runs under the lock: it only rewrites pointers.
 - Never take a second shard lock while holding one, except `nocopy_clear` (all, in index order). `rebalance` drops its own first: `nocopy_alloc` may unlock and relock, so nothing before it in a write may rely on shard state.
 - A segment changes shard only through the pool: zeroed, `owner[s] = 0` (release), claimed by CAS. Walk a shard's segments by `own` (`SH_SEGS`), never by index range.

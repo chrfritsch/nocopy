@@ -1,5 +1,5 @@
 /* nocopy's Valkey tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
- * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; nocopy.c only calls nocopy_vk_*.
+ * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; nocopy_store.c only calls nocopy_vk_*.
  * The connections are libvalkey's (third_party/libvalkey), blocking with nocopy.valkey_timeout; pushes come back as replies and are applied here. */
 
 #ifdef HAVE_CONFIG_H
@@ -325,8 +325,8 @@ static bool is_str(const valkeyReply *r)
 }
 
 /* The fill guard: a fill that read Valkey before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
-static uint64_t vk_gen(void) { return __atomic_load_n(&nocopy_a->inval_gen, __ATOMIC_SEQ_CST); }
-static void vk_bump(void) { __atomic_add_fetch(&nocopy_a->inval_gen, 1, __ATOMIC_SEQ_CST); }
+static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->inval_gen, __ATOMIC_SEQ_CST); }
+static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->inval_gen, 1, __ATOMIC_SEQ_CST); }
 
 static void vk_apply(const valkeyReply *push)
 {
@@ -534,7 +534,7 @@ static bool vk_flush(valkeyContext *c)
 
 static ZEND_NORETURN void vk_listen(void)
 {
-	nocopy_arena *a = nocopy_a;
+	nocopy_shared *a = NOCOPY_SHARED;
 	uint32_t me = (uint32_t) getpid();
 	nocopy_vk v = {0};
 	struct pollfd p = {.fd = -1, .events = POLLIN};
@@ -645,14 +645,14 @@ static void vk_spawn(void)
 #endif
 	nocopy_arena_unhold();
 	close_inherited();
-	__atomic_store_n(&nocopy_a->vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
+	__atomic_store_n(&NOCOPY_SHARED->vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
 	vk_listen();
 }
 
 /* The listener is connected; started (and waited for, up to the timeout) when it is not running. */
 static bool listener_live(void)
 {
-	nocopy_arena *a = nocopy_a;
+	nocopy_shared *a = NOCOPY_SHARED;
 	int64_t until = 0;
 	for (;;) {
 		int64_t now = now_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
@@ -676,7 +676,7 @@ static bool listener_live(void)
 
 uint32_t nocopy_vk_listener(void)
 {
-	nocopy_arena *a = nocopy_a;
+	nocopy_shared *a = nocopy_a ? NOCOPY_SHARED : NULL;
 	int64_t beat = a ? __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE) : 0;
 	return beat && now_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
 }
@@ -715,11 +715,19 @@ typedef struct {
 	size_t kl, vl;
 } vk_kv;
 
-#define READY(v) nocopy_vk *v = &NOCOPY_G(vk); if (!v->c && !vk_ready()) return -1
+/* This worker's connection, (re)connected if it dropped; NULL: Valkey unreachable. */
+static nocopy_vk *vk_conn(void)
+{
+	nocopy_vk *v = &NOCOPY_G(vk);
+	return v->c || vk_ready() ? v : NULL;
+}
 
 static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 {
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str s = {0};
 	keys_cmd(&s, ZEND_STRL("MGET"), n, keys);
 	valkeyReply *r = vk_call(v, &s);
@@ -735,7 +743,10 @@ static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 {
 	memset(res, -1, n);
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str s = {0};
 	for (uint32_t i = 0; i < n; i++) {
 		head(&s, pxat ? 5 : 3), ARG(&s, "SET"), key_arg(&s, kv[i].k, kv[i].kl), arg(&s, kv[i].v, kv[i].vl);
@@ -759,7 +770,10 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 
 static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)
 {
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str s = {0};
 	head(&s, 3 + nx + (pxat ? 2 : 0)), ARG(&s, "SET"), key_arg(&s, k, kl), arg(&s, val, vl);
 	if (nx) {
@@ -777,7 +791,10 @@ static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 /* UNLINK of n keys; *gone: how many existed. */
 static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
 {
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str s = {0};
 	keys_cmd(&s, ZEND_STRL("UNLINK"), n, keys);
 	valkeyReply *r = vk_call(v, &s);
@@ -818,14 +835,20 @@ static int vk_eval_long(nocopy_vk *v, const char *script, size_t sl, const char 
 static int vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out)
 {
 	static const char lua[] = "if ARGV[2] ~= '0' and redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) return tonumber(ARGV[1]) end return redis.call('INCRBY', KEYS[1], ARGV[1])";
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	return vk_eval_long(v, lua, sizeof lua - 1, k, kl, delta, ttl_ms, out);
 }
 
 static int vk_cas(const char *k, size_t kl, int64_t old, int64_t nw)
 {
 	static const char lua[] = "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL') return 1 end return 0";
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	int64_t ok = 0;
 	int r = vk_eval_long(v, lua, sizeof lua - 1, k, kl, old, nw, &ok);
 	return r < 0 ? -1 : r && ok;
@@ -834,7 +857,10 @@ static int vk_cas(const char *k, size_t kl, int64_t old, int64_t nw)
 /* Every key under the prefix. */
 static int vk_clear(void)
 {
-	READY(v);
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str pat = {0};
 	for (size_t i = 0; i < vk_plen; i++) {
 		if (strchr("*?[]\\", vk_prefix[i])) {

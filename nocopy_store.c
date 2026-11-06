@@ -152,7 +152,7 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 
 /* ---- writes ---- */
 
-nocopy_status nocopy_publish(nocopy_put *p, bool add_only)
+static nocopy_status publish(nocopy_put *p, bool add_only)
 {
 	switch (nocopy_put_commit(p, add_only)) {
 		case PUT_OK: return NOCOPY_OK;
@@ -164,21 +164,24 @@ nocopy_status nocopy_publish(nocopy_put *p, bool add_only)
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	nocopy_put p;
-	nocopy_status s = nocopy_build(&p, key, val, o);
+	nocopy_status s = nocopy_build(&p, key, val, o->ttl);
 	if (s != NOCOPY_OK) {
 		return s;
 	}
 	p.e->user = user;
-	return nocopy_publish(&p, o->add_only);
+	return publish(&p, o->add_only);
 }
 
-nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
+/* The local store, else the Valkey tier, else (no arena) only the checks. user: the compute time (ms). */
+static zend_always_inline nocopy_status store_as(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	if (UNEXPECTED(nocopy_detour)) {
-		return nocopy_a ? nocopy_vk_store(key, val, o, 0) : nocopy_build(NULL, key, val, o);
+		return nocopy_a ? nocopy_vk_store(key, val, o, user) : nocopy_build(NULL, key, val, o->ttl);
 	}
-	return nocopy_put_local(key, val, o, 0);
+	return nocopy_put_local(key, val, o, user);
 }
+
+nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o) { return store_as(key, val, o, 0); }
 
 static zend_always_inline bool drop_local(const char *k, size_t len)
 {
@@ -335,8 +338,7 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 			nocopy_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
 		}
 	}
-	uint64_t *ctr = hit ? &nocopy_a->workers[c->slot].hits : &nocopy_a->workers[c->slot].misses;
-	__atomic_store_n(ctr, *ctr + 1, __ATOMIC_RELAXED); /* single writer per slot: no RMW needed */
+	nocopy_count(c, hit);
 	nocopy_borrow_end(c);
 	return hit;
 }
@@ -463,19 +465,9 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 	if (r == FAILURE || EG(exception) || ttl < 0) {
 		return; /* ttl < 0: the callback asks not to store */
 	}
-	const nocopy_opts oo = {.ttl = ttl, .add_only = o->add_only};
-	o = &oo;
 	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
-	uint32_t user = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms;
-	if (UNEXPECTED(!nocopy_a)) {
-		nocopy_build(NULL, key, rv, o);
-		return;
-	}
-	if (nocopy_vk_on) {
-		nocopy_vk_store(key, rv, o, user);
-		return;
-	}
-	nocopy_put_local(key, rv, o, user);
+	const nocopy_opts as = {.ttl = ttl, .add_only = o->add_only};
+	store_as(key, rv, &as, ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms);
 }
 
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv)

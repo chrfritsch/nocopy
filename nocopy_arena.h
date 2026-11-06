@@ -100,15 +100,11 @@ typedef struct {
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
-	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
-	int64_t vk_beat;  /* Valkey listener: CLOCK_MONOTONIC ms of its last sign of life, 0 never started */
-	uint32_t vk_pid;  /* its pid */
-	uint32_t vk_live; /* it is connected and tracking: local copies may be served */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	nocopy_seg segs[NOCOPY_MAX_SEGS];
 	uint8_t owner[NOCOPY_MAX_SEGS] __attribute__((aligned(64))); /* shard index + 1; 0: in the pool (free, zeroed) */
-	char user[128] __attribute__((aligned(64))); /* the user's process-independent data (nocopy.c: the shared empty array) */
+	char user[256] __attribute__((aligned(64))); /* the user's shared state, zeroed at creation (nocopy_php.h: nocopy_shared) */
 	char tables[] __attribute__((aligned(64)));
 } nocopy_arena;
 
@@ -165,6 +161,7 @@ bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
 void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
 void nocopy_after_fork(nocopy_ctx *c);
 void nocopy_keep_release(nocopy_ctx *c);
+void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailout left open */
 
 /* ---- writes ---- */
 
@@ -303,6 +300,20 @@ static inline void nocopy_borrow_end(nocopy_ctx *c)
 	if (--c->pin_refs == 0) {
 		nocopy_drop_if_asked(c);
 	}
+}
+
+/* About to wait (FrankenPHP worker between requests): drop every pin not kept, idle or not. */
+static inline void nocopy_drop_idle(nocopy_ctx *c)
+{
+	c->transient = c->slot >= 0;
+	nocopy_drop_transient(c);
+}
+
+/* A lookup's outcome in this worker's counters (nocopy_stats). Single writer per slot: no RMW. */
+static inline void nocopy_count(nocopy_ctx *c, bool hit)
+{
+	uint64_t *n = hit ? &nocopy_a->workers[c->slot].hits : &nocopy_a->workers[c->slot].misses;
+	__atomic_store_n(n, *n + 1, __ATOMIC_RELAXED);
 }
 
 #define NOCOPY_HOT_MAX 15

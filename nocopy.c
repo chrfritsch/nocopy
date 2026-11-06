@@ -8,7 +8,6 @@
 #if PHP_VERSION_ID < 80400
 # error "nocopy needs PHP 8.4 or later"
 #endif
-#include "nocopy_arena.h"
 #include "ext/standard/info.h"
 #include "SAPI.h"
 #include "zend_system_id.h"
@@ -328,9 +327,7 @@ static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 {
 	NOCOPY_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
 	nocopy_vk_new_request();
-	nocopy_ctx *c = &NOCOPY_G(ctx);
-	c->transient = c->slot >= 0;
-	nocopy_drop_transient(c); /* idle pins: the worker now waits for a request */
+	nocopy_drop_idle(&NOCOPY_G(ctx)); /* the worker now waits for a request */
 	orig_handle_request(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
 
@@ -617,8 +614,7 @@ PHP_RSHUTDOWN_FUNCTION(nocopy)
 static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(nocopy)
 {
 	nocopy_leases_drop();
-	NOCOPY_G(ctx).pin_refs = 0;
-	nocopy_keep_release(&NOCOPY_G(ctx));
+	nocopy_request_end(&NOCOPY_G(ctx));
 	nocopy_classes_clear();
 	return SUCCESS;
 }

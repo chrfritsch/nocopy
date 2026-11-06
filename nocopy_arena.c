@@ -118,6 +118,12 @@ void nocopy_keep_release(nocopy_ctx *c)
 	}
 }
 
+void nocopy_request_end(nocopy_ctx *c)
+{
+	c->pin_refs = 0;
+	nocopy_keep_release(c);
+}
+
 /* ---- segments (shard locked) ---- */
 
 static void seg_set(uint32_t s, uint8_t st) { __atomic_store_n(&nocopy_a->segs[s].state, st, __ATOMIC_RELEASE); }
