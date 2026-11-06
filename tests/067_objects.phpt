@@ -33,6 +33,7 @@ $vals = [
     'dyn' => $d,
     'date' => [new DateTimeImmutable('2026-01-02'), $cat],
     'enum' => [Suit::Hearts, $cat],
+    'many' => array_map(fn($i) => new Product($i, "p$i", [$i], [$cat, new Cat($i, 'c')][$i % 2]), range(1, 300)), // grows the object table
 ];
 foreach ($vals as $k => $v) {
     nocopy_put($k, $v);
@@ -76,6 +77,7 @@ std: same
 dyn: same
 date: same
 enum: same
+many: same
 bool(true)
 bool(true)
 bool(true)
@@ -98,6 +100,7 @@ std: same
 dyn: same
 date: same
 enum: same
+many: same
 bool(true)
 bool(true)
 bool(true)
