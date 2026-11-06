@@ -76,6 +76,11 @@ round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (me
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
 `apcu_delete()` returns the keys that failed, and a count cannot say which.
 
+**Coarse clock** (`CLOCK_REALTIME_COARSE` where it exists): TTLs are seconds, the coarse clock is a tick (1-4 ms) behind at most and costs 3.5 ns
+vs `CLOCK_REALTIME` 11.2 ns (perf: half of a store's samples were in `clock_gettime`). `ab.sh` best of 5, copy / zero: store int +9 / +9%,
+store string +9 / +9%, failing add +6 / +4%. `seq` carries the shard in its low 3 bits, so it is unique across shards without the nanoseconds.
+Scalars skip `copy_out` and the pin: fetch int +7 / +4%, `fetch 10 keys` (ints) copy +11%.
+
 ## Eviction
 
 **Segcache-style merge** instead of APCu's full wipe: the oldest segments are merged, read entries move forward, the rest go.

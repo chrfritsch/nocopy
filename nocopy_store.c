@@ -235,6 +235,8 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 		}
 		if (e->flags & ENTRY_SERIALIZED) {
 			hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+		} else if (Z_TYPE_P(v) < IS_STRING) {
+			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
 		} else if (copy) {
 			nocopy_local *l = local_slot(e, v);
 			if (l && l->e == e && l->seq == e->seq) {
@@ -350,7 +352,7 @@ static int lease_take(zend_ulong h)
 	if (NOCOPY_G(nleases) == (int) (sizeof NOCOPY_G(leases) / sizeof NOCOPY_G(leases)[0])) {
 		return NOCOPY_LEASE_FULL; /* nested too deep: compute without one */
 	}
-	int r = nocopy_lease_take(h, NOCOPY_G(ctx).slot, time(NULL), LEASE_TTL);
+	int r = nocopy_lease_take(h, NOCOPY_G(ctx).slot, nocopy_now(), LEASE_TTL);
 	if (r == NOCOPY_LEASE_TAKEN) {
 		NOCOPY_G(leases)[NOCOPY_G(nleases)++] = h;
 	}

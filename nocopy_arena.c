@@ -674,7 +674,7 @@ nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only
 		e->hot = 2; /* came back after an eviction: survives two merges without a read */
 		sh->ghost_hits++;
 	}
-	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + 1;
+	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + (1u << NOCOPY_SEQ_SHARD_BITS); /* keeps the shard bits */
 	sh->inserts++;
 	sh->nlive += !old;
 	entry_birth(sh, e);
@@ -696,7 +696,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
 	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts); /* inside the lock: measured faster under write contention than before it */
+	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
 	time_t now = ts.tv_sec, exp = ttl ? now + ttl : 0;
 	nocopy_entry *e = nocopy_alloc(sh, size, exp, now);
 	if (!e) {
@@ -710,7 +710,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	e->created = (uint32_t) now;
 	e->flags = 0;
 	e->user = 0;
-	e->seq = (uint64_t) ts.tv_sec * 1000000000u + (uint64_t) ts.tv_nsec; /* commit makes it unique */
+	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | (uint64_t) (sh - nocopy_a->shards); /* commit makes it unique */
 	*p = (nocopy_put) {.c = c, .sh = sh, .e = e, .locked = size <= NOCOPY_INLINE_PUT};
 	if (!p->locked) {
 		wip_set(c, e);

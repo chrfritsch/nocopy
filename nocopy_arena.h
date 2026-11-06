@@ -204,8 +204,25 @@ static inline nocopy_shard *nocopy_shard_of(uint64_t h) { return &nocopy_a->shar
 /* Mixed: raw DJB low bits of `prefix.N` keys built probe runs of hundreds. Own multiplier keeps it independent of the shard; tests/018 mirrors it. */
 static inline uint32_t nocopy_slot_tag(uint64_t h) { return (uint32_t) ((h * 0xC2B2AE3D27D4EB4FULL) >> 32); }
 static inline nocopy_entry *nocopy_slot_entry(nocopy_slot s) { return (nocopy_entry *) ((char *) nocopy_a + ((size_t) (uint32_t) s << 3)); }
+/* The coarse clock is a tick behind at most (1-4 ms) and 3x cheaper than CLOCK_REALTIME (3.5 vs 11.2 ns): TTLs are seconds. */
+static inline void nocopy_clock(struct timespec *ts)
+{
+#ifdef CLOCK_REALTIME_COARSE
+	clock_gettime(CLOCK_REALTIME_COARSE, ts);
+#else
+	clock_gettime(CLOCK_REALTIME, ts);
+#endif
+}
+static inline time_t nocopy_now(void)
+{
+	struct timespec ts;
+	nocopy_clock(&ts);
+	return ts.tv_sec;
+}
+#define NOCOPY_SEQ_SHARD_BITS 3 /* seq: microseconds << 3 | shard, unique across shards (a segment changes shard, copy mode keys on address + seq) */
+_Static_assert(NOCOPY_MAX_SHARDS <= 1 << NOCOPY_SEQ_SHARD_BITS, "shard index must fit seq's low bits");
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */
-static inline bool nocopy_expired(const nocopy_entry *e) { return e->expires && e->expires < time(NULL); }
+static inline bool nocopy_expired(const nocopy_entry *e) { return e->expires && e->expires < nocopy_now(); }
 
 static inline void nocopy_cpu_relax(void)
 {
@@ -315,7 +332,7 @@ static inline __attribute__((always_inline)) bool nocopy_key_eq(const char *a, c
 /* Lock-free; between borrow_begin/end. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch). The entry's segment is pinned before it is touched.
  * A miss counts only if no delete shifted slots meanwhile (mseq): one may move the key backwards past the probe. */
 /* An expired entry that a lease waiter may still be served: expired less than its TTL ago. */
-static inline bool nocopy_stale_ok(const nocopy_entry *e) { return e->expires && (time_t) (2 * e->expires - e->created) >= time(NULL); }
+static inline bool nocopy_stale_ok(const nocopy_entry *e) { return e->expires && (time_t) (2 * e->expires - e->created) >= nocopy_now(); }
 
 /* stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). */
 static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
