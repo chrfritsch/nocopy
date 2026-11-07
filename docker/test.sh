@@ -4,7 +4,7 @@
 set -e
 /src/docker/build.sh
 cd /build
-cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu
+cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu && cp -r /src/cli /build/cli
 # Valkey tests (05x) need a server on 127.0.0.1:6379; they skip without one
 command -v valkey-server >/dev/null && ! valkey-cli ping >/dev/null 2>&1 && valkey-server --daemonize yes --save '' --appendonly no >/dev/null
 export NOCOPY_SO=/build/modules/nocopy.so

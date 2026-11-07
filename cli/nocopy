@@ -1,0 +1,118 @@
+#!/usr/bin/env php
+<?php
+// Console for a running nocopy cache: no FastCGI needed, the CLI attaches to the same arena as php-fpm.
+
+const USAGE = <<<TXT
+Usage: nocopy <command> [args] [--json]
+
+  stats              counters and sizes (default)
+  keys [prefix]      live keys with size, age and TTL left
+  get <key>          dump a value (exit 1 on miss)
+  delete <key>...    delete keys
+  clear [prefix]     delete every key, or those starting with prefix
+
+Run it as the pool's user with the pool's name: sudo -u www-data php -d nocopy.shm_name=/nocopy nocopy stats
+
+TXT;
+
+function bytes(int $n): string
+{
+    foreach (['B', 'KB', 'MB', 'GB'] as $u) {
+        if ($n < 1024 || $u === 'GB') {
+            return $u === 'B' ? "$n B" : sprintf('%.1f %s', $n, $u);
+        }
+        $n /= 1024;
+    }
+}
+
+function secs(int $s): string
+{
+    return match (true) {
+        $s < 120 => "{$s}s",
+        $s < 7200 => intdiv($s, 60) . 'm',
+        $s < 172800 => intdiv($s, 3600) . 'h',
+        default => intdiv($s, 86400) . 'd',
+    };
+}
+
+function out(mixed $data, bool $json, callable $text): void
+{
+    $json ? print(json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n") : $text($data);
+}
+
+$args = array_slice($argv, 1);
+$json = in_array('--json', $args, true);
+$args = array_values(array_diff($args, ['--json']));
+$cmd = array_shift($args) ?? 'stats';
+
+if (in_array($cmd, ['help', '-h', '--help'], true)) {
+    echo USAGE;
+    exit(0);
+}
+if (!extension_loaded('nocopy')) {
+    fwrite(STDERR, "nocopy: extension not loaded (php --ini shows which ini files this php reads)\n");
+    exit(2);
+}
+if (nocopy_shared_with() === 'none') {
+    fwrite(STDERR, "nocopy: no shared cache in this process: set nocopy.shm_name and run as the user that owns it, not root\n");
+    exit(2);
+}
+
+switch ($cmd) {
+    case 'stats':
+        out(nocopy_stats(), $json, function (array $s) {
+            printf("%-16s %s (%s)\n", 'shared with', nocopy_shared_with(), $s['shm_name']);
+            printf("%-16s %s of %s (%.1f%%)\n", 'used', bytes($s['used']), bytes($s['size']), 100 * $s['used'] / max(1, $s['size']));
+            printf("%-16s %.1f%% (%d hits, %d misses)\n", 'hit rate', 100 * $s['hits'] / max(1, $s['hits'] + $s['misses']), $s['hits'], $s['misses']);
+            printf("%-16s %.0f%% came back (%d ghost hits)\n", 'evicted back', 100 * $s['ghost_hits'] / max(1, $s['evicted']), $s['ghost_hits']);
+            unset($s['shm_name']);
+            foreach ($s as $k => $v) {
+                printf("%-16s %s\n", $k, in_array($k, ['size', 'used', 'evacuated_bytes', 'segment_size'], true) ? bytes($v) : $v);
+            }
+        });
+        exit(0);
+
+    case 'keys':
+        out(nocopy_keys($args[0] ?? ''), $json, function (array $keys) {
+            $now = time();
+            $w = max([3, ...array_map(strlen(...), array_map(strval(...), array_keys($keys)))]);
+            printf("%-{$w}s %10s %6s %6s\n", 'key', 'size', 'age', 'ttl');
+            foreach ($keys as $k => $i) {
+                printf("%-{$w}s %10s %6s %6s\n", $k, bytes($i['size']), secs($now - $i['created']),
+                    $i['expires'] ? secs(max(0, $i['expires'] - $now)) : '-');
+            }
+            fprintf(STDERR, "%d keys\n", count($keys));
+        });
+        exit(0);
+
+    case 'get':
+        if (!isset($args[0])) {
+            break;
+        }
+        $v = nocopy_get($args[0], $hit);
+        if (!$hit) {
+            fwrite(STDERR, "nocopy: no such key\n");
+            exit(1);
+        }
+        $json ? out($v, true, 'var_dump') : var_dump($v);
+        exit(0);
+
+    case 'delete':
+        if (!$args) {
+            break;
+        }
+        echo nocopy_delete_multiple($args), " deleted\n";
+        exit(0);
+
+    case 'clear':
+        if (isset($args[0])) {
+            echo nocopy_delete_multiple(array_map(strval(...), array_keys(nocopy_keys($args[0])))), " deleted\n";
+        } else {
+            nocopy_clear();
+            echo "cleared\n";
+        }
+        exit(0);
+}
+
+fwrite(STDERR, USAGE);
+exit(64);

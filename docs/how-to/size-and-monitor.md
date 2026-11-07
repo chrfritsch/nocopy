@@ -66,6 +66,19 @@ The numbers that tell you something:
 
 All keys: [`nocopy_stats()` reference](../reference/stats.md). Counters are per arena, since it was created.
 
+From a shell, with [`cli/nocopy`](../../cli/nocopy) (`chrfritsch/nocopy-cli`; run as the pool's user, with the pool's
+`nocopy.shm_name`, see [Share between php-fpm and the CLI](share-between-fpm-and-cli.md)):
+
+```sh
+sudo -u www-data php cli/nocopy stats          # or --json
+sudo -u www-data php cli/nocopy keys user.     # key, size, age, TTL left
+sudo -u www-data php cli/nocopy get user.42
+sudo -u www-data php cli/nocopy delete user.42 user.43
+sudo -u www-data php cli/nocopy clear user.    # no prefix: the whole cache
+```
+
+Unlike APCu (and `cachetool`), no FastCGI round trip: the CLI attaches to the same memory as php-fpm.
+
 A tiny endpoint for your monitoring:
 
 ```php

@@ -7,7 +7,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 - **Platforms:** Linux, amd64 and arm64. Builds on macOS, untested there. No Windows.
 - **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
-  [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins + cache tags).
+  [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins + cache tags), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
 - **Distribution:** none yet. No GitHub remote, so CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) has only run locally through `./dev`.
 
@@ -42,7 +42,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 ## Roadmap (rough priority)
 
 1. **Release.** Push to GitHub and get CI green; `composer.json` and a GitHub release for PIE; split `drupal/`, `symfony/`,
-   `apcu/` into their own repositories for Packagist.
+   `apcu/`, `cli/` into their own repositories for Packagist.
 2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`. Micro benchmarks cross-checked on Graviton4
    (c8g.xlarge pod, 3 vCPU): ratios hold. Symfony and Drupal there are still to come.
 3. **Eviction tuning:** large arenas done: segments stop at 4 MB, so an eviction round stalls a shard's writers no longer at 4G than at 1G ([design decisions](explanation/design-decisions.md#eviction)). Also victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see

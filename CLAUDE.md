@@ -21,7 +21,7 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 - `nocopy_valkey.c` Valkey tier, reached only via `nocopy_vk_*` (connections: vendored libvalkey in `third_party/`, updated only with `scripts/vendor-libvalkey.sh <tag>`); compiled out with `--disable-nocopy-valkey`
 - `nocopy.stub.php` -> `nocopy_arginfo.h` (`./dev stub` after API changes)
 - `tests/*.phpt` suite (05x need Valkey, skip without); `docker/` images + in-container scripts; `bench/` benchmarks
-- `apcu/`, `symfony/`, `drupal/`: integrations, each its own composer package
+- `apcu/`, `symfony/`, `drupal/`: integrations, `cli/`: console (stats, keys, get, delete, clear), each its own composer package
 
 ## Rules
 

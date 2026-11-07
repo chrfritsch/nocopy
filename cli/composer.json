@@ -1,0 +1,11 @@
+{
+    "name": "chrfritsch/nocopy-cli",
+    "description": "Console for a running nocopy cache: stats, keys, get, delete, clear",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.4",
+        "ext-nocopy": "*"
+    },
+    "bin": ["nocopy"]
+}
