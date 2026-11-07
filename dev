@@ -26,6 +26,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
 
   bench [groups]              micro benchmarks vs APCu (ONLY=regex: those measurements only)
   ab [ref=main] [reps=3] [groups]  A/B: ref vs working tree, interleaved, best of reps (ONLY=regex)
+  fpbench                     same Symfony app in FrankenPHP worker mode (copy mode), APCu vs nocopy vs PHP files (WORKERS, REQS, CONC)
   sfbench                     Symfony app (bench/sfapp) under nginx + fpm, APCu vs nocopy (WORKERS, REQS, CONC)
   stampede [workers secs ttl ms]
   opcache                     nocopy vs values as PHP files in OPcache (PhpFilesAdapter's mechanism), zero-copy both
@@ -80,6 +81,9 @@ case $cmd in
   opcache)    img; run --shm-size=1g "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && NOCOPY_SO=/build/modules/nocopy.so php -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-opc -d nocopy.shm_size=256M /src/bench/opcache.php; rm -f /dev/shm/nocopy-opc.*' ;;
   soak)       img; run --shm-size=1g "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && php -n -d extension=pcntl -d memory_limit=1G -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-soak -d nocopy.shm_size=256M /src/bench/soak.php "$@"; rm -f /dev/shm/nocopy-soak.*' soak "$@" ;;
   tail)       img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/tail.sh "$@" ;;
+  fpbench)    a=.cache/sfapp; rm -rf "$a" && mkdir -p "$a/nocopy-bundle" && cp -r bench/sfapp/composer.json bench/sfapp/src bench/sfapp/public "$a/" && cp -r symfony/src "$a/nocopy-bundle/"
+              docker run --rm -v "$PWD/$a":/app -w /app composer:2 install -q --no-dev --classmap-authoritative '--ignore-platform-req=ext-*'
+              run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro dunglas/frankenphp:1-php8.5 sh /src/docker/fp-bench.sh ;;
   stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
   perf)       img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
               run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;

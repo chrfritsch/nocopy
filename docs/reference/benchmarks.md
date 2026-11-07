@@ -81,6 +81,25 @@ two runs, equal within 10%):
 - So OPcache files fit data written once per deploy (config, routes, metadata: what Symfony uses them for); nocopy fits
   data written at runtime, and still reads 2.5-4x faster.
 
+### FrankenPHP worker mode (`./dev fpbench`)
+
+The same app booted once per worker (`frankenphp_handle_request()` loop), FrankenPHP 1.13.5 on PHP 8.5 ZTS, 8 workers, same
+OPcache settings, `ab`, median of 3; two runs on 2026-11-07. nocopy runs in [copy mode](../explanation/how-it-works.md#zero-copy-and-copy-mode)
+here: a value fetched twice is kept as a private copy (`nocopy.local_size`) and reused while the entry is unchanged.
+
+| req/s, run 1 / run 2 | APCu (no marshaller) | PHP files (OPcache) | nocopy | nocopy, `local_size=0` |
+|---|---:|---:|---:|---:|
+| `hello` | 17,354 / 18,111 | 18,282 / 17,588 | 18,396 / 18,560 | 16,304 / 18,658 |
+| `products?page=3` | 3,864 / 3,608 | 16,320 / 15,899 | **17,308 / 16,140** | 5,974 / 5,873 |
+| `product/77` | 3,777 / 3,559 | 18,208 / 17,634 | **17,325 / 17,113** | 5,906 / 5,324 |
+| `validate` | 13,194 / 12,131 | 12,628 / 13,050 | 13,843 / 13,791 | 12,573 / 12,149 |
+
+- nocopy's cache-heavy pages reach 87-94% of `hello` (APCu 19-22%): in long-running workers the kept copy makes a repeated
+  fetch cost what zero-copy does under php-fpm. Through Symfony's marshaller (default pool) the same: 16,143-17,617 vs APCu 2,297-2,540.
+- Without kept copies every request copies the 2,000-row array out: 5.3-6.0k req/s, still 1.5x APCu, which unserializes it.
+- `PhpFilesAdapter` keeps what it included in the pool object, which lives as long as the worker: as fast here, with the
+  same limits on writes as under php-fpm ([above](#against-opcache-files-phpfilesadapter)).
+
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 
 2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host; median of 3 runs on the evening of 2026-11-06

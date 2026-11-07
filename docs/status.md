@@ -29,6 +29,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../bench/results-drupal/2026-11-06-prod)) |
+| `./dev fpbench` (2026-11-07, twice) | published ([results](reference/benchmarks.md#frankenphp-worker-mode-dev-fpbench)): nocopy 87-94% of `hello` in worker mode, APCu 19-22% |
 | `./dev soak` (2026-11-07: 50 min heavy churn, 30 + 10 min TTLs with a read-only stretch) | published ([results](reference/benchmarks.md#soak-dev-soak)): flat, no leak; expired entries stay until the next write |
 | `./dev tail` with up to 1,000 idle slot holders, `./dev sfbench` with 256 fpm workers (2026-11-07) | published ([results](reference/benchmarks.md#many-workers)): no scaling cost |
 | `./dev opcache`, `./dev sfbench` with a `PhpFilesAdapter` pool (2026-11-07) | published ([results](reference/benchmarks.md#against-opcache-files-phpfilesadapter)): same req/s on read-only pages, nocopy reads 2.5-4x and writes 30-300x faster |

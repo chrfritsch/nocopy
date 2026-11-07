@@ -32,6 +32,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 |---|---|
 | `./dev bench [groups]` | `bench/run.php` groups (default all: read write parallel mixed contend ttl) ×3 for APCu, nocopy copy and zero-copy; prints medians. Env: `ONLY` (regex on measurement names, the rest skipped) |
 | `./dev ab [ref=main] [reps=3] [groups]` | `docker/ab.sh`: `ref` (via `git archive`, in `.cache/ab-old`) vs the working tree, interleaved in one container, best of `reps`, copy and zero mode. Env: `ONLY` |
+| `./dev fpbench` | the `sfbench` app in FrankenPHP worker mode (8 workers): APCu, PHP files, nocopy with and without kept copies (`WORKERS`, `REQS`, `CONC`) |
 | `./dev sfbench` | `bench/sfapp` under nginx + php-fpm with Symfony's recommended production PHP settings: APCu (with and without Symfony's marshaller) vs the bundle, 4 pages, median of 3. Env: `WORKERS`, `REQS`, `CONC` |
 | `./dev opcache` | `bench/opcache.php`: nocopy vs values kept as PHP files in OPcache (Symfony's `PhpFilesAdapter`), fetch, store, OPcache waste per rewrite |
 | `./dev tail [workers=8] [secs=10] [scenarios]` | `bench/tail.php`: get/put latency p50..p99.99 and max under `fit`, `evict`, `contend`; APCu, nocopy copy and zero-copy (`bench/tail.php` alone: `TAIL_IDLE=n` adds n sleeping slot holders) |
