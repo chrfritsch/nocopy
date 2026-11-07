@@ -139,6 +139,31 @@ Both have 0 / 7 database statements per anonymous / logged-in request: the diffe
 instead of a network round trip and unserialize per item. drupal/redis 2.0-alpha2 is no faster than 1.11 (morning's full run: 2,826 / 636
 vs 2,750 / 532 req/s). A web save on server A and a Drush save both show up on server B in both setups.
 
+## Tail latency (`./dev tail`)
+
+`bench/tail.php`: 8 forked CLI workers time every get and put (log histogram, ~4% resolution), 10 s per scenario, 64M
+memory each, same keys and values for both (3 in 4 a 500-byte string, 1 in 4 a 10-row array: 600 B / 4.5 KB in nocopy).
+nocopy in copy mode (CLI); 2026-11-07, Docker on arm64 (11 cores), second of two runs, p99.99 moved up to 1.6x between them.
+
+| µs, get / put | | p50 | p99 | p99.9 | p99.99 | ops/s |
+|---|---|---:|---:|---:|---:|---:|
+| **fit**: Zipf reads, keys fill half of nocopy, 1% rewritten | APCu | 0.4 / 2.5 | 6.6 / 3,846 | 66 / 6,469 | 326 / 9,976 | 2.0 M / 20 k |
+| | nocopy | 0.3 / 0.6 | **3.2 / 7.8** | **7.8 / 85** | **68 / 422** | 7.1 M / 71 k |
+| **evict**: read-through over 1.5x nocopy's memory, 20% rewritten | APCu¹ | 0.6 / 1.1 | 28 / 1,617 | 58 / 4,016 | 131 / 6,469 | 0.56 M / 113 k |
+| | nocopy (3.7 M evicted) | 0.5 / 0.6 | **4.1 / 48** | **10 / 194** | **66 / 597** | 3.6 M / 1.0 M |
+| **contend**: 4 readers, 4 writers on 64 hot 100-row arrays | APCu | 22 / 37 | 78 / 163 | 202 / 2,008 | 1,483 / 5,209 | 160 k / 106 k |
+| | nocopy | 11 / 7.5 | 53 / 30 | 211 / 163 | 1,763 / 1,689 | 308 k / 379 k |
+
+- APCu's puts wait behind its write lock while readers run: p99 of 1.6-3.8 ms. nocopy's stay under 50 µs at p99.
+- **Eviction** costs nocopy's gets nothing visible (p99.9 8 -> 10 µs) and its puts 0.2 -> 0.6 ms at p99.99.
+- **Contention** is where nocopy is no better at the far tail: 1-1.8 ms at p99.99 for both ops, as APCu's reads. With
+  4 workers instead of 8 it drops to 0.15-0.2 ms (APCu 0.3 ms); likely the shard lock's spin-then-yield (not profiled yet).
+- Max is 2-30 ms for everyone in every scenario: VM scheduling, not the store. Bare metal is still to come.
+- Zero-copy (one `php -S` request per run) gives the same get percentiles but evicts even in **fit**: each 10 s request keeps
+  up to `nsegs/4` segments pinned until it ends ([pins](../explanation/architecture.md#reads-lock-free-and-pins)), 8 of them pin the arena. php-fpm requests are short.
+
+¹ APCu stores the arrays serialized (smaller), so the same keys fit and it never expunged: its rows show no eviction cost.
+
 ## Batches (`nocopy_get_multiple` / `put_multiple`), one host
 
 | | PHP loop of single calls | `*_multiple` |

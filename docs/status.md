@@ -29,6 +29,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../bench/results-drupal/2026-11-06-prod)) |
+| `./dev tail` (2026-11-07, 8 and 4 workers, twice at 8) | published ([results](reference/benchmarks.md#tail-latency-dev-tail)); open: p99.99 under 8-way contention is 1-1.8 ms, level with APCu |
 | `./dev sfbench` | published 2026-11-06 (evening, objects as graph nodes), with Symfony's production PHP settings ([results](reference/benchmarks.md#symfony-dev-sfbench)) |
 
 ## Roadmap (rough priority)
