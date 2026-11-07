@@ -580,6 +580,7 @@ static PHP_GINIT_FUNCTION(nocopy)
 	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
 	nocopy_globals->ctx.slot = -1;
 	nocopy_globals->keys.slot = pecalloc(NOCOPY_KEYS, sizeof(nocopy_kslot), 1);
+	nocopy_classes_init(&nocopy_globals->classes, &nocopy_globals->zones);
 }
 
 /* A thread ending (ZTS) gives its worker slot back. */

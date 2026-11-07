@@ -67,6 +67,7 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long
 
 void nocopy_copy_out(zval *dst, const zval *src); /* deep private copy of an arena value (NOCOPY_G(keys) shares its deduped keys) */
 bool nocopy_graph_out(zval *rv, const zval *v, bool copy); /* an ENTRY_GRAPH value: its objects rebuilt; false: a class is gone or changed */
+void nocopy_classes_init(HashTable *classes, HashTable *zones); /* the per-request tables (GINIT; nocopy_classes_clear again) */
 void nocopy_classes_clear(void); /* at request end */
 void *nocopy_graph_tpl(const nocopy_entry *e); /* copy mode: a private template of e's graph, NULL if a class is gone */
 bool nocopy_graph_tpl_out(zval *rv, void *tpl); /* false: a hook threw or an enum case is gone */

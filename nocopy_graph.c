@@ -121,10 +121,6 @@ static uint64_t class_fp_compute(zend_class_entry *ce)
 static uint64_t class_fp(zend_class_entry *ce)
 {
 	HashTable *t = &NOCOPY_G(classes);
-	if (!NOCOPY_G(classes_on)) {
-		zend_hash_init(t, 16, NULL, NULL, 0);
-		NOCOPY_G(classes_on) = true;
-	}
 	zval *f = zend_hash_index_find(t, (zend_ulong) (uintptr_t) ce);
 	if (f) {
 		return (uint64_t) Z_LVAL_P(f);
@@ -135,16 +131,18 @@ static uint64_t class_fp(zend_class_entry *ce)
 	return (uint64_t) Z_LVAL(z);
 }
 
+/* zend_hash_init allocates nothing: the first insert does. */
+void nocopy_classes_init(HashTable *classes, HashTable *zones)
+{
+	zend_hash_init(classes, 16, NULL, NULL, 0);
+	zend_hash_init(zones, 8, NULL, NULL, 0);
+}
+
 void nocopy_classes_clear(void)
 {
-	if (NOCOPY_G(classes_on)) {
-		zend_hash_destroy(&NOCOPY_G(classes));
-		NOCOPY_G(classes_on) = false;
-	}
-	if (NOCOPY_G(zones_on)) {
-		zend_hash_destroy(&NOCOPY_G(zones));
-		NOCOPY_G(zones_on) = false;
-	}
+	zend_hash_destroy(&NOCOPY_G(classes));
+	zend_hash_destroy(&NOCOPY_G(zones));
+	nocopy_classes_init(&NOCOPY_G(classes), &NOCOPY_G(zones));
 }
 
 static bool has_dynamic(const HashTable *props);
@@ -182,10 +180,6 @@ static bool date_zone_name(zend_object *o, zval *z)
 static timelib_tzinfo *date_tz(const zend_string *name)
 {
 	HashTable *t = &NOCOPY_G(zones);
-	if (!NOCOPY_G(zones_on)) {
-		zend_hash_init(t, 8, NULL, NULL, 0);
-		NOCOPY_G(zones_on) = true;
-	}
 	timelib_tzinfo *tz = zend_hash_str_find_ptr(t, ZSTR_VAL(name), ZSTR_LEN(name));
 	if (tz) {
 		return tz;
