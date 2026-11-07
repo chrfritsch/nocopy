@@ -101,6 +101,10 @@ round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (me
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
 `apcu_delete()` returns the keys that failed, and a count cannot say which.
 
+**Deletes use the key's cached hash** (`zend_string_hash_val`; was `zend_hash_func` over the bytes on every delete). Scratch A/B,
+best of 7: store+delete with a 58-byte key 85.3 -> 68.9 ns, `nocopy_delete_multiple` of 10 missing 59-byte keys 177.5 -> 50.7 ns;
+`ab.sh` store+delete int (3-byte key), best of 7 three times: +1.6..+3.4% (HEAD against itself +1.0 / 0.0%).
+
 **Coarse clock** (`CLOCK_REALTIME_COARSE` where it exists): TTLs are seconds, the coarse clock is a tick (1-4 ms) behind at most and costs 3.5 ns
 vs `CLOCK_REALTIME` 11.2 ns (perf: half of a store's samples were in `clock_gettime`). `ab.sh` best of 5, copy / zero: store int +9 / +9%,
 store string +9 / +9%, failing add +6 / +4%. `seq` carries the shard in its low 3 bits, so it is unique across shards without the nanoseconds.

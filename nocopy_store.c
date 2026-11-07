@@ -163,9 +163,8 @@ static zend_always_inline nocopy_status store_as(zend_string *key, zval *val, co
 
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o) { return store_as(key, val, o, 0); }
 
-static zend_always_inline bool drop_local(const char *k, size_t len)
+static zend_always_inline bool drop_local(const char *k, size_t len, zend_ulong h)
 {
-	zend_ulong h = zend_hash_func(k, len); /* = zend_string_hash_val() */
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
 	bool found = nocopy_remove(sh, h, k, (uint32_t) len);
@@ -175,7 +174,7 @@ static zend_always_inline bool drop_local(const char *k, size_t len)
 
 bool nocopy_drop_local(const char *k, size_t len)
 {
-	return nocopy_a && drop_local(k, len);
+	return nocopy_a && drop_local(k, len, zend_hash_func(k, len)); /* = zend_string_hash_val() */
 }
 
 bool nocopy_drop(zend_string *key)
@@ -183,7 +182,7 @@ bool nocopy_drop(zend_string *key)
 	if (UNEXPECTED(nocopy_detour)) {
 		return nocopy_a && nocopy_vk_drop(key);
 	}
-	return drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+	return drop_local(ZSTR_VAL(key), ZSTR_LEN(key), zend_string_hash_val(key));
 }
 
 zend_long nocopy_drop_multi(HashTable *keys)
@@ -195,7 +194,7 @@ zend_long nocopy_drop_multi(HashTable *keys)
 	zval *k;
 	ZEND_HASH_FOREACH_VAL(keys, k) {
 		ZVAL_DEREF(k);
-		n += Z_TYPE_P(k) == IS_STRING && drop_local(Z_STRVAL_P(k), Z_STRLEN_P(k));
+		n += Z_TYPE_P(k) == IS_STRING && drop_local(Z_STRVAL_P(k), Z_STRLEN_P(k), zend_string_hash_val(Z_STR_P(k)));
 	} ZEND_HASH_FOREACH_END();
 	return n;
 }
