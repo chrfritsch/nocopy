@@ -49,3 +49,6 @@ function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $b
 function nocopy_shared_with(): string {}
 
 function nocopy_stats(): array {}
+
+/** Live keys of this host's arena starting with $prefix, oldest first (to the clock tick, 1-4 ms): key => ['size' => bytes, 'created' => unix time, 'expires' => unix time, 0 never]. */
+function nocopy_keys(string $prefix = ""): array {}

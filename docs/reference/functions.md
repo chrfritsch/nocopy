@@ -104,6 +104,13 @@ Cheap (about 15 ns): fine to call on every request.
 
 Counters and sizes of the arena: see [`nocopy_stats()`](stats.md).
 
+### `nocopy_keys(string $prefix = ""): array`
+
+The live keys of this host's arena that start with `$prefix`, oldest first (to the clock tick, 1-4 ms, not exact):
+`key => ['size' => bytes of the entry, 'created' => unix time, 'expires' => unix time, 0 never]`. Lock-free: writers keep going,
+and a key a concurrent delete moves may be missing. Walks every slot of the arena, so it is for tools and admin pages,
+not for every request. With Valkey it lists what this host has cached, not every key in Valkey.
+
 ## APCu names
 
 `apcu_*` are not part of the extension; the [polyfill](../how-to/migrate-from-apcu.md) defines them in PHP.

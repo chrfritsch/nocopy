@@ -790,6 +790,27 @@ void nocopy_clear(void)
 	}
 }
 
+void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), void *arg)
+{
+	time_t now = nocopy_now();
+	for (uint32_t si = 0; si < nocopy_a->nshards; si++) {
+		const nocopy_slot *t = nocopy_tabs[si];
+		for (uint32_t i = 0; i <= nocopy_tab_mask; i++) {
+			nocopy_slot s = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
+			if (!s) {
+				continue;
+			}
+			nocopy_entry *e = nocopy_slot_entry(s);
+			if (nocopy_hold(c, e) && __atomic_load_n(&t[i], __ATOMIC_ACQUIRE) != s) {
+				continue; /* unlinked while pinning: the memory may be reused */
+			}
+			if (!e->expires || e->expires >= now) {
+				fn(e, arg);
+			}
+		}
+	}
+}
+
 /* ---- stats ---- */
 
 void nocopy_stats(nocopy_stats_t *st)

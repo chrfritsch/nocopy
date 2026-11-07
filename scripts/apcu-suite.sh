@@ -16,7 +16,7 @@ echo "<?php require '$ROOT/apcu/apcu.php'; if (PHP_SAPI === 'cli') nocopy_clear(
 cd "$W" && NO_INTERACTION=1 TEST_PHP_EXECUTABLE=$PHP $PHP "$RT" -q \
   -d extension="$NOCOPY_SO" -d nocopy.shm_name=/nocopy-apcu-suite -d auto_prepend_file="$W/prepend.php" -d apc.enable_cli=1 $EXTRA tests 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
   | awk '/^Tests (passed|failed|skipped)/; /^FAILED TEST SUMMARY/ {f=1; next} /^=+$/ {f=0} f' 
-# 24 expected failures (2026-11-06, Linux): APCUIterator (iterator_*, apc54_018, ghbug185); apc.* sizing aliases (apc_026, not_enough_shm);
+# 13 expected failures (2026-11-07, Linux): exact insertion order (iterator_006); apc.* sizing aliases (apc_026, not_enough_shm, apc54_018);
 # apc.slam_defense (ghbug335, runs only with pcntl);
 # preload_path (apc54_014); disabled-mode warnings (apc_disabled); per-segment sma_info (apcu_sma_info); messages and traces naming
 # nocopy_* or the polyfill (apc_023, apc_099, apc_entry_002); outermost reference (apc_store_reference_php8);

@@ -42,7 +42,7 @@ The polyfill defines `apcu_*` only when nocopy is loaded and APCu is not. Every 
 objects are stored serialized, so the gain is smaller than with `nocopy_*`, and none where the caller serializes first
 (Symfony's `cache.adapter.apcu` hands over strings).
 
-What is missing (`APCUIterator`, `apcu_key_info()`, most `apc.*` settings): [APCu compatibility](../reference/apcu-compatibility.md).
+What is missing (`apcu_key_info()`, most `apc.*` settings): [APCu compatibility](../reference/apcu-compatibility.md).
 
 ## Sizing
 

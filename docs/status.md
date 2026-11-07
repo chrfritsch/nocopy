@@ -18,13 +18,14 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` at 24 known with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
 | `./dev ci` (8.5; 2026-11-07, again with the keep cap and big entries left out of compaction (tests 076, 077); also `./dev drupal`) | all passed |
 | `./dev ci` (8.5; 2026-11-07, dates stored natively (test 075), `./dev fuzz` added and in `ci`; also `./dev drupal`) | all passed, fuzz 20000 iterations clean in both modes |
+| `./dev ci` (8.5; 2026-11-07, `nocopy_keys()` and `APCUIterator` in the polyfill (test 078)) | all passed |
 | `./dev test` (8.5, `./dev asan`, `./dev clang`; 2026-11-07) | 65 passed, 1 skipped (asan 66) |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
 | `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
 | `./dev symfony` (6.4, 7.4, 8.x; 2026-11-06, with nocopy in front of the system pools) | pass |
-| `./dev apcu` | 23 failures, all known |
+| `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../bench/results-drupal/2026-11-06-prod)) |
 | `./dev sfbench` | published 2026-11-06 (evening, objects as graph nodes), with Symfony's production PHP settings ([results](reference/benchmarks.md#symfony-dev-sfbench)) |

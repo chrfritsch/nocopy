@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 2dea27db21c92da78bf16772790e78b525ee844d */
+ * Stub hash: d5f8df8df2108ca247c6073bde8ab7830240e8ca */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_put, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
@@ -59,6 +59,10 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_stats, 0, 0, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_keys, 0, 0, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, prefix, IS_STRING, 0, "\"\"")
+ZEND_END_ARG_INFO()
+
 
 ZEND_FRAMELESS_FUNCTION(nocopy_put, 2);
 ZEND_FRAMELESS_FUNCTION(nocopy_put, 3);
@@ -87,6 +91,7 @@ ZEND_FUNCTION(nocopy_put_multiple);
 ZEND_FUNCTION(nocopy_remember);
 ZEND_FUNCTION(nocopy_shared_with);
 ZEND_FUNCTION(nocopy_stats);
+ZEND_FUNCTION(nocopy_keys);
 
 static const zend_function_entry ext_functions[] = {
 	ZEND_RAW_FENTRY("nocopy_put", zif_nocopy_put, arginfo_nocopy_put, 0, frameless_function_infos_nocopy_put, NULL)
@@ -102,5 +107,6 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_FE(nocopy_remember, arginfo_nocopy_remember)
 	ZEND_FE(nocopy_shared_with, arginfo_nocopy_shared_with)
 	ZEND_FE(nocopy_stats, arginfo_nocopy_stats)
+	ZEND_FE(nocopy_keys, arginfo_nocopy_keys)
 	ZEND_FE_END
 };

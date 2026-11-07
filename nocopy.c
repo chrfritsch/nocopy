@@ -279,6 +279,69 @@ PHP_FUNCTION(nocopy_remember)
 	}
 }
 
+typedef struct {
+	const nocopy_entry **e;
+	size_t n, cap;
+	zend_string *prefix;
+} keys_walk;
+
+static void keys_collect(const nocopy_entry *e, void *arg)
+{
+	keys_walk *w = arg;
+	if (e->klen < ZSTR_LEN(w->prefix) || memcmp(nocopy_key(e), ZSTR_VAL(w->prefix), ZSTR_LEN(w->prefix)) != 0) {
+		return;
+	}
+	if (w->n == w->cap) {
+		w->cap = w->cap ? w->cap * 2 : 256;
+		w->e = erealloc(w->e, w->cap * sizeof *w->e);
+	}
+	w->e[w->n++] = e;
+}
+
+static int keys_by_seq(const void *a, const void *b)
+{
+	uint64_t x = (*(const nocopy_entry *const *) a)->seq, y = (*(const nocopy_entry *const *) b)->seq;
+	return (x > y) - (x < y);
+}
+
+PHP_FUNCTION(nocopy_keys)
+{
+	zend_string *prefix = ZSTR_EMPTY_ALLOC();
+
+	ZEND_PARSE_PARAMETERS_START(0, 1)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_STR(prefix)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!nocopy_tracked()) {
+		RETURN_THROWS();
+	}
+	array_init(return_value);
+	if (!nocopy_a) {
+		return;
+	}
+	nocopy_ctx *c = &NOCOPY_G(ctx);
+	keys_walk w = {.prefix = prefix};
+	nocopy_borrow_begin(c);
+	nocopy_each(c, keys_collect, &w);
+	if (w.n) {
+		qsort(w.e, w.n, sizeof *w.e, keys_by_seq); /* seq: oldest first, to the coarse clock's tick */
+	}
+	for (size_t i = 0; i < w.n; i++) {
+		const nocopy_entry *e = w.e[i];
+		zval info;
+		array_init_size(&info, 3);
+		add_assoc_long(&info, "size", (zend_long) e->size);
+		add_assoc_long(&info, "created", (zend_long) e->created);
+		add_assoc_long(&info, "expires", (zend_long) e->expires);
+		zend_symtable_str_update(Z_ARRVAL_P(return_value), nocopy_key(e), e->klen, &info);
+	}
+	nocopy_borrow_end(c);
+	if (w.e) {
+		efree(w.e);
+	}
+}
+
 PHP_FUNCTION(nocopy_shared_with)
 {
 	ZEND_PARSE_PARAMETERS_NONE();

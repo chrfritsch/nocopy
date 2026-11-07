@@ -192,6 +192,10 @@ typedef struct {
 } nocopy_stats_t;
 void nocopy_stats(nocopy_stats_t *s);
 
+/* Lock-free: fn(e) for each live, unexpired entry, which stays pinned until borrow_end. Between borrow_begin/end.
+ * ponytail: an entry a concurrent delete shifts backwards may be missed; a snapshot under all shard locks if that matters. */
+void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), void *arg);
+
 /* ---- inline read path ---- */
 
 static inline const char *nocopy_key(const nocopy_entry *e) { return (const char *) e + e->koff; }

@@ -2,9 +2,9 @@
 
 // apcu_* on top of nocopy_*, for code that cannot switch yet. Objects are stored serialized, as in APCu.
 // apc.enabled/apc.enable_cli come from the extension and only feed apcu_enabled(), as callers check them.
-// ponytail: no APCUIterator, apcu_key_info or other apc.* INI; cache_info/sma_info are summaries without entry lists.
+// ponytail: no apcu_key_info or other apc.* INI; cache_info/sma_info are summaries without entry lists.
 
-if (!function_exists('nocopy_get') || function_exists('apcu_fetch')) {
+if (!function_exists('nocopy_get') || extension_loaded('apcu')) {
     return;
 }
 
@@ -64,8 +64,14 @@ function apcu_exists(array|string|int $key): array|bool
     return $hit;
 }
 
-function apcu_delete(array|string|int $key): array|bool
+function apcu_delete(mixed $key): array|bool
 {
+    if ($key instanceof APCUIterator) {
+        foreach (array_keys($key->keys()) as $k) {
+            nocopy_delete((string) $k);
+        }
+        return true;
+    }
     if (!is_array($key)) {
         return nocopy_delete((string) $key);
     }
@@ -132,4 +138,137 @@ function apcu_sma_info(bool $limited = false): array|false
     }
     $info = ['num_seg' => 1, 'seg_size' => $s['size'], 'avail_mem' => $s['size'] - $s['used']];
     return $limited ? $info : $info + ['block_lists' => [[]]];
+}
+
+const APC_LIST_ACTIVE = 1;
+const APC_LIST_DELETED = 2;
+const APC_ITER_TYPE = 1;
+const APC_ITER_KEY = 2;
+const APC_ITER_VALUE = 4;
+const APC_ITER_NUM_HITS = 8;
+const APC_ITER_MTIME = 16;
+const APC_ITER_CTIME = 32;
+const APC_ITER_DTIME = 64;
+const APC_ITER_ATIME = 128;
+const APC_ITER_REFCOUNT = 256;
+const APC_ITER_MEM_SIZE = 512;
+const APC_ITER_TTL = 1024;
+const APC_ITER_NONE = 0;
+const APC_ITER_ALL = 0xffffffff;
+
+/** Entries of nocopy_keys(), taken at the first use or rewind; values fetched as current() reaches them. No hit counts (0). */
+// conditional: a plain declaration would be bound at compile time, before the return above
+if (!class_exists('APCUIterator', false)) {
+class APCUIterator implements Iterator
+{
+    private ?array $entries = null;
+    private array $names = [];
+    private int $pos = 0;
+    private bool $ready = false;
+    private string|array|null $search;
+    private int $format;
+    private int $list;
+
+    public function __construct(array|string|null $search = null, int $format = APC_ITER_ALL, int $chunk_size = 0, int $list = APC_LIST_ACTIVE)
+    {
+        if (!apcu_enabled()) {
+            throw new Error('APC must be enabled to use APCUIterator');
+        }
+        if ($chunk_size < 0) {
+            trigger_error('APCUIterator chunk size must be 0 or greater', E_USER_WARNING);
+            return;
+        }
+        if ($list !== APC_LIST_ACTIVE && $list !== APC_LIST_DELETED) {
+            trigger_error('APCUIterator invalid list type', E_USER_WARNING);
+            return;
+        }
+        $this->search = is_array($search) ? array_flip(array_map('strval', $search)) : ($search === '' ? null : $search);
+        $this->format = $format;
+        $this->list = $list;
+        $this->ready = true;
+    }
+
+    /** @internal the matching entries: key => nocopy_keys() info */
+    public function keys(): array
+    {
+        if (!$this->ready) {
+            throw new Error('Trying to use uninitialized APCUIterator');
+        }
+        if ($this->entries === null) {
+            $all = $this->list === APC_LIST_ACTIVE ? nocopy_keys() : [];
+            $this->entries = match (true) {
+                $this->search === null => $all,
+                is_array($this->search) => array_intersect_key($all, $this->search),
+                default => array_filter($all, fn ($k) => preg_match($this->search, (string) $k), ARRAY_FILTER_USE_KEY),
+            };
+            $this->names = array_map('strval', array_keys($this->entries));
+        }
+        return $this->entries;
+    }
+
+    public function rewind(): void
+    {
+        $this->entries = null;
+        $this->keys();
+        $this->pos = 0;
+    }
+
+    public function next(): void
+    {
+        $this->keys();
+        $this->pos++;
+    }
+
+    public function valid(): bool
+    {
+        return $this->pos < count($this->keys());
+    }
+
+    public function key(): string|int
+    {
+        if (!$this->valid()) {
+            throw new Error('Cannot call key() on invalid iterator');
+        }
+        return $this->names[$this->pos];
+    }
+
+    public function current(): mixed
+    {
+        if (!$this->valid()) {
+            throw new Error('Cannot call current() on invalid iterator');
+        }
+        $k = $this->names[$this->pos];
+        $e = $this->entries[$k];
+        $f = $this->format;
+        $item = [];
+        $f & APC_ITER_TYPE && $item['type'] = 'user';
+        $f & APC_ITER_KEY && $item['key'] = $k;
+        $f & APC_ITER_VALUE && $item['value'] = nocopy_get($k);
+        $f & APC_ITER_NUM_HITS && $item['num_hits'] = 0;
+        $f & APC_ITER_MTIME && $item['mtime'] = $e['created'];
+        $f & APC_ITER_CTIME && $item['creation_time'] = $e['created'];
+        $f & APC_ITER_DTIME && $item['deletion_time'] = 0;
+        $f & APC_ITER_ATIME && $item['access_time'] = $e['created'];
+        $f & APC_ITER_REFCOUNT && $item['ref_count'] = 0;
+        $f & APC_ITER_MEM_SIZE && $item['mem_size'] = $e['size'];
+        $f & APC_ITER_TTL && $item['ttl'] = $e['expires'] ? $e['expires'] - $e['created'] : 0;
+        return $item;
+    }
+
+    public function getTotalHits(): int
+    {
+        $this->keys();
+        return 0;
+    }
+
+    public function getTotalSize(): int
+    {
+        return array_sum(array_column($this->keys(), 'size'));
+    }
+
+    public function getTotalCount(): int
+    {
+        return count($this->keys());
+    }
+}
 }

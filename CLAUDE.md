@@ -11,7 +11,7 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 - `./dev test` after any C change; `./dev test tests/0xx.phpt` for one test; `PHP=8.4 ./dev test` for another version
 - Locking, eviction, pins, shards: also `./dev stress 30` and `./dev c 5`
 - Valkey code (`nocopy_valkey.c`): also `./dev novalkey` (core must build without it) and `./dev shm`
-- Polyfill (`apcu/`): `./dev apcu` (24 known failures, listed in `scripts/apcu-suite.sh`); Symfony bundle: `./dev symfony`; Drupal module: `./dev drupal`
+- Polyfill (`apcu/`): `./dev apcu` (13 known failures, listed in `scripts/apcu-suite.sh`); Symfony bundle: `./dev symfony`; Drupal module: `./dev drupal`
 - Before calling something done: `./dev ci`
 - Poke at it by hand: `./dev shell`
 
