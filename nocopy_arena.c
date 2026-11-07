@@ -826,6 +826,7 @@ void nocopy_stats(nocopy_stats_t *st)
 		st->expired += __atomic_load_n(&sh->expired, __ATOMIC_RELAXED);
 		st->ghost_hits += __atomic_load_n(&sh->ghost_hits, __ATOMIC_RELAXED);
 		st->dead_segments += __atomic_load_n(&sh->ndead, __ATOMIC_RELAXED);
+		st->inserts += __atomic_load_n(&sh->inserts, __ATOMIC_RELAXED);
 		for (int l = 0; l < NOCOPY_LEASES; l++) {
 			st->leases += __atomic_load_n(&sh->leases[l].owner, __ATOMIC_RELAXED) && sh->leases[l].until >= now;
 		}
@@ -845,9 +846,6 @@ void nocopy_stats(nocopy_stats_t *st)
 	st->segments = nocopy_a->nsegs;
 	st->free_segments = pool_free();
 	st->segment_size = nocopy_seg_size;
-	for (uint32_t i = 0; i < nocopy_a->nshards; i++) {
-		st->inserts += nocopy_a->shards[i].inserts; /* racy read, like the other counters */
-	}
 	st->start_time = nocopy_a->start_time;
 	st->shards = nocopy_a->nshards;
 	st->slots = (uint64_t) nocopy_a->nshards * (nocopy_tab_mask + 1);
