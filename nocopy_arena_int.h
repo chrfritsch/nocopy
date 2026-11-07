@@ -6,15 +6,13 @@
 #include "nocopy_arena.h"
 
 extern size_t nocopy_seg_size;
-extern uint32_t nocopy_fair_segs; /* nsegs / nshards: a division on every write cost store int ~3 ns */
+extern uint32_t nocopy_fair_segs; /* nsegs / nshards: what a shard may reclaim from others, and the largest entry (a division on every write cost store int ~3 ns) */
 extern uint32_t *nocopy_ghosts[NOCOPY_MAX_SHARDS]; /* per shard, as many as slots: tags of recently evicted keys (S3-FIFO ghost) */
 
 static inline char *seg_start(uint32_t s) { return nocopy_seg_base + ((size_t) s << nocopy_seg_shift); }
 static inline nocopy_slot slot_make(const nocopy_entry *e) { return (uint64_t) nocopy_slot_tag(e->h) << 32 | (uint32_t) (((const char *) e - (const char *) nocopy_a) >> 3); }
 static inline nocopy_slot *tab_of(const nocopy_shard *sh) { return nocopy_tabs[sh->idx]; }
 static inline bool owns(const nocopy_shard *sh, uint32_t s) { return nocopy_segs_has(sh->own, s); }
-/* Segments per shard if memory were split evenly: what a shard may reclaim from others, and the largest entry. */
-static inline uint32_t nocopy_fair(void) { return nocopy_fair_segs; }
 
 /* The first segment >= s that sh owns, or UINT32_MAX. */
 static inline uint32_t own_next(const nocopy_shard *sh, uint32_t s)

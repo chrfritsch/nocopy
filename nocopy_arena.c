@@ -306,7 +306,7 @@ static __attribute__((noinline)) uint32_t take_run(nocopy_shard *sh, uint32_t k,
 		return UINT32_MAX;
 	}
 	/* from its home range on: balanced shards stay contiguous (interleaved, their nocopy_segs share cache lines: parallel stores -50%) */
-	uint32_t ns = nocopy_a->nsegs, home = sh->idx * nocopy_fair();
+	uint32_t ns = nocopy_a->nsegs, home = sh->idx * nocopy_fair_segs;
 	for (uint32_t i = 0, n = 0; i < ns; i++) {
 		uint32_t s = (home + i) % ns;
 		n = __atomic_load_n(&nocopy_a->owner[s], __ATOMIC_RELAXED) ? 0 : s ? n + 1 : 1; /* runs do not wrap */
@@ -602,7 +602,7 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
  * Drops sh's lock meanwhile (one lock at a time). false: nobody holds more than its share. */
 static __attribute__((cold, noinline)) bool rebalance(nocopy_shard *sh)
 {
-	uint32_t most = nocopy_fair();
+	uint32_t most = nocopy_fair_segs;
 	nocopy_shard *big = NULL;
 	for (uint32_t i = 0; i < nocopy_a->nshards; i++) {
 		uint32_t n = __atomic_load_n(&nocopy_a->shards[i].nown, __ATOMIC_RELAXED);
@@ -617,7 +617,7 @@ static __attribute__((cold, noinline)) bool rebalance(nocopy_shard *sh)
 	nocopy_unlock(sh);
 	nocopy_lock(big);
 	reclaim(big);
-	if (big->nown > nocopy_fair() && nocopy_merge(big, false)) {
+	if (big->nown > nocopy_fair_segs && nocopy_merge(big, false)) {
 		reclaim(big);
 	}
 	nocopy_unlock(big);
@@ -634,7 +634,7 @@ static nocopy_entry *reclaim_alloc(nocopy_shard *sh, size_t total, int b, time_t
 /* sh locked (dropped meanwhile by rebalance). Expire, reclaim, take back its share, merge until `total` bytes fit, or give up. */
 nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t now)
 {
-	if (total > (size_t) (nocopy_fair() - 1) << nocopy_seg_shift) {
+	if (total > (size_t) (nocopy_fair_segs - 1) << nocopy_seg_shift) {
 		return NULL; /* bigger than a shard's share */
 	}
 	int b = ttl_bucket(exp ? exp - now : 0);
@@ -653,10 +653,10 @@ nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t no
 		wip_reap(sh); /* segments held back by dead writers' unfinished entries */
 		e = reclaim_alloc(sh, total, b, exp);
 	}
-	for (uint32_t tries = 2 * nocopy_fair(); !e && tries && sh->nown < nocopy_fair() - nocopy_fair() / 16 && rebalance(sh); tries--) {
+	for (uint32_t tries = 2 * nocopy_fair_segs; !e && tries && sh->nown < nocopy_fair_segs - nocopy_fair_segs / 16 && rebalance(sh); tries--) {
 		e = nocopy_seg_alloc(sh, total, false, b, exp);
 	}
-	for (uint32_t tries = 2 * nocopy_fair(); !e && tries && nocopy_merge(sh, false); tries--) {
+	for (uint32_t tries = 2 * nocopy_fair_segs; !e && tries && nocopy_merge(sh, false); tries--) {
 		e = reclaim_alloc(sh, total, b, exp);
 	}
 	return e;
@@ -679,7 +679,7 @@ nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only
 		return PUT_EXISTS;
 	}
 	if (!old && sh->nlive >= sh->cap) { /* table full: evict whole segments' worth of entries */
-		for (uint32_t tries = 2 * nocopy_fair(); sh->nlive >= sh->cap && tries && nocopy_merge(sh, true); tries--) {}
+		for (uint32_t tries = 2 * nocopy_fair_segs; sh->nlive >= sh->cap && tries && nocopy_merge(sh, true); tries--) {}
 		sp = locate(sh, e->h, nocopy_key(e), e->klen, &old);
 		if (!old && sh->nlive >= sh->cap) {
 			nocopy_abort(sh, e);
