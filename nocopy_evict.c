@@ -110,12 +110,15 @@ static bool mergeable(uint32_t s)
 	return g->state == SEG_SEALED && g->run == 1 && !g->pending;
 }
 
+/* Holds one entry over half a segment (open segments take none): moving it takes a whole segment again, so compacting frees nothing. */
+static bool seg_big(uint32_t s) { return ((const nocopy_entry *) seg_start(s))->size > nocopy_seg_size / 2; }
+
 /* Compaction victims: the sparsest sealed segments, together <= one segment (*live), or the sparsest alone up to COMPACT_MAX. */
 static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 {
 	uint32_t nv = 0;
 	SH_SEGS(sh, s) {
-		if (mergeable(s) && seg_live(s) <= COMPACT_MAX) {
+		if (mergeable(s) && seg_live(s) <= COMPACT_MAX && !seg_big(s)) {
 			keep_least(v, &nv, MERGE_N, s, seg_live);
 		}
 	}

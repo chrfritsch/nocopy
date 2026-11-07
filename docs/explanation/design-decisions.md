@@ -14,6 +14,13 @@ worker pins it. The first design, an epoch plus a per-entry retire list, piled u
 **Pins released only at request end.** Userland may keep any fetched value until then, so there is no earlier safe point.
 Long-running processes therefore use copy mode.
 
+**A request keeps at most a quarter of the segments; past that its fetches copy.** Unbounded, one zero-copy request that read and
+wrote across a full arena pinned every segment and the cache collapsed for all workers (32 MB, random 500 B overwrites in one
+php -S request: 207 of 207 segments pinned, 203 dead, 27,962 entries -> 867, hit 90% -> 10%). With the cap: 27.5k entries, 88.7%
+hit (copy mode: 90.1%). Not gated on pressure (`unpin_gen`): the first writer to meet a pinned dead segment came when the request
+already kept ~185 of 207. Short Drupal run (`nocopy-all`, default 32 MB, 243 segments, cap 60), 28,640 requests: kept p50 5,
+p99 41, max 61; 193 (0.7%) reached the cap and copied the rest of their fetches.
+
 ## Sharing
 
 **`nocopy.shm_name` is required; without it there is no cache.** Unset or not attachable means a startup warning and no
@@ -111,6 +118,13 @@ third of the arena was dead. `bench/hitratio.php` 32M / 64M, 20% rewrites 87.4 -
 84.3 -> 90.2 / 83.6 -> 89.8; workloads without rewrites unchanged. It copies more (20% rewrites: 184 -> 808 MB moved):
 `ab.sh` ttl churn stores 2.37 -> 2.17 M/s, stores > 50 us 1.3k -> 3.6k, the slowest unchanged; other writes and fetches unchanged.
 Up to 1/2 live: +1 / +4 points; up to 7/8: +1 more point than 3/4 for twice the copying.
+
+**A segment holding one entry over half a segment is not compacted.** Such an entry gets a segment of its own; compacting it
+needed another whole segment, freed nothing and counted as progress, so the alloc loop copied it up to 2x the shard's share per store
+and never evicted: stores failed instead and readers kept the old value. `amp` scratch script (random overwrites, half reads),
+default 32 MB, values 1-120 KB: footprint 0.8 64.8 -> 6.1 µs/op, moved 52.7x -> 1.9x the bytes written, failed stores 1,693 -> 38
+(hit 89.1 -> 83.1%: the old figure counted stale values); footprint 1.2 135 -> 7.7 µs/op, 119x -> 3.5x. Values up to 20 KB and 500 B
+unchanged (test 077).
 
 **Keys stored as bytes, not `zend_string`s:** a block's key is only compared, so its 24-byte header and NUL went
 (500-byte value: 624 -> 600 bytes). 32M / 64M: Zipf 94.1 -> 94.6 / 93.6 -> 94.1, loop 1.1x 57 -> 76 / 72 -> 76,

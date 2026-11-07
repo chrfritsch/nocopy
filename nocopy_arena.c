@@ -112,6 +112,7 @@ void nocopy_after_fork(nocopy_ctx *c)
 void nocopy_keep_release(nocopy_ctx *c)
 {
 	memset(c->keep, 0, sizeof c->keep);
+	c->nkeep = 0;
 	if (!c->pin_refs) {
 		c->transient = true;
 		nocopy_drop_transient(c);

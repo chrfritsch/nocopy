@@ -305,7 +305,9 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 				hit = graph_copy_fetch(e, v, rv);
 			} else {
 				hit = nocopy_graph_out(rv, v, false);
-				nocopy_keep(c, e);
+				if (UNEXPECTED(nocopy_keep(c, e))) {
+					NOCOPY_G(zero_copy) = false; /* until the request ends */
+				}
 			}
 		} else if (Z_TYPE_P(v) < IS_STRING) {
 			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
@@ -321,7 +323,9 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 			}
 		} else {
 			ZVAL_COPY_VALUE(rv, v);
-			nocopy_keep(c, e); /* a pointer into the arena escaped: stay pinned until the request ends */
+			if (UNEXPECTED(nocopy_keep(c, e))) { /* a pointer into the arena escaped: stay pinned until the request ends */
+				NOCOPY_G(zero_copy) = false; /* until the request ends */
+			}
 		}
 	}
 	nocopy_count(c, hit);

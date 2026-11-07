@@ -116,6 +116,7 @@ typedef struct {
 	uint32_t rng;     /* xorshift state for the read counter */
 	uint32_t unpin_seen; /* nocopy_a->unpin_gen when the idle pins were last dropped */
 	uint32_t idle;       /* pins taken since then (upper bound) */
+	uint32_t nkeep;      /* segments in keep */
 	uint64_t mine[NOCOPY_SEG_WORDS]; /* published as pinned */
 	uint64_t keep[NOCOPY_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
 } nocopy_ctx;
@@ -262,10 +263,17 @@ static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 	return true;
 }
 
-/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_keep_release(). */
-static inline void nocopy_keep(nocopy_ctx *c, const void *p)
+/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_keep_release().
+ * True once more than a quarter of the segments are kept: kept pins block reclaim for everyone, so the caller's further fetches
+ * should copy. Not gated on pressure: a writer first meets a pinned dead segment when nearly all are kept. */
+static inline bool nocopy_keep(nocopy_ctx *c, const void *p)
 {
-	nocopy_segs_add(c->keep, nocopy_seg_of(p));
+	uint32_t s = nocopy_seg_of(p);
+	if (c->keep[s >> 6] & nocopy_segbit(s)) {
+		return false;
+	}
+	nocopy_segs_add(c->keep, s);
+	return ++c->nkeep > nocopy_a->nsegs / 4;
 }
 
 static inline void nocopy_drop_transient(nocopy_ctx *c)
