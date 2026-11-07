@@ -452,8 +452,27 @@ static valkeyReply *vk_call(nocopy_vk *v, smart_str *s)
 	return vk_send(v, s) ? vk_get(v) : NULL;
 }
 
+/* SUBSCRIBE's reply: a push, or an error (NOPERM) that is read here so later replies stay in step. Refused: only the idle exemption is lost. */
+static bool vk_subscribed(nocopy_vk *v)
+{
+	for (;;) {
+		valkeyReply *r;
+		if (valkeyGetReply(v->c, (void **) &r) != VALKEY_OK) {
+			return vk_fail(v);
+		}
+		bool push = r->type == VALKEY_REPLY_PUSH;
+		bool sub = push && r->elements && is_str(r->element[0]) && r->element[0]->len == 9 && memcmp(r->element[0]->str, "subscribe", 9) == 0;
+		if (push && !sub) {
+			vk_apply(r);
+		}
+		freeReplyObject(r);
+		if (!push || sub) {
+			return true;
+		}
+	}
+}
+
 /* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from Valkey's idle `timeout`.
- * The SUBSCRIBE confirmation is a push, applied (ignored) with the next reply.
  * ponytail: the connection counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of unread pushes. */
 static bool vk_handshake(nocopy_vk *v, bool track)
 {
@@ -484,7 +503,7 @@ static bool vk_handshake(nocopy_vk *v, bool track)
 		ok = r && r->type == VALKEY_REPLY_STATUS;
 		freeReplyObject(r);
 	}
-	return ok;
+	return ok && vk_subscribed(v);
 }
 
 /* A worker's command connection: no tracking, so a reconnect needs no local clear (the listener tracks). */
@@ -650,10 +669,10 @@ static void vk_spawn(void)
 }
 
 /* The listener is connected; started (and waited for, up to the timeout) when it is not running. */
-static bool listener_live(void)
+static bool listener_live(int wait_ms)
 {
 	nocopy_shared *a = NOCOPY_SHARED;
-	int64_t until = 0;
+	int64_t until = now_ms() + wait_ms;
 	for (;;) {
 		int64_t now = now_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
 		bool fresh = beat && now - beat < STALE_MS;
@@ -664,10 +683,10 @@ static bool listener_live(void)
 			__atomic_store_n(&a->vk_live, 0, __ATOMIC_RELEASE); /* the dead one's */
 			vk_spawn();
 		}
-		if (!until) {
-			until = now + vk_timeout_ms;
-		} else if (now >= until) {
-			php_error_docref(NULL, E_WARNING, "nocopy: the Valkey listener is not connected: no invalidations, local copies are not served");
+		if (now >= until) {
+			if (wait_ms) {
+				php_error_docref(NULL, E_WARNING, "nocopy: the Valkey listener is not connected: no invalidations, local copies are not served");
+			}
 			return false;
 		}
 		usleep(1000);
@@ -690,7 +709,14 @@ static bool vk_ready(void)
 	if (v->c && !vk_drain(v)) {
 		v->retry_at = 0; /* found closed with no command in flight: reconnect now, not after the pause */
 	}
-	if ((!v->c && !vk_connect(v)) || !listener_live()) {
+	if (!v->c && !vk_connect(v)) {
+		return false;
+	}
+	bool wait = now_ms() >= v->retry_at;
+	if (!listener_live(wait ? vk_timeout_ms : 0)) {
+		if (wait) {
+			v->retry_at = now_ms() + 500; /* the next calls check without waiting */
+		}
 		return false;
 	}
 	v->synced = true;

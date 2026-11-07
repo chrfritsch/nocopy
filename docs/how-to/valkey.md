@@ -21,6 +21,7 @@ nocopy.valkey=tcp://10.0.0.5:6379       ; or host:port, unix:///run/valkey.sock
 ```
 
 With a password or ACL user: `nocopy.valkey=tcp://user:secret@10.0.0.5:6379`. `phpinfo()` hides the credentials.
+The user needs the keys under the prefix and `CLIENT TRACKING` (the listener); channel access (`&*`) only spares idle connections Valkey's `timeout`.
 
 All servers must use the same `nocopy.serializer`.
 
