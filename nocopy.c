@@ -603,24 +603,21 @@ PHP_MINIT_FUNCTION(nocopy)
 
 	size_t need;
 	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
-	const char *err;
+	const char *err = NULL;
 	nocopy_named named;
 	if (!shm_name) {
 		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
-		err = NULL;
-	} else if (!(err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named))) {
+	} else if ((err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named)) == NOCOPY_TOO_SMALL) {
+		zend_error(E_CORE_ERROR, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
+		return FAILURE;
+	} else if (err) {
+		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
+	} else {
 		memcpy(shm_attached, named.name, sizeof shm_attached);
 		if (named.other[0]) {
 			php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
 		}
-	} else if (err != NOCOPY_TOO_SMALL) {
-		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
-		err = NULL;
-	}
-	if (err == NOCOPY_TOO_SMALL) {
-		zend_error(E_CORE_ERROR, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
-		return FAILURE;
 	}
 	if (nocopy_a) {
 		nocopy_value_minit();
