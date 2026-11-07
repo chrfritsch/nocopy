@@ -23,7 +23,7 @@ typedef struct nocopy_entry {
 	uint64_t h;       /* key hash */
 	size_t size;      /* whole block */
 	time_t expires;   /* last second it is alive; 0: never */
-	uint64_t seq;     /* insertion time, ns; strictly increasing per shard: iterator order without a shared counter */
+	uint64_t seq;     /* insertion time, us << 3 | shard; strictly increasing per shard: iterator order without a shared counter */
 	uint32_t created; /* unix time: 32 bits keep the header at 48 bytes (good until 2106) */
 	uint32_t klen;
 	uint8_t koff;     /* key bytes at (char *) e + koff */

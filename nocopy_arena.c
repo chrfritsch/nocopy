@@ -727,7 +727,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	e->created = (uint32_t) now;
 	e->flags = 0;
 	e->user = 0;
-	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | (uint64_t) (sh - nocopy_a->shards); /* commit makes it unique */
+	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | sh->idx; /* commit makes it unique */
 	*p = (nocopy_put) {.c = c, .sh = sh, .e = e, .locked = size <= NOCOPY_INLINE_PUT};
 	if (!p->locked) {
 		wip_set(c, e);
