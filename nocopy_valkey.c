@@ -40,7 +40,7 @@ static size_t vk_plen;
 static int vk_timeout_ms = 500;
 static bool vk_tls; /* tls:// or rediss:// */
 char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
-bool nocopy_vk_tls_verify = true;
+static bool nocopy_vk_tls_verify = true;
 
 static char *pdup(const char *s, size_t n)
 {
@@ -806,17 +806,12 @@ static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
 	return ok ? 1 : -1;
 }
 
-static int vk_unlink(const char *k, size_t kl)
+static int vk_eval_long(const char *script, size_t sl, const char *k, size_t kl, int64_t a1, int64_t a2, int64_t *out)
 {
-	zend_string *key = zend_string_init(k, kl, 0);
-	int64_t gone = 0;
-	int r = vk_unlink_n(1, &key, &gone);
-	zend_string_release(key);
-	return r < 0 ? -1 : gone > 0;
-}
-
-static int vk_eval_long(nocopy_vk *v, const char *script, size_t sl, const char *k, size_t kl, int64_t a1, int64_t a2, int64_t *out)
-{
+	nocopy_vk *v = vk_conn();
+	if (!v) {
+		return -1;
+	}
 	smart_str s = {0};
 	head(&s, 6), ARG(&s, "EVAL"), arg(&s, script, sl), ARG(&s, "1"), key_arg(&s, k, kl), arg_long(&s, a1), arg_long(&s, a2);
 	valkeyReply *r = vk_call(v, &s);
@@ -835,22 +830,14 @@ static int vk_eval_long(nocopy_vk *v, const char *script, size_t sl, const char 
 static int vk_incr(const char *k, size_t kl, int64_t delta, int64_t ttl_ms, int64_t *out)
 {
 	static const char lua[] = "if ARGV[2] ~= '0' and redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) return tonumber(ARGV[1]) end return redis.call('INCRBY', KEYS[1], ARGV[1])";
-	nocopy_vk *v = vk_conn();
-	if (!v) {
-		return -1;
-	}
-	return vk_eval_long(v, lua, sizeof lua - 1, k, kl, delta, ttl_ms, out);
+	return vk_eval_long(lua, sizeof lua - 1, k, kl, delta, ttl_ms, out);
 }
 
 static int vk_cas(const char *k, size_t kl, int64_t old, int64_t nw)
 {
 	static const char lua[] = "if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL') return 1 end return 0";
-	nocopy_vk *v = vk_conn();
-	if (!v) {
-		return -1;
-	}
 	int64_t ok = 0;
-	int r = vk_eval_long(v, lua, sizeof lua - 1, k, kl, old, nw, &ok);
+	int r = vk_eval_long(lua, sizeof lua - 1, k, kl, old, nw, &ok);
 	return r < 0 ? -1 : r && ok;
 }
 
@@ -1032,8 +1019,9 @@ nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 		return r == 0 ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
+	int64_t gone;
 	if (o->add_only && nocopy_put_local(key, val, &local, user) == NOCOPY_REFUSED) {
-		vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)); /* a resource: APCu refuses it */
+		vk_unlink_n(1, &key, &gone); /* a resource: APCu refuses it */
 		return NOCOPY_REFUSED;
 	}
 	return NOCOPY_OK;
@@ -1133,9 +1121,10 @@ void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 
 bool nocopy_vk_drop(zend_string *key)
 {
-	int r = vk_ready() ? vk_unlink(ZSTR_VAL(key), ZSTR_LEN(key)) : -1;
+	int64_t gone = 0;
+	int r = vk_ready() ? vk_unlink_n(1, &key, &gone) : -1;
 	vk_forget(key);
-	return r == 1;
+	return r == 1 && gone > 0;
 }
 
 zend_long nocopy_vk_drop_multi(HashTable *keys)
