@@ -29,6 +29,8 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../bench/results-drupal/2026-11-06-prod)) |
+| `./dev soak` (2026-11-07: 50 min heavy churn, 30 + 10 min TTLs with a read-only stretch) | published ([results](reference/benchmarks.md#soak-dev-soak)): flat, no leak; expired entries stay until the next write |
+| `./dev tail` with up to 1,000 idle slot holders, `./dev sfbench` with 256 fpm workers (2026-11-07) | published ([results](reference/benchmarks.md#many-workers)): no scaling cost |
 | `./dev opcache`, `./dev sfbench` with a `PhpFilesAdapter` pool (2026-11-07) | published ([results](reference/benchmarks.md#against-opcache-files-phpfilesadapter)): same req/s on read-only pages, nocopy reads 2.5-4x and writes 30-300x faster |
 | `./dev tail` (2026-11-07, 8 and 4 workers, twice at 8) | published ([results](reference/benchmarks.md#tail-latency-dev-tail)); open: p99.99 under 8-way contention is 1-1.8 ms, level with APCu |
 | `./dev sfbench` | published 2026-11-06 (evening, objects as graph nodes), with Symfony's production PHP settings ([results](reference/benchmarks.md#symfony-dev-sfbench)) |
@@ -43,7 +45,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
 4. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).
-   Open: a shard without writes expires only under memory pressure; RSS drifts to `nocopy.shm_size`. Steering segments
+   Open: a shard without writes expires only under memory pressure (soak: entries and `used` stay frozen, harmless since the memory is reserved up front); RSS drifts to `nocopy.shm_size`. Steering segments
    by `ghost_hits` (Cliffhanger, CacheLib's MarginalHits) instead of an even share: only with a workload that needs it.
 5. **Valkey:** Cluster (libvalkey's `cluster.c`, vendored next to the rest), Sentinel, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
    to save round trips.

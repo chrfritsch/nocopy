@@ -1,6 +1,7 @@
 <?php
 // Per-op latency percentiles of get and put from forked workers, under eviction and writer contention.
 // usage: php [-d ...] tail.php <scenario> [workers=8] [secs=10]      (TAIL_ZERO=1 + NOCOPY_SO: one php -S request, zero-copy)
+//   TAIL_IDLE=n: n more processes fetch once and then sleep, holding a worker slot and idle pins (php-fpm's idle children)
 //   fit: Zipf reads over keys filling half the memory, 1% of hits rewritten (no eviction)
 //   evict: Zipf read-through over 1.5x the memory, 20% of hits rewritten (eviction and compaction keep running)
 //   contend: half the workers read 64 hot 100-row arrays, half rewrite them
@@ -49,7 +50,16 @@ $zipf = function () use ($cdf, $s, $keys) {
 $dir = sys_get_temp_dir() . '/tail-' . getmypid();
 @mkdir($dir);
 $ev0 = $nc ? nocopy_stats()['evicted'] : apcu_cache_info(true)['expunges'];
-$start = microtime(true) + 0.2;
+$idle = (int) getenv('TAIL_IDLE');
+for ($c = 0; $c < $idle; $c++) {
+    if (pcntl_fork() === 0) {
+        if (!getenv('TAIL_IDLE_NOPIN')) { $x = $get('r0'); $x = $get('h0'); }
+        usleep((int) (($secs + 2) * 1e6));
+        if (PHP_SAPI === 'cli-server') pcntl_exec('/bin/true');
+        exit(0);
+    }
+}
+$start = microtime(true) + 0.2 + $idle / 2000;
 for ($c = 0; $c < $w; $c++) {
     if (pcntl_fork() === 0) {
         mt_srand($c + 1);
@@ -75,7 +85,7 @@ for ($c = 0; $c < $w; $c++) {
             }
             $b = (int) (log(max($d, 1), 2) * 16); $h[$op][$b] = ($h[$op][$b] ?? 0) + 1; if ($d > $max[$op]) $max[$op] = $d;
         } while ($t < $end);
-        file_put_contents("$dir/$c", serialize([$h, $max]));
+        file_put_contents("$dir/w$c", serialize([$h, $max]));
         if (PHP_SAPI === 'cli-server') pcntl_exec('/bin/true');
         exit(0);
     }
@@ -88,7 +98,7 @@ foreach (glob("$dir/*") as $f) {
     foreach ($max as $op => $m) $M[$op] = max($M[$op], $m);
 }
 rmdir($dir);
-$p = "$sc, $w workers:";
+$p = "$sc, $w workers" . ($idle ? " + $idle idle" : '') . ':';
 foreach ($H as $op => $bs) {
     if (!$bs) continue;
     ksort($bs);

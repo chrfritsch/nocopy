@@ -7,15 +7,15 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | Key | Meaning |
 |---|---|
 | `size` | Arena size in bytes (`nocopy.shm_size` of the creator) |
-| `used` | Bytes held by entries |
-| `entries` | Live entries |
+| `used` | Bytes held by entries (also expired ones not yet removed) |
+| `entries` | Live entries, including expired ones not yet removed (removal runs on writes) |
 | `hits`, `misses` | Fetches that found / did not find their key, by every process |
 | `evicted` | Entries removed to make room |
 | `expired` | Entries removed because their TTL passed |
 | `expunges` | Eviction rounds (each merges up to 4 old segments: read entries move forward, the rest go) |
 | `ghost_hits` | New keys recognized as recently evicted, which then get extra protection from eviction |
 | `evacuated_bytes` | Bytes moved by compaction and eviction rounds |
-| `segment_size` | Bytes per segment (a power of two, 64 KB-2 MB) |
+| `segment_size` | Bytes per segment (a power of two, 64 KB-128 MB: at most 256 segments) |
 | `segments` | Segments in the arena |
 | `free_segments` | Segments in the shared pool, ready for any shard's writes |
 | `dead_segments` | Segments without live entries, not yet reused (a reader may still pin them) |

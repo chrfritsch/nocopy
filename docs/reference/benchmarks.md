@@ -192,6 +192,55 @@ nocopy in copy mode (CLI); 2026-11-07, Docker on arm64 (11 cores), second of two
 
 ¹ APCu stores the arrays serialized (smaller), so the same keys fit and it never expunged: its rows show no eviction cost.
 
+### Many workers
+
+`reclaim()` ORs every claimed worker slot's pin bitmap before it frees a segment, so its cost grows with processes. The
+arena has at most 256 segments (bigger arenas get bigger segments), so a bitmap is 4 words and 1,024 slots are 32 KB to
+read. Measured 2026-11-07 with `TAIL_IDLE=n ./dev tail`-style runs: 8 busy workers plus n processes that hold a slot and sleep.
+
+| put p99.99, µs | idle 0 | 56 | 248 | 1,000 |
+|---|---:|---:|---:|---:|
+| 64M, evict | 921 | 710 | 1,360 | 1,764 |
+| 1G, rewrites (no eviction) | 163 | 262 | 597 | 710 |
+| 1G again, two runs each: slots only / slots + idle pins | 163-441 | | | 185-326 / 441-597 |
+
+p99, p99.9 and throughput stay flat in every row. Slots alone cost nothing measurable; idle processes that also pin (CLI
+workers between calls: php-fpm drops pins at request end) add at most ~1.5x at p99.99, inside the run-to-run spread.
+`./dev sfbench` with 256 fpm workers and 64 concurrent requests gives the same req/s as with 8 (nocopy 16,706 / 15,418 on
+`products` / `product/77`, APCu raw 4,545 / 4,320).
+
+## Soak (`./dev soak`)
+
+`bench/soak.php`: 8 long-lived CLI workers (copy mode) on a 256M arena, one line per minute. Per op 88% read-through gets
+(Zipf; the key set shifts every 5 minutes, a third of it stays), 8% puts, 2% deletes, 2% `nocopy_inc`; values 100 B-20 KB
+strings and arrays, 0.5-2 MB on cold keys; TTL none / 30 s / 300 s. 2026-11-07, Docker on arm64.
+
+**Heavy churn**, key set 2x the arena, 50 minutes (stopped there: flat since minute 2), first vs last 10 minutes:
+
+| | hit % | gets/s | get p99.9 | put p99 / p99.99 | used MB / entries | worker private RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| minutes 2-11 | 81.2 | 1.99 M | 48 µs | 137 µs / 1.37 ms | 179 / 24.1 k | 22.9 MB |
+| minutes 41-50 | 81.1 | 1.96 M | 49 µs | 138 µs / 1.50 ms | 179 / 23.9 k | 23.0 MB |
+
+No leak in long-lived copy-mode workers, no fragmentation building up, 0 lock steals. ~370,000 misses/s are each re-put and
+evict an entry; merge moves about as many bytes forward (~2.8 GB/s), which holds put p99 at ~137 µs. Put max was 13-37 ms
+per minute (VM), once 160 ms.
+
+**TTLs and a read-only stretch**, key set half the arena (`SOAK_FP=0.5`), writes stopped at minute 6 (`SOAK_RO_AT=6`):
+
+| minute | hit % | gets/s | used MB | entries | expired |
+|---:|---:|---:|---:|---:|---:|
+| 5 | 97.6 | 2.38 M | 156.7 | 21,270 | 0 |
+| 6 (writes stop) | 97.6 | 2.29 M | 144.3 | 19,556 | 239 |
+| 8-10 | 66.5 | 4.75 M | 144.3 | 19,556 | 0 |
+
+- Expiry runs only on writes (each write steps its shard's expiry cursor; a failed allocation runs a large step before any
+  eviction). Without writes, expired entries keep their bytes and count in `entries`, and reads just miss them. The memory is
+  reserved up front anyway, and the next writes expire before they evict.
+- With 8% rewrites (each key rewritten ~10 times a second) live bytes stay at 55-60% of the arena and merge still evicts:
+  an overwritten copy is dead space until its segment is compacted (as in [hit ratio](#against-apcu-and-redis)).
+  Most expiring entries were evicted before their TTL passed (`expired` in the hundreds, `evicted` ~400k a minute).
+
 ## Batches (`nocopy_get_multiple` / `put_multiple`), one host
 
 | | PHP loop of single calls | `*_multiple` |
