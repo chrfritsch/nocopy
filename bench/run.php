@@ -29,8 +29,9 @@ function out(string $name, float $v, string $unit): void {
     echo json_encode(['name' => $name, 'v' => round($v, 3), 'unit' => $unit]), "\n";
 }
 
-/** Median ns/op of $fn($n) over 5 reps; n auto-scaled so a rep takes ~120ms. */
+/** Median ns/op of $fn($n) over 5 reps; n auto-scaled so a rep takes ~120ms. Env ONLY: regex on names, others skipped. */
 function bench(string $name, callable $fn): void {
+    if (($only = getenv('ONLY')) && !preg_match("~$only~i", $name)) return;
     $n = 100;
     do { $n *= 2; $t = hrtime(true); $fn($n); $e = hrtime(true) - $t; } while ($e < 20e6);
     $n = (int) ($n * 120e6 / $e) + 1;

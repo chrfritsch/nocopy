@@ -1,11 +1,11 @@
 #!/bin/sh
 # A/B benchmark of two source trees in one container, runs interleaved so machine noise hits both alike.
-#   docker run --rm --shm-size=1g -v <old>:/a:ro -v <new>:/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh [reps=3] [groups]
+#   ./dev ab [ref] [reps] [groups], or docker run --rm --shm-size=1g -v <old>:/a:ro -v <new>:/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh [reps=3] [groups]; env ONLY: names by regex
 # Prints the best run per measurement (min time, max rate: interference only ever slows a run down) for each tree and mode (copy = CLI, zero = under php -S via bench/zero.php).
 reps=${1:-3}; groups=${2:-read write parallel mixed contend ttl}
 for t in a b; do
   rm -rf /build-$t && mkdir /build-$t && cp /$t/*.c /$t/*.h /$t/config.m4 /build-$t/ && { [ ! -d /$t/third_party ] || cp -R /$t/third_party /build-$t/; }
-  (cd /build-$t && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>&1) || { echo "build $t failed"; exit 1; }
+  (cd /build-$t && phpize >/dev/null 2>&1 && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>&1) || { echo "build $t failed"; exit 1; }
 done
 R=/tmp/ab; rm -rf $R; mkdir -p $R
 C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=512M -d apc.entries_hint=200000"

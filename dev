@@ -23,7 +23,8 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   tidy                        clang-tidy over the C sources (.clang-tidy)
   ci                          everything above (what CI runs, one PHP version)
 
-  bench                       micro benchmarks vs APCu
+  bench [groups]              micro benchmarks vs APCu (ONLY=regex: those measurements only)
+  ab [ref=main] [reps=3] [groups]  A/B: ref vs working tree, interleaved, best of reps (ONLY=regex)
   sfbench                     Symfony app (bench/sfapp) under nginx + fpm, APCu vs nocopy (WORKERS, REQS, CONC)
   stampede [workers secs ttl ms]
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
@@ -65,7 +66,9 @@ case $cmd in
   ci)         for c in tidy test novalkey asan clang stress c shm zts frankenphp symfony; do
                 echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
-  bench)      img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/bench.sh ;;
+  bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;
+  ab)         ref=${1:-main}; [ $# -gt 0 ] && shift; a=.cache/ab-old; rm -rf "$a" && mkdir -p "$a" && git archive "$ref" | tar -x -C "$a"
+              img; run --shm-size=1g -e ONLY -v "$PWD/$a":/a:ro -v "$PWD":/b:ro "nocopy-linux:$PHP" /src/docker/ab.sh "${1:-3}" "${2:-read write parallel mixed contend ttl}" ;;
   sfbench)    a=.cache/sfapp; rm -rf "$a" && mkdir -p "$a/nocopy-bundle" && cp -r bench/sfapp/composer.json bench/sfapp/src bench/sfapp/public "$a/" && cp -r symfony/src "$a/nocopy-bundle/"
               docker run --rm -v "$PWD/$a":/app -w /app composer:2 install -q --no-dev --classmap-authoritative '--ignore-platform-req=ext-*'
               img; run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro "nocopy-linux:$PHP" /src/docker/fpm-bench.sh ;;

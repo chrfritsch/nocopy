@@ -65,9 +65,11 @@ To compare two versions of the code (e.g. `main` and your change), run both tree
 hits both alike:
 
 ```sh
-git worktree add ../nocopy-main main
-docker run --rm --shm-size=1g -v "$PWD/../nocopy-main":/a:ro -v "$PWD":/b:ro -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/ab.sh 3 "read write"
+./dev ab main 3 "read write"                   # main vs the working tree, best of 3
+ONLY='store array' ./dev ab HEAD~1 7 write     # only the measurements you changed: seconds per round, not minutes
 ```
+
+A full round (all groups, both trees, both modes) takes about 2 minutes; `read` and `write` are most of it (0.65 s per measurement).
 
 Hit ratio under a key distribution, in `./dev shell`:
 
