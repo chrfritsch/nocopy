@@ -5,6 +5,7 @@ use Symfony\Bundle\FrameworkBundle\FrameworkBundle;
 use Symfony\Bundle\FrameworkBundle\Kernel\MicroKernelTrait;
 use Chrfritsch\NocopyBundle\NocopyBundle;
 use Symfony\Component\Cache\Adapter\ApcuAdapter;
+use Symfony\Component\Cache\Adapter\PhpFilesAdapter;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
 use Symfony\Component\HttpKernel\Kernel as BaseKernel;
 use Symfony\Component\Routing\Loader\Configurator\RoutingConfigurator;
@@ -37,6 +38,8 @@ class Kernel extends BaseKernel
         } else {
             $c->services()->set('app.cache_raw', ApcuAdapter::class)->args(['raw', 0, null, null])->public();
         }
+        // RAW=files: values as PHP files, served from OPcache (zero-copy for arrays of scalars)
+        $c->services()->set('app.cache_files', PhpFilesAdapter::class)->args(['files', 0, '%kernel.cache_dir%/pools/files'])->public();
         $c->parameters()->set('.container.dumper.inline_factories', true);
         $c->services()->defaults()->autowire()->autoconfigure()->public()
             ->load('App\\', __DIR__)->exclude(__DIR__.'/Kernel.php');

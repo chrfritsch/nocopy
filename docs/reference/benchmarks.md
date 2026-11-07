@@ -53,6 +53,34 @@ reach 95-100% of it (`products` above nocopy's own `hello` is run-to-run noise, 
 (Symfony chains APCu in front only when APCu is loaded) and `validate` was 12-20% below APCu: 9,286 / 10,252 / 8,182. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
 (nocopy) on `products`, with a `hello` ceiling of ~9,400.
 
+### Against OPcache files (`PhpFilesAdapter`)
+
+Symfony's `PhpFilesAdapter` (its system pools' backend) writes each value as a PHP file; OPcache then serves the arrays from
+shared memory without a copy too. Same `./dev sfbench`, a third pool on it (`RAW=files`), one run 2026-11-07:
+
+| req/s | APCu (raw) | PHP files (OPcache) | nocopy (raw) |
+|---|---:|---:|---:|
+| `hello` | 14,922 | 15,690 | 16,790 |
+| `products?page=3` | 3,985 | 14,348 | 14,534 |
+| `product/77` | 4,118 | 14,549 | 14,910 |
+
+Both reach the `hello` ceiling: on a page that reads one big array, OPcache files are as good. Where they differ
+(`./dev opcache`: both zero-copy, one `php -S` request, `opcache.file_update_protection=0` so new files are cached at once;
+two runs, equal within 10%):
+
+| | PHP file in OPcache | nocopy |
+|---|---:|---:|
+| fetch array, 1k rows | 52 ns | 13 ns |
+| fetch 1 of 1,000 small keys | 112 ns | 43 ns |
+| store a 1-row array (write, invalidate, compile on next include) | 32-39 µs | 0.11 µs |
+| store a 1k-row array | 2.3 ms | 73 µs |
+| OPcache memory wasted per rewrite of the 1k-row array | 385 KB | 0 |
+
+- Each rewrite leaves the old script in OPcache as wasted memory; at `opcache.max_wasted_percentage` (default 5%) OPcache
+  restarts and every script of the app is compiled again. Files also never evict and are per server.
+- So OPcache files fit data written once per deploy (config, routes, metadata: what Symfony uses them for); nocopy fits
+  data written at runtime, and still reads 2.5-4x faster.
+
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 
 2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host; median of 3 runs on the evening of 2026-11-06

@@ -33,6 +33,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev bench [groups]` | `bench/run.php` groups (default all: read write parallel mixed contend ttl) ×3 for APCu, nocopy copy and zero-copy; prints medians. Env: `ONLY` (regex on measurement names, the rest skipped) |
 | `./dev ab [ref=main] [reps=3] [groups]` | `docker/ab.sh`: `ref` (via `git archive`, in `.cache/ab-old`) vs the working tree, interleaved in one container, best of `reps`, copy and zero mode. Env: `ONLY` |
 | `./dev sfbench` | `bench/sfapp` under nginx + php-fpm with Symfony's recommended production PHP settings: APCu (with and without Symfony's marshaller) vs the bundle, 4 pages, median of 3. Env: `WORKERS`, `REQS`, `CONC` |
+| `./dev opcache` | `bench/opcache.php`: nocopy vs values kept as PHP files in OPcache (Symfony's `PhpFilesAdapter`), fetch, store, OPcache waste per rewrite |
 | `./dev tail [workers=8] [secs=10] [scenarios]` | `bench/tail.php`: get/put latency p50..p99.99 and max under `fit`, `evict`, `contend`; APCu, nocopy copy and zero-copy |
 | `./dev stampede [workers secs ttl compute_ms]` | `bench/stampede.php`: naive vs `apcu_entry` vs `nocopy_remember` |
 | `./dev drupal-bench` | Drupal 11 under nginx + php-fpm + MariaDB, 9 cache configs, 4 pages (front page, node, term, JSON:API); results to `bench/results-drupal/`. Env: `WORKERS`, `CONC`, `REQS`, `REQS_AUTH`, `EDITOR_T`, `CONFIGS` (see `docker/drupal-bench.sh`); `MEM_ONLY=1` memory per worker, `PERF_ONLY=1` perf over the container (CPU by process, library, symbol) |

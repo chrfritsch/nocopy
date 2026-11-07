@@ -15,9 +15,11 @@ class BenchController
 {
     private CacheInterface $cache;
 
-    public function __construct(CacheInterface $cache, #[Autowire(service: 'app.cache_raw')] CacheInterface $raw)
+    public function __construct(CacheInterface $cache, #[Autowire(service: 'app.cache_raw')] CacheInterface $raw,
+        #[Autowire(service: 'app.cache_files')] CacheInterface $files)
     {
-        $this->cache = getenv('RAW') ? $raw : $cache; // RAW=1: bypass Symfony's serializing marshaller
+        // RAW=1: bypass Symfony's serializing marshaller; RAW=files: PhpFilesAdapter
+        $this->cache = match (getenv('RAW')) { 'files' => $files, '1' => $raw, default => $cache };
     }
 
     private function catalog(): array
