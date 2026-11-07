@@ -30,6 +30,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   sfbench                     Symfony app (bench/sfapp) under nginx + fpm, APCu vs nocopy (WORKERS, REQS, CONC)
   stampede [workers secs ttl ms]
   opcache                     nocopy vs values as PHP files in OPcache (PhpFilesAdapter's mechanism), zero-copy both
+  big [sizes="1G 4G"] [secs=20]  large arenas: create/attach time, fill, eviction pauses (needs RAM for the arena)
   soak [minutes=60] [workers=8] [interval_s=30]  long mixed workload, one line per interval to spot drift
   tail [workers=8] [secs=10] [scenarios]  get/put latency percentiles (p50..p99.99, max) under eviction and contention, vs APCu
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
@@ -79,6 +80,9 @@ case $cmd in
               docker run --rm -v "$PWD/$a":/app -w /app composer:2 install -q --no-dev --classmap-authoritative '--ignore-platform-req=ext-*'
               img; run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro "nocopy-linux:$PHP" /src/docker/fpm-bench.sh ;;
   opcache)    img; run --shm-size=1g "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && NOCOPY_SO=/build/modules/nocopy.so php -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-opc -d nocopy.shm_size=256M /src/bench/opcache.php; rm -f /dev/shm/nocopy-opc.*' ;;
+  big)        img; run --shm-size=9g "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null; N="-n -d extension=pcntl -d memory_limit=1G -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-big"
+              for m in ${1:-1G 4G}; do rm -f /dev/shm/nocopy-big.*; s=$(date +%s%N); php $N -d nocopy.shm_size=$m -r "nocopy_stats();"; e=$(date +%s%N)
+              echo "$m create: $(( (e - s) / 1000000 )) ms"; php $N -d nocopy.shm_size=$m /src/bench/big.php ${2:-20}; done; rm -f /dev/shm/nocopy-big.*' big "$@" ;;
   soak)       img; run --shm-size=1g "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && php -n -d extension=pcntl -d memory_limit=1G -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-soak -d nocopy.shm_size=256M /src/bench/soak.php "$@"; rm -f /dev/shm/nocopy-soak.*' soak "$@" ;;
   tail)       img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/tail.sh "$@" ;;
   fpbench)    a=.cache/sfapp; rm -rf "$a" && mkdir -p "$a/nocopy-bundle" && cp -r bench/sfapp/composer.json bench/sfapp/src bench/sfapp/public "$a/" && cp -r symfony/src "$a/nocopy-bundle/"

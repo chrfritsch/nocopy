@@ -260,6 +260,28 @@ per minute (VM), once 160 ms.
   an overwritten copy is dead space until its segment is compacted (as in [hit ratio](#against-apcu-and-redis)).
   Most expiring entries were evicted before their TTL passed (`expired` in the hundreds, `evicted` ~400k a minute).
 
+## Large arenas (`./dev big`)
+
+`bench/big.php`: fill the arena (3 in 4 a 500-byte string, 1 in 4 a 10-row array) until it evicts, then 4 readers (skewed
+over the stored keys) and 4 writers of new keys, so every write evicts, for 20 s. 2026-11-07, Docker on arm64 (16 GB VM).
+
+| | 256M | 1G | 2G | 4G | 8G¹ |
+|---|---:|---:|---:|---:|---:|
+| segment size | 1 MB | 4 MB | 8 MB | 16 MB | 32 MB |
+| create (first process) / attach | 37 / 8 ms | 88 / 7 ms | | 321 / 7 ms | 523 / 6 ms |
+| fill until eviction | 0.2 s | 0.9 s | | 4.2 s | 8.9 s |
+| gets/s, get p99.99 | 6.3 M, 51 µs | 4.2-4.5 M, 71-89 µs | 3.7 M, 93 µs | 3.4-3.7 M, 97-149 µs | 0.9-1.2 M, 1.1-1.5 ms |
+| eviction rounds/s, MB moved per round | 438, 0.6 | 107-111, 3.3-3.5 | 51, 7.3 | 23, 14.6 | 4-5, 24-26 |
+| puts over 10 ms / over 50 ms (20 s) | | 446 / 0 | 2,059 / 0 | 1,860 / 0-7 | 333-391 / 313-376 |
+| put max | 21 ms | 21-25 ms | 37 ms | 51-111 ms | 239-354 ms |
+
+- **An eviction round holds its shard's lock for as long as it takes to move up to a segment's worth of entries**, so
+  writers to that shard wait in proportion to the segment size: ~10-25 ms at 1G, up to ~50-110 ms at 4G. Reads never wait
+  (no get over 50 ms at any size up to 4G). By extrapolation a 32G arena (128 MB segments) stalls a shard's writers for
+  hundreds of ms per round. Open, see [status](../status.md).
+- Create time is `posix_fallocate` of the whole arena, ~65 ms per GB, once per server start. Attaching costs nothing.
+- ¹ 8G does not fit this VM: 1.7 GB of swap was in use during the run, so its slower reads and longer pauses are not the store alone.
+
 ## Batches (`nocopy_get_multiple` / `put_multiple`), one host
 
 | | PHP loop of single calls | `*_multiple` |
