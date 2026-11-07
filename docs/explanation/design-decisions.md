@@ -67,6 +67,12 @@ of 20 rows under Zipf: local_size 4M 320-371 -> 233-242 ns, 1M 423-429 -> 333-36
 Price: kept-copy hits +0.6-2 ns (`ab.sh read`, near its noise); a loop over more than the budget 788-1490 -> 1474-1711 ns (more copies kept,
 then freed unused). Copy mode is what long-running workers use, so this is their part of zero-copy: give them a `local_size` that holds their working set.
 
+**Deduped value strings get one private copy per copy-out, not one per use** (persisting marks them with refcount 3; the
+key table finds the first copy by arena pointer, as for keys). Cold copies (`local_size=0`, scratch A/B, best of 7): 1k rows with
+4 repeated strings each 78.0 -> 69.7 µs (+12%), 10 such rows 764 -> 742 ns, 100 objects with 2 repeated strings 4.81 -> 4.29 µs
+(+12%); 1k rows of unique strings -0.6% (HEAD against itself ±0.6%). Asking the table for every string (no mark) cost unique rows
+-5%, marking 1-char strings too -2.5%. `./dev ab HEAD 5 read write`: within noise (kept copies and zero-copy never copy out).
+
 **Copy-out of `""` and 1-char strings uses PHP's interned ones** (`ZVAL_STRINGL_FAST`): no allocation. A cold copy of
 `bench/run.php`'s 1k rows (two 1-char strings each, `local_size=0`) 69 -> 59 µs.
 

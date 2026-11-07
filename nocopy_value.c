@@ -133,7 +133,13 @@ static zend_always_inline zend_string *persist_vstr(persist *p, zend_string *s)
 		return nocopy_persist_str(p, s);
 	}
 	nocopy_kslot *k;
-	return key_seen(&p->keys, s, zend_string_hash_val(s), &k) ? k->copy : (k->copy = nocopy_persist_str(p, s));
+	if (key_seen(&p->keys, s, zend_string_hash_val(s), &k)) {
+		if (ZSTR_LEN(s) > 1) {
+			GC_SET_REFCOUNT(k->copy, 3); /* used more than once in the block: copy-out shares one copy (shorter: PHP's interned) */
+		}
+		return k->copy;
+	}
+	return k->copy = nocopy_persist_str(p, s);
 }
 
 /* The table's data (hash and buckets) into the block; a map's hash shrunk to map_mask, its buckets rechained as opcache compacts. */
@@ -304,11 +310,29 @@ void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 
 /* ---- leaving shared memory ---- */
 
+/* A string persist_vstr stored once for several uses: they share one copy (keys reset for this value). */
+static __attribute__((noinline)) void copy_shared_str(nocopy_keys *keys, zval *dst, zend_string *s)
+{
+	nocopy_kslot *k = key_slot(keys, ZSTR_H(s));
+	if (k->gen == keys->gen && k->s == s) {
+		ZVAL_STR_COPY(dst, k->copy);
+		return;
+	}
+	key_put(keys, k, s, ZSTR_H(s));
+	k->copy = zend_string_init(ZSTR_VAL(s), ZSTR_LEN(s), 0);
+	ZSTR_H(k->copy) = ZSTR_H(s);
+	ZVAL_STR(dst, k->copy);
+}
+
 void nocopy_copy_into(nocopy_keys *keys, zval *dst, const zval *src)
 {
 	switch (Z_TYPE_P(src)) {
 		case IS_STRING:
-			ZVAL_STRINGL_FAST(dst, Z_STRVAL_P(src), Z_STRLEN_P(src)); /* "" and 1 char: interned, no alloc */
+			if (UNEXPECTED(GC_REFCOUNT(Z_STR_P(src)) > 2)) {
+				copy_shared_str(keys, dst, Z_STR_P(src));
+			} else {
+				ZVAL_STRINGL_FAST(dst, Z_STRVAL_P(src), Z_STRLEN_P(src)); /* "" and 1 char: interned, no alloc */
+			}
 			break;
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(src);
