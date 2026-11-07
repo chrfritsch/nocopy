@@ -47,6 +47,13 @@ On one shard at 73% fill: hit 28.8 -> 17.8 ns, miss 58.3 -> 15.2 ns, delete+put 
 distinct keys` 22.1 -> 26.8 ns (keys spread over more cache lines). Test 018 picks keys homed in the first half to keep
 its race window.
 
+**Unseeded key hash, accepted:** keys are hashed with `zend_string_hash_val()` (DJBX33A, no seed), so colliding keys are
+easy to build (`Ez`/`FY` pairs). 65,536 of them in a 256M arena: put 4.9 s, get 5.8 s (normal keys 0.008 / 0.002 s), each
+put probing under its shard lock; unrelated misses on a 65k cluster 0.074 s per 50k. A per-arena seeded XXH3 removed it
+(0.008 / 0.004 s) but cost every keyed call 1.5-2 ns, PHP's hash being cached in the string: `./dev ab` fetch int 10.9 ->
+12.6 ns, string 100B 19.0 -> 21.9, `get_multiple` 10 keys 111 -> 139, inc 10.3 -> 11.8, parallel fetches -8..-13%. APCu has
+the same weakness. Callers with keys from user input hash them first ([functions](../reference/functions.md)).
+
 **Fixed slot tables, not growable:** no stall while growing. Price: many tiny entries evict by count before memory is full;
 raise `nocopy.entries_hint`.
 

@@ -7,6 +7,10 @@ Signatures come from [`nocopy.stub.php`](../../nocopy.stub.php).
 
 `$ttl` is in seconds, `0` = no expiry; longer than 2^32 s (~136 years) is capped there. Like APCu, an entry lives through the whole second it expires in: `ttl: 1` lives 1-2 s.
 
+Keys are hashed with PHP's own, unseeded string hash (as in APCu): keys that collide can be crafted. Build keys from user
+input only through a keyed hash, e.g. `hash_hmac('xxh128', $input, $secret)`, or [colliding keys slow every write on their
+shard](../explanation/design-decisions.md#hashing-and-slots).
+
 ## Read
 
 ### `nocopy_get(string $key, mixed &$hit = null): mixed`
