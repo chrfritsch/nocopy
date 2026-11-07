@@ -372,19 +372,10 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 	} ZEND_HASH_FOREACH_END();
 }
 
-void nocopy_mark_failed(HashTable *failed, zend_string *key)
-{
-	if (failed && !EG(exception)) {
-		zval m;
-		ZVAL_LONG(&m, -1);
-		zend_symtable_update(failed, key, &m);
-	}
-}
-
-bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
+bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o)
 {
 	if (nocopy_vk_on && !o->add_only && nocopy_a) {
-		return nocopy_vk_store_multi(vals, o, failed); /* ponytail: add stays one round trip per key (NX decides first) */
+		return nocopy_vk_store_multi(vals, o); /* ponytail: add stays one round trip per key (NX decides first) */
 	}
 	zend_ulong h;
 	zend_string *k;
@@ -392,10 +383,7 @@ bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed
 	bool all = true;
 	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
 		zend_string *key = nocopy_key_of(k, h);
-		if (nocopy_store(key, v, o) != NOCOPY_OK) {
-			all = false;
-			nocopy_mark_failed(failed, key);
-		}
+		all &= nocopy_store(key, v, o) == NOCOPY_OK;
 		zend_string_release(key);
 		if (EG(exception)) {
 			break;

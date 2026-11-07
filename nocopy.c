@@ -234,7 +234,7 @@ PHP_FUNCTION(nocopy_put_multiple)
 		RETURN_THROWS();
 	}
 	const nocopy_opts o = {.ttl = ttl};
-	bool ok = nocopy_store_multi(vals, &o, NULL);
+	bool ok = nocopy_store_multi(vals, &o);
 	if (EG(exception)) {
 		RETURN_THROWS();
 	}

@@ -1040,20 +1040,15 @@ nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 }
 
 /* nocopy_vk_store for many keys: local copies first, then every SET in one pipeline. */
-bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed)
+bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 {
+	if (!vk_ready()) {
+		return false;
+	}
 	zend_ulong h;
 	zend_string *k;
 	zval *v;
 	bool all = true;
-	if (!vk_ready()) {
-		ZEND_HASH_FOREACH_KEY(vals, h, k) {
-			zend_string *key = nocopy_key_of(k, h);
-			nocopy_mark_failed(failed, key);
-			zend_string_release(key);
-		} ZEND_HASH_FOREACH_END();
-		return false;
-	}
 	uint32_t cap = zend_hash_num_elements(vals), m = 0;
 	zend_string **keys = safe_emalloc(cap, sizeof *keys, 0), **enc = safe_emalloc(cap, sizeof *enc, 0);
 	vk_kv *kv = safe_emalloc(cap, sizeof *kv, 0);
@@ -1064,7 +1059,6 @@ bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *fai
 		if (!e) {
 			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 			all = false;
-			nocopy_mark_failed(failed, key);
 			zend_string_release(key);
 			if (EG(exception)) {
 				break;
@@ -1084,7 +1078,6 @@ bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *fai
 		if (res[i] != 1) {
 			nocopy_drop_local(ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
 			all = false;
-			nocopy_mark_failed(failed, keys[i]);
 		}
 		zend_string_release(keys[i]);
 		zend_string_release(enc[i]);

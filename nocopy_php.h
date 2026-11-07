@@ -82,9 +82,9 @@ bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no w
 bool nocopy_available(void); /* false: nocopy.shm_name could not be attached; the functions below then keep and serve nothing */
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
-/* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value; failed: key => -1 (may be NULL). */
+/* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value. */
 void nocopy_fetch_multi(HashTable *keys, HashTable *out);
-bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
+bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o); /* false: a value was not stored */
 bool nocopy_drop(zend_string *key);
 zend_long nocopy_drop_multi(HashTable *keys); /* how many existed */
 /* Integers in place under the shard lock. add: creates it as delta (ttl) if missing; false if it is not an integer or there is no room. */
@@ -98,7 +98,6 @@ void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
 bool nocopy_drop_local(const char *k, size_t len);
-void nocopy_mark_failed(HashTable *failed, zend_string *key);
 /* A HashTable key as a string (release it). */
 static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
 
@@ -120,7 +119,7 @@ uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
 nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
 bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
 void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out);
-bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o, HashTable *failed);
+bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o);
 bool nocopy_vk_drop(zend_string *key);
 zend_long nocopy_vk_drop_multi(HashTable *keys);
 bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
@@ -137,7 +136,7 @@ static inline uint32_t nocopy_vk_listener(void) { return 0; }
 static inline nocopy_status nocopy_vk_store(zend_string *k, zval *v, const nocopy_opts *o, uint32_t u) { (void) k, (void) v, (void) o, (void) u; return NOCOPY_NO_ROOM; }
 static inline bool nocopy_vk_fetch(zend_string *k, zval *rv, time_t *e, uint32_t *d) { (void) k, (void) e, (void) d; ZVAL_NULL(rv); return false; }
 static inline void nocopy_vk_fetch_multi(HashTable *k, HashTable *o) { (void) k, (void) o; }
-static inline bool nocopy_vk_store_multi(HashTable *v, const nocopy_opts *o, HashTable *f) { (void) v, (void) o, (void) f; return false; }
+static inline bool nocopy_vk_store_multi(HashTable *v, const nocopy_opts *o) { (void) v, (void) o; return false; }
 static inline bool nocopy_vk_drop(zend_string *k) { (void) k; return false; }
 static inline zend_long nocopy_vk_drop_multi(HashTable *k) { (void) k; return 0; }
 static inline bool nocopy_vk_add_long(zend_string *k, zend_long d, zend_long t, zend_long *o) { (void) k, (void) d, (void) t; *o = 0; return false; }
