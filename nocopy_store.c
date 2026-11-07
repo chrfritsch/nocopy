@@ -352,12 +352,14 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 		return;
 	}
 	zval *k, t;
+	nocopy_borrow_begin(&NOCOPY_G(ctx)); /* idle pins checked once per call, not per key */
 	ZEND_HASH_FOREACH_VAL(keys, k) {
 		ZVAL_DEREF(k);
 		if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL, false)) {
 			zend_symtable_update(out, Z_STR_P(k), &t);
 		}
 	} ZEND_HASH_FOREACH_END();
+	nocopy_borrow_end(&NOCOPY_G(ctx));
 }
 
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o)
