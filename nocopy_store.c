@@ -23,19 +23,6 @@ bool nocopy_tracked(void)
 
 /* ---- copy mode: private copies kept for the request ---- */
 
-/* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
-static zend_always_inline nocopy_local *local_way(const nocopy_entry *e);
-
-static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const zval *v)
-{
-	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
-	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(local_ok) || e->size > nocopy_local_size
-	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
-		return NULL;
-	}
-	return local_way(e);
-}
-
 /* Graphs keep a template (IS_PTR): objects are rebuilt from it on every fetch. */
 static void local_val_free(zval *v)
 {
@@ -46,6 +33,7 @@ static void local_val_free(zval *v)
 	}
 }
 
+/* The way for e's copy in its set: e's own, else the best victim. */
 static zend_always_inline nocopy_local *local_way(const nocopy_entry *e)
 {
 	if (UNEXPECTED(!NOCOPY_G(local))) {
@@ -66,6 +54,17 @@ static zend_always_inline nocopy_local *local_way(const nocopy_entry *e)
 		}
 	}
 	return victim;
+}
+
+/* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
+static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const zval *v)
+{
+	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
+	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(local_ok) || e->size > nocopy_local_size
+	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
+		return NULL;
+	}
+	return local_way(e);
 }
 
 static void local_flush(void)
@@ -279,7 +278,7 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 /* ---- reads ---- */
 
 /* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
-static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t *exp, uint32_t *delta, bool stale)
+static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta, bool stale)
 {
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	bool copy = !NOCOPY_G(zero_copy);
@@ -328,12 +327,7 @@ static zend_always_inline bool local_fetch_ex(zend_string *key, zval *rv, time_t
 	return hit;
 }
 
-static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
-{
-	return local_fetch_ex(key, rv, exp, delta, false);
-}
-
-bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { return local_fetch(key, rv, exp, delta); }
+bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { return local_fetch(key, rv, exp, delta, false); }
 
 static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
@@ -344,7 +338,7 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, ui
 		}
 		return nocopy_vk_fetch(key, rv, exp, delta);
 	}
-	return local_fetch(key, rv, exp, delta);
+	return local_fetch(key, rv, exp, delta, false);
 }
 
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
@@ -361,7 +355,7 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 	zval *k, t;
 	ZEND_HASH_FOREACH_VAL(keys, k) {
 		ZVAL_DEREF(k);
-		if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL)) {
+		if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL, false)) {
 			zend_symtable_update(out, Z_STR_P(k), &t);
 		}
 	} ZEND_HASH_FOREACH_END();
@@ -481,7 +475,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		if (fetch(key, rv, NULL, NULL)) {
 			return; /* the holder stored it */
 		}
-		if (beta > 0 && !nocopy_detour && local_fetch_ex(key, rv, NULL, NULL, true)) {
+		if (beta > 0 && !nocopy_detour && local_fetch(key, rv, NULL, NULL, true)) {
 			return; /* stale-while-revalidate: the expired value, while the holder computes the new one */
 		}
 		if (now_s(CLOCK_MONOTONIC) > deadline) {
