@@ -1168,9 +1168,6 @@ void nocopy_arena_unhold(void)
 
 bool nocopy_arena_current(void)
 {
-	if (!named_name[0]) {
-		return true;
-	}
 	struct stat b;
 #ifdef __linux__
 	char path[80];
