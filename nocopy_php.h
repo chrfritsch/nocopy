@@ -79,7 +79,6 @@ void nocopy_store_rshutdown(void); /* drops copy mode's copies */
 void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
-bool nocopy_available(void); /* false: nocopy.shm_name could not be attached; the functions below then keep and serve nothing */
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
 /* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value. */

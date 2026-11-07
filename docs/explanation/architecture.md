@@ -15,7 +15,7 @@ Layers, each using only the one below it:
 - `nocopy.c`: `nocopy_*`, INI, the module, FrankenPHP's worker hook. Pins only through the arena's calls (`nocopy_drop_idle`, `nocopy_request_end`).
 - `nocopy_valkey.c` (optional, `--disable-nocopy-valkey` leaves it out): the Valkey tier. `nocopy_store.c` reaches it only through `nocopy_vk_*` in `nocopy_php.h` (inline stubs without it), and only on `detour`; the tier uses the local store's pieces exported there (`nocopy_put_local`/`fetch_local`/`drop_local`) and the value layer's `serialize`/`unserialize`.
 - `apcu/apcu.php` (PHP, not built): `apcu_*` over `nocopy_*` for code that cannot switch. The extension only registers `apc.enabled`/`apc.enable_cli` (when APCu is not loaded), which callers check before using `apcu_*`.
-- No arena (`nocopy.shm_name` not set or not attached, `nocopy_available()` false): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
+- No arena (`nocopy.shm_name` not set or not attached, `nocopy_a` NULL): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 

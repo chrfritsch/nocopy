@@ -12,11 +12,6 @@
 size_t nocopy_local_size = 8 * 1024 * 1024;
 bool nocopy_detour;
 
-bool nocopy_available(void)
-{
-	return nocopy_a != NULL;
-}
-
 bool nocopy_tracked(void)
 {
 	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) { /* no arena (unavailable): the store API fails softly instead */
