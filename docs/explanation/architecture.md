@@ -19,7 +19,7 @@ Layers, each using only the one below it:
 
 `tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
-Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
+Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT (php-fpm's master as root: in each worker's first RINIT, after it dropped to the pool's user, so root never maps memory workers write) at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
 - Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
 - Liveness: every process that maps it holds a shared `flock` on its object for life (fd kept open, inherited by forks, closed on exec). `LOCK_EX|LOCK_NB` succeeds only on an object no process maps.
 - Create: `O_EXCL`, then `LOCK_SH` and a check that the name still refers to this object (`hold`: same `st_dev`/`st_ino`; someone may have removed it as unused in between),
@@ -27,7 +27,7 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 - Attach: refuse an object not owned by our euid or open to group/others (`owned`: another user can create the name first in `/dev/shm`, and root ignores the mode). Map the header anywhere, wait up to 2 s for `magic`; while it is missing and the object is unused, its creator died: `remove_unused` unlinks it (under `LOCK_EX`, only if the name still refers to it) and we start over. Then check `abi`, `nshards`, `hold`, map at `base`.
   Test 079: root refuses nobody's object and its own at 0666.
   Test 060: 24 processes starting at once over an unfinished object all end in one arena; without the re-check in `hold`, most end up in orphans.
-- `collect` (Linux, `/dev/shm`): other builds' objects we own under the same base are removed when unused; the first one in use is reported (MINIT warns: those processes do not share this cache).
+- `collect` (Linux, `/dev/shm`): other builds' objects we own under the same base are removed when unused; the first one in use is reported (MINIT warns, or the log when opened in RINIT: those processes do not share this cache). `nocopy_arena_destroy` unmaps the size it mapped, not the header's.
 - No name, or any failure, leaves `nocopy_a` NULL: the process has no cache (below), never a private one, whose writes the others would not see.
 
 ## Layout

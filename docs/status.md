@@ -24,7 +24,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
 | `./dev stress`, `./dev c` | clean (3 loops; CI runs 30) |
-| `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey) |
+| `./dev shm`, `./dev frankenphp` | pass (php-fpm, FrankenPHP, with and without Valkey; 2026-11-07: fpm workers create the cache as `www-data`, root CLI refused, a `nobody` pool with its own name) |
 | `./dev symfony` (6.4, 7.4, 8.x; 2026-11-06, with nocopy in front of the system pools) | pass |
 | `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |

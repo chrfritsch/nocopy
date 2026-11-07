@@ -13,20 +13,27 @@ nocopy.shm_name=/nocopy
 nocopy.shm_size=128M
 ```
 
-Two sites on one server that must not see each other's keys need different names (`/nocopy-shop`, `/nocopy-blog`).
+Two sites on one server that must not see each other's keys need different names (`/nocopy-shop`, `/nocopy-blog`; per fpm pool, see below).
 
 ## 2. Run everything as one user
 
 The shared memory is created with mode `0600` by the first process that needs it, so every process must run as that user.
-Usually php-fpm's master starts as root and creates it before dropping to `www-data` for its workers (they inherit the
-mapping). Then run CLI commands as the same user that starts php-fpm:
+php-fpm's workers open it as the pool's user (`www-data`): a master running as root never maps it, so a worker cannot
+plant values or pointers that a root process reads. Run CLI commands as the pool's user:
 
 ```sh
-sudo -u root php bin/console cache:warmup     # whoever started php-fpm
+sudo -u www-data php bin/console cache:warmup
 ```
 
-A process running as another user cannot attach: it warns `no permission` and has no cache. Do not widen the mode: anyone
+A process running as another user, root included, cannot attach: it warns and has no cache. Do not widen the mode: anyone
 who can write the cache controls what php-fpm reads.
+
+Pools running as different users need different names, set per pool:
+
+```ini
+; php-fpm.d/shop.conf
+php_admin_value[nocopy.shm_name] = /nocopy-shop
+```
 
 ## 3. Load the same build
 
@@ -48,7 +55,7 @@ must return `host`, and `nocopy_stats()['shm_name']` the same name.
 |---|---|
 | `nocopy.shm_name is not set` | this process reads another php.ini without the setting (`php --ini` shows which) |
 | `no permission to open it (another user created it)` | the process runs as a different user than the creator |
-| `it is owned by another user or open to others` | the object belongs to another user (as root, too) or its mode was widened: check `ls -l /dev/shm`, remove it |
+| `it is owned by another user or open to others` | the object belongs to another user (also when you run as root: use the pool's user) or its mode was widened: check `ls -l /dev/shm`, remove it if stale |
 | `… the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache` | php-fpm still runs an older `nocopy.so`: restart it |
 | `not enough room in /dev/shm (Docker: --shm-size)` | `/dev/shm` smaller than `nocopy.shm_size` |
 | `not a name like /nocopy …` | the name needs one leading slash, at most 40 characters |

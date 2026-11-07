@@ -962,6 +962,7 @@ static void init(nocopy_arena *p, const layout *l)
  * an exclusive flock succeeds only while no process maps the object. */
 static int named_fd = -1;
 static char named_name[64];
+static size_t mapped_size; /* not the header's: workers may write it */
 static struct stat named_st; /* the listener's, see nocopy_arena_unhold */
 
 static bool same_file(const struct stat *a, const struct stat *b) { return a->st_dev == b->st_dev && a->st_ino == b->st_ino; }
@@ -1058,6 +1059,7 @@ static open_result create_new(const char *name, int fd, const layout *l, uint64_
 	nocopy_arena *a = p;
 	init(a, l);
 	a->abi = abi;
+	mapped_size = l->size;
 	__atomic_store_n(&a->magic, NOCOPY_MAGIC, __ATOMIC_RELEASE);
 	named_fd = fd;
 	adopt(a);
@@ -1124,6 +1126,7 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 		return OPEN_FAIL;
 	}
 	named_fd = fd;
+	mapped_size = size;
 	adopt(p);
 	return OPEN_OK;
 }
@@ -1234,7 +1237,7 @@ bool nocopy_arena_current(void)
 void nocopy_arena_destroy(void)
 {
 	if (nocopy_a) {
-		munmap(nocopy_a, nocopy_a->size);
+		munmap(nocopy_a, mapped_size);
 		nocopy_a = NULL;
 	}
 	if (named_fd >= 0) {

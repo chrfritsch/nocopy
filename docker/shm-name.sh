@@ -11,7 +11,8 @@ ini() { printf 'extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy\nnoc
 ini ""
 rm -f /dev/shm/nocopy.*
 bad=0
-cli() { php -r "\$_GET = ['op' => '$1', 'k' => '$2']; require '/app/app.php';" 2>&1; }
+as() { if [ -n "$AS" ]; then runuser -u "$AS" -- "$@"; else "$@"; fi; } # fpm: the workers' user, not root
+cli() { as php -r "\$_GET = ['op' => '$1', 'k' => '$2']; require '/app/app.php';" 2>&1; }
 # label, response, expected "from", expected zero_copy
 check() { printf '%-16s %s\n' "$1" "$2"
   case $2 in *"\"hit\":true,\"from\":\"$3\""*"\"zero_copy\":$4"*) ;; *) echo "  ^ FAIL"; bad=1;; esac; }
@@ -23,7 +24,7 @@ churn() { web put c7 >/dev/null
   echo "misses during churn: $m"; [ "$m" = 0 ] || bad=1; }
 vk=$(command -v valkey-cli || command -v redis-cli)
 listeners() { $vk client list | grep -c name=nocopy-listener; }
-lpid() { php -r 'echo nocopy_stats()["valkey_listener"];'; }
+lpid() { as php -r 'echo nocopy_stats()["valkey_listener"];'; }
 # label, expected count
 count() { n=$(listeners); printf '%-16s %s\n' "$1" "$n listener(s)"; [ "$n" = "$2" ] || { echo "  ^ FAIL"; bad=1; }; }
 # with Valkey: server hits from many workers and the CLI, one listener; it outlives a server restart, the copy stays warm
@@ -48,10 +49,13 @@ valkey_pass() { start_vk=$1 stop_vk=$2
 logcheck() { if grep -E 'segfault|SIGSEGV|exited on signal|panic|PHP (Warning|Fatal)|"level":"error"' "$1"; then bad=1; else echo "server log clean"; fi; }
 
 if command -v php-fpm >/dev/null; then
-  rm -f /etc/nginx/sites-enabled/default
+  rm -f /etc/nginx/sites-enabled/default /dev/shm/nocopy-b.*
   echo 'server { listen 8099; location / { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/app.php; } }' > /etc/nginx/conf.d/t.conf
+  echo 'server { listen 8098; location / { fastcgi_pass 127.0.0.1:9002; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/app.php; } }' >> /etc/nginx/conf.d/t.conf
   nginx
-  printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = 4\n' > /usr/local/etc/php-fpm.d/zz-t.conf
+  # www: the image's pool (www-data); b: another user with its own cache
+  printf '[www]\nlisten = 127.0.0.1:9001\npm = static\npm.max_children = 4\n[b]\nuser = nobody\ngroup = nogroup\nlisten = 127.0.0.1:9002\npm = static\npm.max_children = 2\nphp_admin_value[nocopy.shm_name] = /nocopy-b\n' > /usr/local/etc/php-fpm.d/zz-t.conf
+  AS=www-data
   start() { php-fpm -F >>/tmp/fpm.log 2>&1 & fpm=$!; sleep 1; }
   stop() { kill $fpm; wait $fpm 2>/dev/null; }
   web() { curl -s "127.0.0.1:8099/?op=$1&k=$2"; }
@@ -64,8 +68,12 @@ if command -v php-fpm >/dev/null; then
   check "after reload" "$(web get a)" cli true
   stop; start
   check "after restart" "$(web get b)" fpm-fcgi true
-  # another user cannot open it (mode 0600): warning, private cache
-  su www-data -s /bin/sh -c "php -r 'var_dump(nocopy_get(\"a\"));'" 2>&1 | grep -q 'no permission' && echo "www-data cli     unavailable + warning" || { echo "www-data cli: FAIL"; bad=1; }
+  # the master (root) never maps it: the workers create it as their user, and root does not attach
+  [ "$(stat -c %U /dev/shm/nocopy.*)" = www-data ] && echo "owner            www-data" || { echo "owner: FAIL"; ls -l /dev/shm; bad=1; }
+  php -r 'var_dump(nocopy_get("a"));' 2>&1 | grep -q 'owned by another user' && echo "root cli         unavailable + warning" || { echo "root cli: FAIL"; bad=1; }
+  # pool b (nobody, php_admin_value name): its own cache, not www's
+  case $(curl -s '127.0.0.1:8098/?op=get&k=b') in *'"hit":false'*) echo "pool b           own cache";; *) echo "pool b: FAIL"; bad=1;; esac
+  [ "$(stat -c %U /dev/shm/nocopy-b.*)" = nobody ] && echo "pool b owner     nobody" || { echo "pool b owner: FAIL"; bad=1; }
   churn
   stop
   if [ -n "$vk" ]; then (valkey-server --daemonize yes --save '' >/dev/null 2>&1 || redis-server --daemonize yes --save '' >/dev/null); sleep 0.3; valkey_pass start stop true; fi

@@ -108,7 +108,7 @@ ZEND_INI_MH(nocopy_vk_on_verify);
 extern char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
 ZEND_INI_MH(nocopy_vk_on_prefix);
 ZEND_INI_MH(nocopy_vk_on_timeout);
-void nocopy_vk_minit(void); /* after the arena */
+void nocopy_vk_minit(void);
 void nocopy_vk_mshutdown(void);
 void nocopy_vk_new_request(void);
 void nocopy_vk_close(nocopy_vk *v);

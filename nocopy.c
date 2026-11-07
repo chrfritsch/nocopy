@@ -19,6 +19,8 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <syslog.h>
+#include <unistd.h>
 #ifndef RTLD_DEFAULT
 # define RTLD_DEFAULT ((void *) 0)
 #endif
@@ -35,6 +37,7 @@ static zend_long ini_hint = 4096;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_a NULL: unavailable) */
 static bool sapi_zero_copy;
+static bool open_deferred; /* fpm master as root: each worker opens the arena on its first request */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
 /* ---- nocopy_* ---- */
@@ -593,6 +596,44 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 	nocopy_vk_close(&nocopy_globals->vk);
 }
 
+/* Opens the arena of nocopy.shm_name. late: in a worker's first request, problems go to the log. */
+static zend_result arena_open(bool late)
+{
+	size_t need;
+	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
+	const char *err = NULL;
+	nocopy_named named;
+	char msg[512] = "";
+	if (!shm_name) {
+		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
+	} else if ((err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named)) == NOCOPY_TOO_SMALL) {
+		snprintf(msg, sizeof msg, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
+		if (!late) {
+			zend_error(E_CORE_ERROR, "%s", msg);
+			return FAILURE;
+		}
+	} else if (err) {
+		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
+		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
+	} else {
+		memcpy(shm_attached, named.name, sizeof shm_attached);
+		if (named.other[0]) {
+			snprintf(msg, sizeof msg, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
+		}
+	}
+	if (msg[0]) {
+		if (late) {
+			php_log_err_with_severity(msg, LOG_WARNING);
+		} else {
+			php_error_docref(NULL, E_CORE_WARNING, "%s", msg);
+		}
+	}
+	if (nocopy_a) {
+		nocopy_value_minit();
+	}
+	return SUCCESS;
+}
+
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
@@ -602,28 +643,12 @@ PHP_MINIT_FUNCTION(nocopy)
 	}
 	resolve_serializer();
 
-	size_t need;
-	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
-	const char *err = NULL;
-	nocopy_named named;
-	if (!shm_name) {
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
-	} else if ((err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named)) == NOCOPY_TOO_SMALL) {
-		zend_error(E_CORE_ERROR, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
+	/* fpm as root: workers would share root's mapping, and root would read what they wrote; open it in the worker */
+	open_deferred = strcmp(sapi_module.name, "fpm-fcgi") == 0 && geteuid() == 0;
+	if (!open_deferred && arena_open(false) == FAILURE) {
 		return FAILURE;
-	} else if (err) {
-		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
-		php_error_docref(NULL, E_CORE_WARNING, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
-	} else {
-		memcpy(shm_attached, named.name, sizeof shm_attached);
-		if (named.other[0]) {
-			php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
-		}
 	}
-	if (nocopy_a) {
-		nocopy_value_minit();
-		nocopy_vk_minit();
-	}
+	nocopy_vk_minit();
 	nocopy_detour = nocopy_vk_on || !nocopy_a;
 	pthread_atfork(NULL, NULL, atfork_child);
 
@@ -655,6 +680,11 @@ PHP_RINIT_FUNCTION(nocopy)
 #if defined(COMPILE_DL_NOCOPY) && defined(ZTS)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
+	if (UNEXPECTED(open_deferred)) {
+		open_deferred = false;
+		arena_open(true);
+		nocopy_detour = nocopy_vk_on || !nocopy_a;
+	}
 	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) {
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
