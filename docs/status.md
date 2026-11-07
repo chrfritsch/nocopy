@@ -19,6 +19,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev ci` (8.5; 2026-11-07, again with the keep cap and big entries left out of compaction (tests 076, 077); also `./dev drupal`) | all passed |
 | `./dev ci` (8.5; 2026-11-07, dates stored natively (test 075), `./dev fuzz` added and in `ci`; also `./dev drupal`) | all passed, fuzz 20000 iterations clean in both modes |
 | `./dev ci` (8.5; 2026-11-07, `nocopy_keys()` and `APCUIterator` in the polyfill (test 078)) | all passed |
+| `./dev ci` (8.5; 2026-11-07, deduped value strings shared on copy-out, deletes on the cached hash, one borrow per `nocopy_get_multiple`) | all passed, fuzz 20000 iterations clean in both modes |
 | `./dev test` (8.5, `./dev asan`, `./dev clang`; 2026-11-07) | 65 passed, 1 skipped (asan 66) |
 | `./dev novalkey` | 46 passed, 12 skipped |
 | `./dev zts` | 48 passed, 10 skipped |
