@@ -974,7 +974,7 @@ static void graph_slots(gout *o, zend_object *obj, const nc_obj *n, uint32_t np)
 			ZVAL_COPY_OR_DUP_PROP(&dst[k], &def[k]);
 		} else {
 			graph_zval(o, &dst[k], &n->props[k]);
-			Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&n->props[k]) & IS_PROP_UNINIT) : 0;
+			Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&def[k]) & IS_PROP_UNINIT) : 0; /* as unserialize(): uninitialized, not unset */
 		}
 	}
 	if (n->dyn) {

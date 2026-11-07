@@ -97,7 +97,7 @@ PHP_FUNCTION(nocopy_inc)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!nocopy_tracked()) {
+	if (!write_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	if (!nocopy_add_long(key, step, ttl, &nv)) {

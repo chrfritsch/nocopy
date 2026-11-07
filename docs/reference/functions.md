@@ -32,7 +32,7 @@ calls (and their order) of `unserialize()`: user classes and `stdClass` as their
 `__wakeup()` if declared), classes with `__sleep()` as the properties it names (the others get their class default, as
 `unserialize()` gives them; a name `serialize()` would warn about stores the value serialized, with that warning), classes with
 `__serialize`/`__unserialize` (also internal ones: `ArrayObject`, `SplObjectStorage`, ...) as `__serialize()`'s
-array, enums as their case, `DateTime` and `DateTimeImmutable` as timestamp and zone (a zone gone from the time zone database makes a miss). Identities, cycles, private, readonly and uninitialized properties are kept; strings and arrays
+array, enums as their case, `DateTime` and `DateTimeImmutable` as timestamp and zone (a zone gone from the time zone database makes a miss). Identities, cycles, private, readonly and uninitialized properties are kept (an `unset()` typed one comes back uninitialized, as from `unserialize()`: no `__get`); strings and arrays
 stay zero-copy, and so do arrays next to the objects. A fetch after a class was changed (another property layout), can't be
 loaded or lost the enum case is a miss; a `__wakeup`/`__unserialize` that throws makes it a miss with the exception thrown.
 A reference held more than once in the value stays one reference on fetch (writes through one place show in the others); its value stays zero-copy, the arrays holding it are copied.
@@ -65,7 +65,7 @@ Removes every entry. With `nocopy.valkey`, every key under `nocopy.valkey_prefix
 ### `nocopy_inc(string $key, int $step = 1, int $ttl = 0): int|false`
 
 Adds `$step` (negative subtracts) to an integer in place, atomically; returns the new value. A missing key starts at `$step`.
-`false` if the value is not an integer, or there is no room.
+`false` if the value is not an integer, or there is no room. A negative `$ttl` throws a `ValueError`; it applies only when the key is created.
 
 ### `nocopy_cas(string $key, int $old, int $new): bool`
 
