@@ -5,7 +5,7 @@ All functions work without a shared cache too (`nocopy.shm_name` unset or not at
 
 Signatures come from [`nocopy.stub.php`](../../nocopy.stub.php).
 
-`$ttl` is in seconds, `0` = no expiry. Like APCu, an entry lives through the whole second it expires in: `ttl: 1` lives 1-2 s.
+`$ttl` is in seconds, `0` = no expiry; longer than 2^32 s (~136 years) is capped there. Like APCu, an entry lives through the whole second it expires in: `ttl: 1` lives 1-2 s.
 
 ## Read
 

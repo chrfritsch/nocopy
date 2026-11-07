@@ -597,7 +597,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 }
 
 /* Opens the arena of nocopy.shm_name. late: in a worker's first request, problems go to the log. */
-static zend_result arena_open(bool late)
+static void arena_open(bool late)
 {
 	size_t need;
 	uint64_t hint = ini_hint > 0 ? (uint64_t) ini_hint : 0;
@@ -607,11 +607,7 @@ static zend_result arena_open(bool late)
 	if (!shm_name) {
 		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
 	} else if ((err = nocopy_arena_open(shm_name, arena_size, hint, layout_id(), &need, &named)) == NOCOPY_TOO_SMALL) {
-		snprintf(msg, sizeof msg, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", need);
-		if (!late) {
-			zend_error(E_CORE_ERROR, "%s", msg);
-			return FAILURE;
-		}
+		snprintf(msg, sizeof msg, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large. The cache is unavailable in this process: fetches miss, writes fail", need);
 	} else if (err) {
 		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
 		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err);
@@ -631,7 +627,6 @@ static zend_result arena_open(bool late)
 	if (nocopy_a) {
 		nocopy_value_minit();
 	}
-	return SUCCESS;
 }
 
 PHP_MINIT_FUNCTION(nocopy)
@@ -645,8 +640,8 @@ PHP_MINIT_FUNCTION(nocopy)
 
 	/* fpm as root: workers would share root's mapping, and root would read what they wrote; open it in the worker */
 	open_deferred = strcmp(sapi_module.name, "fpm-fcgi") == 0 && geteuid() == 0;
-	if (!open_deferred && arena_open(false) == FAILURE) {
-		return FAILURE;
+	if (!open_deferred) {
+		arena_open(false);
 	}
 	nocopy_vk_minit();
 	nocopy_detour = nocopy_vk_on || !nocopy_a;

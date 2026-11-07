@@ -720,7 +720,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	nocopy_lock(sh);
 	struct timespec ts;
 	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
-	time_t now = ts.tv_sec, exp = ttl ? now + ttl : 0;
+	time_t now = ts.tv_sec, exp = ttl ? now + (ttl < NOCOPY_TTL_MAX ? ttl : NOCOPY_TTL_MAX) : 0;
 	nocopy_entry *e = nocopy_alloc(sh, size, exp, now);
 	if (!e) {
 		nocopy_unlock(sh);

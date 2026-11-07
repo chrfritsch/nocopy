@@ -902,7 +902,7 @@ static void vk_forget(zend_string *key)
 }
 
 /* A ttl as the last second it lives (0: never), and that second's end for SET PXAT (0: none). */
-static time_t vk_expires(zend_long ttl) { return ttl ? time(NULL) + ttl : 0; }
+static time_t vk_expires(zend_long ttl) { return ttl ? time(NULL) + MIN(ttl, NOCOPY_TTL_MAX) : 0; }
 static int64_t vk_pxat(time_t expires) { return expires ? ((int64_t) expires + 1) * 1000 : 0; }
 
 #define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
@@ -1152,7 +1152,7 @@ zend_long nocopy_vk_drop_multi(HashTable *keys)
 bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	int64_t v = 0;
-	int r = vk_ready() ? vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) ttl * 1000, &v) : -1;
+	int r = vk_ready() ? vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) MIN(ttl, NOCOPY_TTL_MAX) * 1000, &v) : -1;
 	vk_forget(key); /* the next read fetches it */
 	*out = (zend_long) v;
 	return r == 1;

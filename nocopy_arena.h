@@ -14,6 +14,7 @@
 #define NOCOPY_SEG_MAX_SHIFT 22 /* segments grow to 4 MB, then their number: an eviction round moves up to one */
 #define NOCOPY_SEG_WORDS (NOCOPY_MAX_SEGS / 64)
 #define NOCOPY_TTL_BUCKETS 7
+#define NOCOPY_TTL_MAX ((time_t) 1 << 32) /* s (~136 years): longer TTLs are capped, so now + ttl cannot overflow */
 #define NOCOPY_MAX_SHARDS 8
 #define NOCOPY_LEASES 32 /* per shard: concurrent single-flight computes */
 #define NOCOPY_ALIGN(n) (((n) + 7) & ~(size_t) 7)
