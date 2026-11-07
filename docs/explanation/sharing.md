@@ -24,7 +24,9 @@ Drupal module throws on `none` rather than serve stale data.
 ## One user, one build, one machine
 
 - **One user.** The object is created with mode `0600`. Anyone who can write it controls what php-fpm reads (it hands out
-  pointers into it), so the mode is not configurable.
+  pointers into it), so the mode is not configurable. A process attaches only to an object owned by its own user with
+  mode `0600`: someone else could create the name first, and root would otherwise open it anyway. Such an object leaves
+  the cache off (with a warning) until it is removed.
 - **One build.** The build id hashes the loaded `nocopy.so`: different code may lay out memory differently, so processes
   share only when they run the same build. Objects of old builds are removed once no process uses them.
 - **One machine (one PID namespace).** A lock held by a crashed process is detected by its pid and start time, which only

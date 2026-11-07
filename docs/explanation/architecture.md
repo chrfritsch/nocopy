@@ -24,9 +24,10 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 - Liveness: every process that maps it holds a shared `flock` on its object for life (fd kept open, inherited by forks, closed on exec). `LOCK_EX|LOCK_NB` succeeds only on an object no process maps.
 - Create: `O_EXCL`, then `LOCK_SH` and a check that the name still refers to this object (`hold`: same `st_dev`/`st_ino`; someone may have removed it as unused in between),
   then `posix_fallocate` (Linux: a sparse tmpfs file past `/dev/shm`'s limit SIGBUSes on first touch), map at the first free address of `bases[]` (0x2000'0000'0000, else 0x10'0000'0000; `MAP_FIXED_NOREPLACE`), set up the header, store `magic` last (release).
-- Attach: map the header anywhere, wait up to 2 s for `magic`; while it is missing and the object is unused, its creator died: `remove_unused` unlinks it (under `LOCK_EX`, only if the name still refers to it) and we start over. Then check `abi`, `hold`, map at `base`.
+- Attach: refuse an object not owned by our euid or open to group/others (`owned`: another user can create the name first in `/dev/shm`, and root ignores the mode). Map the header anywhere, wait up to 2 s for `magic`; while it is missing and the object is unused, its creator died: `remove_unused` unlinks it (under `LOCK_EX`, only if the name still refers to it) and we start over. Then check `abi`, `nshards`, `hold`, map at `base`.
+  Test 079: root refuses nobody's object and its own at 0666.
   Test 060: 24 processes starting at once over an unfinished object all end in one arena; without the re-check in `hold`, most end up in orphans.
-- `collect` (Linux, `/dev/shm`): other builds' objects under the same base are removed when unused; the first one in use is reported (MINIT warns: those processes do not share this cache).
+- `collect` (Linux, `/dev/shm`): other builds' objects we own under the same base are removed when unused; the first one in use is reported (MINIT warns: those processes do not share this cache).
 - No name, or any failure, leaves `nocopy_a` NULL: the process has no cache (below), never a private one, whose writes the others would not see.
 
 ## Layout

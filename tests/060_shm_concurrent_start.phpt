@@ -15,6 +15,7 @@ $file = '/dev/shm/' . substr($probe, 1);
 for ($round = 0; $round < 5; $round++) {
     unlink($file);
     touch($file); // what a creator that died before setting it up leaves
+    chmod($file, 0600);
     $procs = [];
     for ($i = 0; $i < 24; $i++) {
         $procs[] = proc_open($cmd("usleep(random_int(0, 3000)); var_dump(nocopy_put('p$i', $i)); echo nocopy_shared_with();"), [1 => ['pipe', 'w']], $pipes[$i]);

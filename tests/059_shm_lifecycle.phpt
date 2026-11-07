@@ -20,11 +20,14 @@ $ours = '/dev/shm/nocopy-t059' . substr($probe, strlen('/nocopy-t059p'));
 
 // another build's, unused: removed
 touch('/dev/shm/nocopy-t059.deadbeef');
+chmod('/dev/shm/nocopy-t059.deadbeef', 0600);
 // another build's, in use (its processes hold a shared flock): reported, kept
 $busy = fopen('/dev/shm/nocopy-t059.cafebabe', 'c');
+chmod('/dev/shm/nocopy-t059.cafebabe', 0600);
 flock($busy, LOCK_SH);
 // ours, left empty by a creator that died: replaced
 touch($ours);
+chmod($ours, 0600);
 
 echo child('/nocopy-t059', 'echo nocopy_shared_with(), " ", nocopy_stats()["size"] > 0 ? "sized" : "empty", "\n";');
 var_dump(file_exists('/dev/shm/nocopy-t059.deadbeef'), file_exists('/dev/shm/nocopy-t059.cafebabe'), filesize($ours) > 0);

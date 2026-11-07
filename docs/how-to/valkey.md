@@ -73,6 +73,8 @@ Plan for misses, not errors.
 - Each write is pushed back to every server, the writer's included (its copy is refetched once): fine for cache traffic,
   not for counters incremented on every request.
 - Local only: `nocopy_stats()`, and the single flight of `nocopy_remember()` (one computation per server, not per cluster).
+- Trust Valkey as much as php-fpm: values read from it are unserialized with every class allowed (as in APCu or
+  Symfony's Redis adapter). Use AUTH/ACLs and TLS, and do not share the key prefix with untrusted clients.
 - Not supported yet: Sentinel, Cluster, TLS over unix sockets.
 
 Background: [Sharing: by name and through Valkey](../explanation/sharing.md).

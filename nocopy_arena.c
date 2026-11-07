@@ -966,6 +966,13 @@ static struct stat named_st; /* the listener's, see nocopy_arena_unhold */
 
 static bool same_file(const struct stat *a, const struct stat *b) { return a->st_dev == b->st_dev && a->st_ino == b->st_ino; }
 
+/* Ours alone: another user's object would hand us its pointers (root ignores the mode). */
+static bool owned(int fd)
+{
+	struct stat st;
+	return fstat(fd, &st) == 0 && st.st_uid == geteuid() && (st.st_mode & 077) == 0;
+}
+
 static bool same_object(const char *name, int fd)
 {
 	struct stat a, b;
@@ -1063,6 +1070,12 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 	uint64_t magic = 0, habi = 0;
 	uintptr_t base = 0;
 	size_t size = 0;
+	uint32_t nshards = 0;
+	if (!owned(fd)) {
+		close(fd);
+		*err = "it is owned by another user or open to others";
+		return OPEN_FAIL;
+	}
 	for (int waited = 0;; waited++) {
 		struct stat st;
 		if (fstat(fd, &st) == 0 && (size_t) st.st_size >= sizeof(nocopy_arena)) {
@@ -1072,6 +1085,7 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 				habi = q->abi;
 				base = q->base;
 				size = q->size;
+				nshards = q->nshards;
 				munmap(q, sizeof(nocopy_arena));
 			}
 		}
@@ -1092,6 +1106,11 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 	if (habi != abi) {
 		close(fd);
 		*err = "it belongs to another build";
+		return OPEN_FAIL;
+	}
+	if (!nshards || nshards > NOCOPY_MAX_SHARDS || (nshards & (nshards - 1))) {
+		close(fd);
+		*err = "its header is corrupt";
 		return OPEN_FAIL;
 	}
 	if (!hold(name, fd)) {
@@ -1129,7 +1148,10 @@ static void collect(const char *base, nocopy_named *out)
 		char other[sizeof out->other];
 		snprintf(other, sizeof other, "/%.62s", n); /* n is at most 49 chars (checked above) */
 		int fd = shm_open(other, O_RDWR, 0);
-		if (fd < 0) {
+		if (fd < 0 || !owned(fd)) {
+			if (fd >= 0) {
+				close(fd);
+			}
 			continue; /* another user's: not ours to judge */
 		}
 		if (!remove_unused(other, fd) && !out->other[0]) {

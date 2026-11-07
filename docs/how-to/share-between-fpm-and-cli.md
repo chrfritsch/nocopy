@@ -48,6 +48,7 @@ must return `host`, and `nocopy_stats()['shm_name']` the same name.
 |---|---|
 | `nocopy.shm_name is not set` | this process reads another php.ini without the setting (`php --ini` shows which) |
 | `no permission to open it (another user created it)` | the process runs as a different user than the creator |
+| `it is owned by another user or open to others` | the object belongs to another user (as root, too) or its mode was widened: check `ls -l /dev/shm`, remove it |
 | `… the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache` | php-fpm still runs an older `nocopy.so`: restart it |
 | `not enough room in /dev/shm (Docker: --shm-size)` | `/dev/shm` smaller than `nocopy.shm_size` |
 | `not a name like /nocopy …` | the name needs one leading slash, at most 40 characters |
