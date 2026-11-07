@@ -8,7 +8,7 @@
 
 /* The entries of segment s. A walk may run past unlinks that make s DEAD: only reclaim() frees it, under this lock. */
 #define SEG_FOREACH(s, e) \
-	for (nocopy_entry *e = (nocopy_entry *) seg_start(s), *e##_end = (nocopy_entry *) (seg_start(s) + nocopy_a->segs[s].used); \
+	for (nocopy_entry *e = (nocopy_entry *) seg_start(s), *e##_end = (nocopy_entry *) (seg_start(s) + nocopy_segs[s].used); \
 	     e < e##_end; e = (nocopy_entry *) ((char *) e + e->size))
 
 /* ---- expiry ---- */
@@ -26,7 +26,7 @@ bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget)
 	}
 	for (uint32_t seen = 0; seen < n; seen++) {
 		uint32_t s = sh->exp_next;
-		nocopy_seg *g = &nocopy_a->segs[s];
+		nocopy_seg *g = &nocopy_segs[s];
 		if (owns(sh, s) && (g->state == SEG_OPEN || g->state == SEG_SEALED) && g->live && g->max_exp && g->max_exp < now) {
 			if (sh->exp_gen != g->gen) { /* freed and reused since the cursor stopped here: entry boundaries moved */
 				sh->exp_gen = g->gen;
@@ -57,7 +57,7 @@ bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget)
 /* Copies e forward into its segment's TTL bucket and repoints its slot. False if there is no room. */
 static bool relocate(nocopy_shard *sh, nocopy_entry *old)
 {
-	nocopy_entry *n = nocopy_seg_alloc(sh, old->size, true, nocopy_a->segs[nocopy_seg_of(old)].bucket, old->expires);
+	nocopy_entry *n = nocopy_seg_alloc(sh, old->size, true, nocopy_segs[nocopy_seg_of(old)].bucket, old->expires);
 	if (!n) {
 		return false;
 	}
@@ -87,8 +87,8 @@ static bool relocate(nocopy_shard *sh, nocopy_entry *old)
 /* Would survive a merge: published and not expired. */
 static bool alive(const nocopy_entry *e) { return e->live && !nocopy_expired(e); }
 
-static uint64_t seg_live(uint32_t s) { return nocopy_a->segs[s].live; }
-static uint64_t seg_born(uint32_t s) { return nocopy_a->segs[s].born; }
+static uint64_t seg_live(uint32_t s) { return nocopy_segs[s].live; }
+static uint64_t seg_born(uint32_t s) { return nocopy_segs[s].born; }
 
 /* Keeps v (*nv of at most k) the k segments with the smallest key, ascending: s goes in if it beats the largest. */
 static void keep_least(uint32_t *v, uint32_t *nv, uint32_t k, uint32_t s, uint64_t (*key)(uint32_t))
@@ -106,7 +106,7 @@ static void keep_least(uint32_t *v, uint32_t *nv, uint32_t k, uint32_t s, uint64
 
 static bool mergeable(uint32_t s)
 {
-	nocopy_seg *g = &nocopy_a->segs[s];
+	nocopy_seg *g = &nocopy_segs[s];
 	return g->state == SEG_SEALED && g->run == 1 && !g->pending;
 }
 
@@ -124,8 +124,8 @@ static uint32_t pick_sparse(const nocopy_shard *sh, uint32_t *v, size_t *live)
 	}
 	*live = 0;
 	uint32_t n = 0;
-	for (; n < nv && *live + nocopy_a->segs[v[n]].live <= nocopy_seg_size; n++) {
-		*live += nocopy_a->segs[v[n]].live;
+	for (; n < nv && *live + nocopy_segs[v[n]].live <= nocopy_seg_size; n++) {
+		*live += nocopy_segs[v[n]].live;
 	}
 	return n >= 2 || (n && *live <= COMPACT_MAX) ? n : 0;
 }
@@ -137,26 +137,26 @@ static uint32_t pick_oldest(const nocopy_shard *sh, uint32_t *v, bool *spared, u
 	uint32_t nv = 0, run = UINT32_MAX;
 	*spared = false;
 	SH_SEGS(sh, s) {
-		nocopy_seg *g = &nocopy_a->segs[s];
+		nocopy_seg *g = &nocopy_segs[s];
 		if (g->state != SEG_SEALED || g->pending) {
 			continue;
 		}
 		if (g->run > 1) {
-			if (run == UINT32_MAX || g->born < nocopy_a->segs[run].born) {
+			if (run == UINT32_MAX || g->born < nocopy_segs[run].born) {
 				run = s;
 			}
 			continue;
 		}
 		keep_least(v, &nv, K, s, seg_born);
 	}
-	if (run == UINT32_MAX || (nv && nocopy_a->segs[run].born >= nocopy_a->segs[v[0]].born)) {
+	if (run == UINT32_MAX || (nv && nocopy_segs[run].born >= nocopy_segs[v[0]].born)) {
 		return nv;
 	}
 	nocopy_entry *e = (nocopy_entry *) seg_start(run);
 	uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 	if (e->live && f) {
 		__atomic_store_n(&e->hot, f >> 1, __ATOMIC_RELAXED);
-		nocopy_a->segs[run].born = sh->last_seq;
+		nocopy_segs[run].born = sh->last_seq;
 		*spared = true;
 		return 0;
 	}
@@ -172,7 +172,7 @@ static uint32_t pick_victims(const nocopy_shard *sh, uint32_t *v, bool *spared)
 	for (uint32_t n = 1; n < MERGE_N && n < nc; n++) {
 		uint32_t b = n;
 		for (uint32_t i = n + 1; i < nc; i++) {
-			if (__atomic_load_n(&nocopy_a->segs[c[i]].reads, __ATOMIC_RELAXED) < __atomic_load_n(&nocopy_a->segs[c[b]].reads, __ATOMIC_RELAXED)) {
+			if (__atomic_load_n(&nocopy_segs[c[i]].reads, __ATOMIC_RELAXED) < __atomic_load_n(&nocopy_segs[c[b]].reads, __ATOMIC_RELAXED)) {
 				b = i;
 			}
 		}

@@ -276,9 +276,11 @@ over the stored keys) and 4 writers of new keys, so every write evicts, for 20 s
 | put max | 21 ms | 21-25 ms | 37 ms | 51-111 ms | 239-354 ms |
 
 - **An eviction round holds its shard's lock for as long as it takes to move up to a segment's worth of entries**, so
-  writers to that shard wait in proportion to the segment size: ~10-25 ms at 1G, up to ~50-110 ms at 4G. Reads never wait
-  (no get over 50 ms at any size up to 4G). By extrapolation a 32G arena (128 MB segments) stalls a shard's writers for
-  hundreds of ms per round. Open, see [status](../status.md).
+  writers to that shard waited in proportion to the segment size: ~10-25 ms at 1G, up to ~50-110 ms at 4G. Reads never wait
+  (no get over 50 ms at any size up to 4G). The table above is from before segments were capped at 4 MB.
+- **Since segments stop at 4 MB** (bigger arenas get more of them), 2G and 4G behave like 1G: 4 MB segments, ~3.7 MB moved
+  per round, ~95 rounds/s; puts over 10 ms 501 (2G) / 646-658 (4G), none over 50 ms, put max 26-42 ms; put p99.99 4.6-4.8 ms
+  (more, shorter rounds); gets 4.1-4.2 M/s, get p99.99 89-93 µs. Create 131 ms (2G), 255-280 ms (4G).
 - Create time is `posix_fallocate` of the whole arena, ~65 ms per GB, once per server start. Attaching costs nothing.
 - ¹ 8G does not fit this VM: 1.7 GB of swap was in use during the run, so its slower reads and longer pauses are not the store alone.
 

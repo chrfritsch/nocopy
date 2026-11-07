@@ -29,7 +29,8 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 | `./dev apcu` (2026-11-07, with `APCUIterator`) | 13 failures, all known |
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../bench/results-drupal/2026-11-06-prod)) |
-| `./dev big` (2026-11-07: 256M-8G) | published ([results](reference/benchmarks.md#large-arenas-dev-big)): eviction rounds block a shard's writers ~10-25 ms at 1G, 50-110 ms at 4G (16 MB segments); reads unaffected |
+| `./dev ci` (8.5; 2026-11-07, segments capped at 4 MB, bitmaps and segment table behind the slot tables) | all passed |
+| `./dev big` (2026-11-07: 256M-8G, again 1G-4G with segments capped at 4 MB) | published ([results](reference/benchmarks.md#large-arenas-dev-big)): 4G now pauses writers like 1G (max 26-42 ms, was 51-111); reads unaffected |
 | `./dev fpbench` (2026-11-07, twice) | published ([results](reference/benchmarks.md#frankenphp-worker-mode-dev-fpbench)): nocopy 87-94% of `hello` in worker mode, APCu 19-22% |
 | `./dev soak` (2026-11-07: 50 min heavy churn, 30 + 10 min TTLs with a read-only stretch) | published ([results](reference/benchmarks.md#soak-dev-soak)): flat, no leak; expired entries stay until the next write |
 | `./dev tail` with up to 1,000 idle slot holders, `./dev sfbench` with 256 fpm workers (2026-11-07) | published ([results](reference/benchmarks.md#many-workers)): no scaling cost |
@@ -43,7 +44,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
    `apcu/` into their own repositories for Packagist.
 2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`. Micro benchmarks cross-checked on Graviton4
    (c8g.xlarge pod, 3 vCPU): ratios hold. Symfony and Drupal there are still to come.
-3. **Eviction tuning:** large arenas: an eviction round holds the shard lock while it moves up to a segment's worth (segments grow with the arena, at most 256 of them: 16 MB at 4G, 128 MB at 32G), stalling that shard's writers 50-110 ms at 4G ([numbers](reference/benchmarks.md#large-arenas-dev-big)); fix candidates: more, smaller segments or a round in steps. Also victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
+3. **Eviction tuning:** large arenas done: segments stop at 4 MB, so an eviction round stalls a shard's writers no longer at 4G than at 1G ([design decisions](explanation/design-decisions.md#eviction)). Also victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
 4. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).

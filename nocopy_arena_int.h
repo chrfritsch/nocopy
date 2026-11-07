@@ -17,13 +17,13 @@ static inline bool owns(const nocopy_shard *sh, uint32_t s) { return nocopy_segs
 /* The first segment >= s that sh owns, or UINT32_MAX. */
 static inline uint32_t own_next(const nocopy_shard *sh, uint32_t s)
 {
-	if (s >= NOCOPY_MAX_SEGS) {
+	if (s >= nocopy_a->nsegs) {
 		return UINT32_MAX;
 	}
 	uint32_t w = s >> 6;
 	uint64_t b = sh->own[w] & (~(uint64_t) 0 << (s & 63));
 	while (!b) {
-		if (++w == NOCOPY_SEG_WORDS) {
+		if (++w == nocopy_seg_words) {
 			return UINT32_MAX;
 		}
 		b = sh->own[w];

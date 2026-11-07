@@ -10,7 +10,8 @@
 #include <time.h>
 
 #define NOCOPY_MAX_WORKERS 1024 /* ponytail: more live processes/threads than this cannot claim a slot */
-#define NOCOPY_MAX_SEGS 256
+#define NOCOPY_MAX_SEGS 8192
+#define NOCOPY_SEG_MAX_SHIFT 22 /* segments grow to 4 MB, then their number: an eviction round moves up to one */
 #define NOCOPY_SEG_WORDS (NOCOPY_MAX_SEGS / 64)
 #define NOCOPY_TTL_BUCKETS 7
 #define NOCOPY_MAX_SHARDS 8
@@ -84,7 +85,6 @@ typedef struct {
 
 typedef struct {
 	uint64_t owner;   /* owner id of the process (thread) holding the slot, 0 free */
-	uint64_t bits[NOCOPY_SEG_WORDS]; /* segments it pins */
 	uint64_t hits, misses;
 	uint32_t wip;     /* offset/8 of the entry it fills outside the shard lock; 0 none. Changes only under that shard's lock */
 } __attribute__((aligned(64))) nocopy_worker;
@@ -96,14 +96,14 @@ typedef struct {
 	unsigned seg_shift;
 	uint32_t tab_per;    /* slots per shard */
 	uint32_t nsegs, nshards, nworkers; /* nworkers: high-water mark of claimed slots */
+	size_t segs_off, owner_off, pins_off; /* behind the slot tables, sized by the segment count */
+	uint32_t pin_stride; /* words per worker's pin bitmap, a multiple of 8 (own cache lines) */
 	time_t start_time;
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
-	nocopy_seg segs[NOCOPY_MAX_SEGS];
-	uint8_t owner[NOCOPY_MAX_SEGS] __attribute__((aligned(64))); /* shard index + 1; 0: in the pool (free, zeroed) */
 	char user[256] __attribute__((aligned(64))); /* the user's shared state, zeroed at creation (nocopy_php.h: nocopy_shared) */
 	char tables[] __attribute__((aligned(64)));
 } nocopy_arena;
@@ -136,6 +136,12 @@ typedef struct {
 extern nocopy_arena *nocopy_a;
 extern char *nocopy_seg_base;
 extern unsigned nocopy_seg_shift;
+extern uint32_t nocopy_seg_words; /* bitmap words in use: (nsegs + 63) / 64 */
+extern nocopy_seg *nocopy_segs;     /* per segment, owned by one shard */
+extern uint8_t *nocopy_seg_owner;   /* per segment: shard index + 1; 0: in the pool (free, zeroed) */
+extern uint64_t *nocopy_pins;       /* per worker slot: segments it pins (pin_stride words) */
+extern uint32_t nocopy_pin_stride;
+static inline uint64_t *nocopy_wbits(int slot) { return nocopy_pins + (size_t) slot * nocopy_pin_stride; }
 extern uint32_t nocopy_shard_mask, nocopy_tab_mask;
 extern nocopy_slot *nocopy_tabs[NOCOPY_MAX_SHARDS];
 extern uint64_t nocopy_self; /* this process's owner id */
@@ -262,7 +268,7 @@ static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 	c->mine[w] |= b;
 	c->transient = true;
 	c->idle++;
-	__atomic_store_n(&nocopy_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
+	__atomic_store_n(&nocopy_wbits(c->slot)[w], c->mine[w], __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	return true;
 }
@@ -285,10 +291,10 @@ static inline void nocopy_drop_transient(nocopy_ctx *c)
 	if (c->slot < 0 || !c->transient) {
 		return;
 	}
-	for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
+	for (uint32_t w = 0; w < nocopy_seg_words; w++) {
 		if (c->mine[w] & ~c->keep[w]) {
 			c->mine[w] &= c->keep[w];
-			__atomic_store_n(&nocopy_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
+			__atomic_store_n(&nocopy_wbits(c->slot)[w], c->mine[w], __ATOMIC_SEQ_CST);
 		}
 	}
 	c->transient = false;
@@ -390,7 +396,7 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 				uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 				if (f < NOCOPY_HOT_MAX && (!f || !(nocopy_rand(c) & ((1u << f) - 1)))) {
 					__atomic_store_n(&e->hot, f + 1, __ATOMIC_RELAXED); /* p = 1/2^f: ~log2(reads) writes, the line stays shared */
-					__atomic_add_fetch(&nocopy_a->segs[nocopy_seg_of(e)].reads, 1 << f, __ATOMIC_RELAXED);
+					__atomic_add_fetch(&nocopy_segs[nocopy_seg_of(e)].reads, 1 << f, __ATOMIC_RELAXED);
 				}
 				return e;
 			}

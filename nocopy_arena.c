@@ -15,6 +15,11 @@
 nocopy_arena *nocopy_a;
 char *nocopy_seg_base;
 unsigned nocopy_seg_shift;
+uint32_t nocopy_seg_words;
+nocopy_seg *nocopy_segs;
+uint8_t *nocopy_seg_owner;
+uint64_t *nocopy_pins;
+uint32_t nocopy_pin_stride;
 uint32_t nocopy_shard_mask, nocopy_tab_mask;
 nocopy_slot *nocopy_tabs[NOCOPY_MAX_SHARDS];
 uint32_t *nocopy_ghosts[NOCOPY_MAX_SHARDS];
@@ -59,8 +64,8 @@ void nocopy_lock_wait(nocopy_shard *sh)
 
 static void bits_clear(int slot)
 {
-	for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
-		__atomic_store_n(&nocopy_a->workers[slot].bits[w], 0, __ATOMIC_SEQ_CST);
+	for (uint32_t w = 0; w < nocopy_seg_words; w++) {
+		__atomic_store_n(&nocopy_wbits(slot)[w], 0, __ATOMIC_SEQ_CST);
 	}
 }
 
@@ -102,8 +107,8 @@ void nocopy_after_fork(nocopy_ctx *c)
 {
 	nocopy_self = nocopy_owner_self();
 	if (nocopy_claim(c)) {
-		for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
-			__atomic_store_n(&nocopy_a->workers[c->slot].bits[w], c->mine[w], __ATOMIC_SEQ_CST);
+		for (uint32_t w = 0; w < nocopy_seg_words; w++) {
+			__atomic_store_n(&nocopy_wbits(c->slot)[w], c->mine[w], __ATOMIC_SEQ_CST);
 		}
 	}
 }
@@ -127,11 +132,11 @@ void nocopy_request_end(nocopy_ctx *c)
 
 /* ---- segments (shard locked) ---- */
 
-static void seg_set(uint32_t s, uint8_t st) { __atomic_store_n(&nocopy_a->segs[s].state, st, __ATOMIC_RELEASE); }
+static void seg_set(uint32_t s, uint8_t st) { __atomic_store_n(&nocopy_segs[s].state, st, __ATOMIC_RELEASE); }
 
 static void seg_check(nocopy_shard *sh, uint32_t s)
 {
-	nocopy_seg *g = &nocopy_a->segs[s];
+	nocopy_seg *g = &nocopy_segs[s];
 	if (g->state == SEG_SEALED && !g->live && !g->pending) {
 		seg_set(s, SEG_DEAD);
 		sh->ndead++;
@@ -144,7 +149,7 @@ static void seg_check(nocopy_shard *sh, uint32_t s)
 static bool seg_claim(nocopy_shard *sh, uint32_t s)
 {
 	uint8_t z = 0;
-	if (!__atomic_compare_exchange_n(&nocopy_a->owner[s], &z, (uint8_t) (sh->idx + 1), false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+	if (!__atomic_compare_exchange_n(&nocopy_seg_owner[s], &z, (uint8_t) (sh->idx + 1), false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
 		return false;
 	}
 	nocopy_segs_add(sh->own, s);
@@ -157,28 +162,28 @@ static void seg_release(nocopy_shard *sh, uint32_t s)
 {
 	nocopy_segs_del(sh->own, s);
 	__atomic_store_n(&sh->nown, sh->nown - 1, __ATOMIC_RELAXED);
-	__atomic_store_n(&nocopy_a->owner[s], 0, __ATOMIC_RELEASE);
+	__atomic_store_n(&nocopy_seg_owner[s], 0, __ATOMIC_RELEASE);
 }
 
 static uint32_t pool_free(void)
 {
 	uint32_t n = 0;
 	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
-		n += !__atomic_load_n(&nocopy_a->owner[s], __ATOMIC_RELAXED);
+		n += !__atomic_load_n(&nocopy_seg_owner[s], __ATOMIC_RELAXED);
 	}
 	return n;
 }
 
 static void seg_zero(uint32_t s)
 {
-	uint32_t gen = nocopy_a->segs[s].gen + 1;
-	memset(&nocopy_a->segs[s], 0, sizeof(nocopy_seg)); /* SEG_FREE */
-	nocopy_a->segs[s].gen = gen;
+	uint32_t gen = nocopy_segs[s].gen + 1;
+	memset(&nocopy_segs[s], 0, sizeof(nocopy_seg)); /* SEG_FREE */
+	nocopy_segs[s].gen = gen;
 }
 
 static void seg_free(nocopy_shard *sh, uint32_t s)
 {
-	uint32_t k = nocopy_a->segs[s].run;
+	uint32_t k = nocopy_segs[s].run;
 #ifdef NOCOPY_POISON
 	memset(seg_start(s), 0x5A, (size_t) k << nocopy_seg_shift); /* make use-after-free loud */
 #endif
@@ -200,7 +205,7 @@ static void reclaim(nocopy_shard *sh)
 	 * could have been pinned (and re-checked) just before. DEAD only ends here, under this lock. */
 	uint64_t dead[NOCOPY_SEG_WORDS] = {0};
 	SH_SEGS(sh, s) {
-		if (nocopy_a->segs[s].state == SEG_DEAD) {
+		if (nocopy_segs[s].state == SEG_DEAD) {
 			nocopy_segs_add(dead, s);
 		}
 	}
@@ -208,10 +213,11 @@ static void reclaim(nocopy_shard *sh)
 	uint64_t held[NOCOPY_SEG_WORDS] = {0};
 	uint32_t nw = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_ACQUIRE);
 	time_t now = time(NULL);
+	uint32_t nwords = nocopy_seg_words;
 	for (uint32_t i = 0; i < nw; i++) {
 		uint64_t b[NOCOPY_SEG_WORDS], blocks = 0;
-		for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
-			b[w] = __atomic_load_n(&nocopy_a->workers[i].bits[w], __ATOMIC_SEQ_CST);
+		for (uint32_t w = 0; w < nwords; w++) {
+			b[w] = __atomic_load_n(&nocopy_wbits(i)[w], __ATOMIC_SEQ_CST);
 			blocks |= b[w] & dead[w];
 		}
 		if (!blocks) {
@@ -224,7 +230,7 @@ static void reclaim(nocopy_shard *sh)
 				continue;
 			}
 		}
-		for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
+		for (uint32_t w = 0; w < nwords; w++) {
 			held[w] |= b[w];
 		}
 	}
@@ -249,8 +255,8 @@ static inline __attribute__((always_inline)) void entry_die(nocopy_shard *sh, no
 {
 	uint32_t s = nocopy_seg_of(e);
 	e->live = false;
-	__atomic_sub_fetch(&nocopy_a->segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
-	nocopy_a->segs[s].live -= e->size;
+	__atomic_sub_fetch(&nocopy_segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
+	nocopy_segs[s].live -= e->size;
 	sh->live_bytes -= e->size;
 	seg_check(sh, s);
 }
@@ -259,9 +265,9 @@ static inline __attribute__((always_inline)) void entry_birth(nocopy_shard *sh, 
 {
 	uint32_t s = nocopy_seg_of(e);
 	e->live = true;
-	nocopy_a->segs[s].pending--;
-	__atomic_add_fetch(&nocopy_a->segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
-	nocopy_a->segs[s].live += e->size;
+	nocopy_segs[s].pending--;
+	__atomic_add_fetch(&nocopy_segs[s].reads, (1 << __atomic_load_n(&e->hot, __ATOMIC_RELAXED)) - 1, __ATOMIC_RELAXED);
+	nocopy_segs[s].live += e->size;
 	sh->live_bytes += e->size;
 }
 
@@ -271,7 +277,7 @@ void nocopy_entry_birth(nocopy_shard *sh, nocopy_entry *e) { entry_birth(sh, e);
 void nocopy_abort(nocopy_shard *sh, nocopy_entry *e)
 {
 	uint32_t s = nocopy_seg_of(e);
-	nocopy_a->segs[s].pending--;
+	nocopy_segs[s].pending--;
 	seg_check(sh, s);
 }
 
@@ -286,7 +292,7 @@ static int ttl_bucket(time_t ttl)
 
 static inline __attribute__((always_inline)) nocopy_entry *seg_carve(uint32_t s, size_t total, time_t exp)
 {
-	nocopy_seg *g = &nocopy_a->segs[s];
+	nocopy_seg *g = &nocopy_segs[s];
 	nocopy_entry *e = (nocopy_entry *) (seg_start(s) + g->used);
 	e->size = total; /* before used covers it: a repair walk must never meet a header without a size */
 	e->live = false;
@@ -309,7 +315,7 @@ static __attribute__((noinline)) uint32_t take_run(nocopy_shard *sh, uint32_t k,
 	uint32_t ns = nocopy_a->nsegs, home = sh->idx * nocopy_fair_segs;
 	for (uint32_t i = 0, n = 0; i < ns; i++) {
 		uint32_t s = (home + i) % ns;
-		n = __atomic_load_n(&nocopy_a->owner[s], __ATOMIC_RELAXED) ? 0 : s ? n + 1 : 1; /* runs do not wrap */
+		n = __atomic_load_n(&nocopy_seg_owner[s], __ATOMIC_RELAXED) ? 0 : s ? n + 1 : 1; /* runs do not wrap */
 		if (n < k) {
 			continue;
 		}
@@ -328,9 +334,9 @@ static __attribute__((noinline)) uint32_t take_run(nocopy_shard *sh, uint32_t k,
 		for (j = got + 1; j <= s; j++) {
 			seg_set(j, SEG_CONT);
 		}
-		nocopy_a->segs[got].run = k;
-		nocopy_a->segs[got].born = sh->last_seq;
-		__atomic_store_n(&nocopy_a->segs[got].reads, 0, __ATOMIC_RELAXED);
+		nocopy_segs[got].run = k;
+		nocopy_segs[got].born = sh->last_seq;
+		__atomic_store_n(&nocopy_segs[got].reads, 0, __ATOMIC_RELAXED);
 		seg_set(got, state);
 		return got;
 	}
@@ -354,7 +360,7 @@ static __attribute__((noinline)) nocopy_entry *seg_alloc_new(nocopy_shard *sh, s
 		seg_set(cur, SEG_SEALED);
 		seg_check(sh, cur);
 	}
-	nocopy_a->segs[got].bucket = (uint8_t) b;
+	nocopy_segs[got].bucket = (uint8_t) b;
 	sh->cur[b] = (int32_t) got;
 	return seg_carve(got, total, exp);
 }
@@ -362,7 +368,7 @@ static __attribute__((noinline)) nocopy_entry *seg_alloc_new(nocopy_shard *sh, s
 nocopy_entry *nocopy_seg_alloc(nocopy_shard *sh, size_t total, bool reserve, int b, time_t exp)
 {
 	int32_t cur = sh->cur[b];
-	if (total <= nocopy_seg_size / 2 && cur >= 0 && nocopy_a->segs[cur].used + total <= nocopy_seg_size) {
+	if (total <= nocopy_seg_size / 2 && cur >= 0 && nocopy_segs[cur].used + total <= nocopy_seg_size) {
 		return seg_carve(cur, total, exp);
 	}
 	return seg_alloc_new(sh, total, reserve, b, exp);
@@ -455,7 +461,7 @@ static void wip_clear(uint32_t slot) { __atomic_store_n(&nocopy_a->workers[slot]
 /* NULL: in the pool. A wip entry's segment stays with its shard: the entry keeps it pending. */
 static nocopy_shard *seg_shard(uint32_t s)
 {
-	uint8_t o = __atomic_load_n(&nocopy_a->owner[s], __ATOMIC_ACQUIRE);
+	uint8_t o = __atomic_load_n(&nocopy_seg_owner[s], __ATOMIC_ACQUIRE);
 	return o ? &nocopy_a->shards[o - 1] : NULL;
 }
 
@@ -521,7 +527,7 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 	memset(sh->own, 0, sizeof sh->own); /* owner[] is the truth: a claim or release may have stopped halfway */
 	uint32_t nown = 0;
 	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
-		if (__atomic_load_n(&nocopy_a->owner[s], __ATOMIC_ACQUIRE) == sh->idx + 1) {
+		if (__atomic_load_n(&nocopy_seg_owner[s], __ATOMIC_ACQUIRE) == sh->idx + 1) {
 			nocopy_segs_add(sh->own, s);
 			nown++;
 		}
@@ -529,14 +535,14 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 	__atomic_store_n(&sh->nown, nown, __ATOMIC_RELAXED);
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		int32_t c = sh->cur[b];
-		if (c >= 0 && (!owns(sh, (uint32_t) c) || nocopy_a->segs[c].state != SEG_OPEN)) {
+		if (c >= 0 && (!owns(sh, (uint32_t) c) || nocopy_segs[c].state != SEG_OPEN)) {
 			sh->cur[b] = -1;
 		}
 	}
 	sh->ndead = 0;
 	sh->live_bytes = 0;
 	for (uint32_t s = own_next(sh, 0); s != UINT32_MAX;) {
-		nocopy_seg *g = &nocopy_a->segs[s];
+		nocopy_seg *g = &nocopy_segs[s];
 		if (g->state == SEG_FREE || g->state == SEG_CONT) { /* claimed but not set up, or CONT outside any run: a run taken or freed halfway */
 			seg_zero(s);
 			seg_release(sh, s);
@@ -544,7 +550,7 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 			continue;
 		}
 		uint32_t k = 1;
-		while (k < g->run && s + k < NOCOPY_MAX_SEGS && owns(sh, s + k)) {
+		while (k < g->run && s + k < nocopy_a->nsegs && owns(sh, s + k)) {
 			k++;
 		}
 		g->run = k; /* seg_free releases run segments: never more than it owns */
@@ -583,11 +589,11 @@ static void shard_repair(nocopy_shard *sh, uint64_t dead)
 		if (__atomic_load_n(&nocopy_a->workers[i].owner, __ATOMIC_RELAXED) == dead) {
 			wip_clear(i); /* the holder itself, between relock and commit */
 		} else {
-			nocopy_a->segs[nocopy_seg_of(e)].pending++;
+			nocopy_segs[nocopy_seg_of(e)].pending++;
 		}
 	}
 	SH_SEGS(sh, s) {
-		if (nocopy_a->segs[s].state == SEG_DEAD) {
+		if (nocopy_segs[s].state == SEG_DEAD) {
 			sh->ndead++;
 		} else {
 			seg_check(sh, s);
@@ -834,13 +840,13 @@ void nocopy_stats(nocopy_stats_t *st)
 	uint64_t held[NOCOPY_SEG_WORDS] = {0};
 	uint32_t nw = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_ACQUIRE);
 	for (uint32_t i = 0; i < nw; i++) {
-		for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
-			held[w] |= __atomic_load_n(&nocopy_a->workers[i].bits[w], __ATOMIC_SEQ_CST);
+		for (uint32_t w = 0; w < nocopy_seg_words; w++) {
+			held[w] |= __atomic_load_n(&nocopy_wbits(i)[w], __ATOMIC_SEQ_CST);
 		}
 		st->hits += __atomic_load_n(&nocopy_a->workers[i].hits, __ATOMIC_RELAXED);
 		st->misses += __atomic_load_n(&nocopy_a->workers[i].misses, __ATOMIC_RELAXED);
 	}
-	for (int w = 0; w < NOCOPY_SEG_WORDS; w++) {
+	for (uint32_t w = 0; w < nocopy_seg_words; w++) {
 		st->pinned_segments += (uint32_t) __builtin_popcountll(held[w]);
 	}
 	st->segments = nocopy_a->nsegs;
@@ -864,6 +870,11 @@ static void adopt(nocopy_arena *p)
 	nocopy_seg_base = (char *) p + p->header_size;
 	nocopy_shard_mask = p->nshards - 1;
 	nocopy_fair_segs = p->nsegs / p->nshards;
+	nocopy_seg_words = (p->nsegs + 63) / 64;
+	nocopy_segs = (nocopy_seg *) ((char *) p + p->segs_off);
+	nocopy_seg_owner = (uint8_t *) p + p->owner_off;
+	nocopy_pins = (uint64_t *) ((char *) p + p->pins_off);
+	nocopy_pin_stride = p->pin_stride;
 	nocopy_tab_mask = p->tab_per - 1;
 	for (uint32_t s = 0; s < p->nshards; s++) {
 		nocopy_tabs[s] = (nocopy_slot *) (p->tables + (size_t) s * p->tab_per * sizeof(nocopy_slot));
@@ -873,9 +884,9 @@ static void adopt(nocopy_arena *p)
 }
 
 typedef struct {
-	size_t size, header;
+	size_t size, header, segs_off, owner_off, pins_off;
 	unsigned shift;
-	uint32_t nshards, per;
+	uint32_t nshards, per, pin_stride;
 } layout;
 
 const char NOCOPY_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
@@ -884,6 +895,9 @@ static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 {
 	/* shards only where each slice stays >= 8 MB (an entry must fit in one) and holds >= 16 segments */
 	unsigned shift = 16;
+	while ((size >> shift) > 256 && shift < NOCOPY_SEG_MAX_SHIFT) {
+		shift++;
+	}
 	while ((size >> shift) > NOCOPY_MAX_SEGS) {
 		shift++;
 	}
@@ -896,8 +910,13 @@ static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 	while (per * nshards < hint * 2 || per * nshards < size / 256) {
 		per <<= 1;
 	}
-	size_t header = NOCOPY_ALIGN(sizeof(nocopy_arena)) + (size_t) nshards * per * (sizeof(nocopy_slot) + sizeof(uint32_t));
-	header = (header + 63) & ~(size_t) 63;
+	/* after the tables: per-segment state, owners and pin bitmaps, sized for size >> shift segments (an upper bound) */
+	size_t maxsegs = size >> shift, a64 = ~(size_t) 63;
+	uint32_t stride = (uint32_t) (((maxsegs + 63) / 64 + 7) & ~(size_t) 7);
+	size_t segs_off = (NOCOPY_ALIGN(sizeof(nocopy_arena)) + (size_t) nshards * per * (sizeof(nocopy_slot) + sizeof(uint32_t)) + 63) & a64;
+	size_t owner_off = (segs_off + maxsegs * sizeof(nocopy_seg) + 63) & a64;
+	size_t pins_off = (owner_off + maxsegs + 63) & a64;
+	size_t header = pins_off + (size_t) NOCOPY_MAX_WORKERS * stride * sizeof(uint64_t);
 	*need = header + ((size_t) 4 << shift);
 	if (per > ((uint64_t) 1 << 31) || size < *need) {
 		return NOCOPY_TOO_SMALL;
@@ -905,7 +924,8 @@ static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 	if (size > ((size_t) 32 << 30)) {
 		return "larger than 32G";
 	}
-	*l = (layout) {.size = size, .header = header, .shift = shift, .nshards = nshards, .per = (uint32_t) per};
+	*l = (layout) {.size = size, .header = header, .segs_off = segs_off, .owner_off = owner_off, .pins_off = pins_off,
+		.shift = shift, .nshards = nshards, .per = (uint32_t) per, .pin_stride = stride};
 	return NULL;
 }
 
@@ -919,6 +939,10 @@ static void init(nocopy_arena *p, const layout *l)
 	p->tab_per = l->per;
 	p->nsegs = (uint32_t) ((l->size - l->header) >> l->shift);
 	p->nshards = l->nshards;
+	p->segs_off = l->segs_off;
+	p->owner_off = l->owner_off;
+	p->pins_off = l->pins_off;
+	p->pin_stride = l->pin_stride;
 	for (uint32_t s = 0; s < l->nshards; s++) {
 		nocopy_shard *sh = &p->shards[s];
 		sh->idx = s;

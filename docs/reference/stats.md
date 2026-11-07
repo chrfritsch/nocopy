@@ -15,7 +15,7 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | `expunges` | Eviction rounds (each merges up to 4 old segments: read entries move forward, the rest go) |
 | `ghost_hits` | New keys recognized as recently evicted, which then get extra protection from eviction |
 | `evacuated_bytes` | Bytes moved by compaction and eviction rounds |
-| `segment_size` | Bytes per segment (a power of two, 64 KB-128 MB: at most 256 segments) |
+| `segment_size` | Bytes per segment (a power of two, 64 KB-4 MB; arenas over 1G get more segments, not bigger ones) |
 | `segments` | Segments in the arena |
 | `free_segments` | Segments in the shared pool, ready for any shard's writes |
 | `dead_segments` | Segments without live entries, not yet reused (a reader may still pin them) |

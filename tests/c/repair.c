@@ -111,10 +111,10 @@ int main(void)
 	}
 	/* a segment claimed from the pool, never set up */
 	uint32_t orphan = 0;
-	while (nocopy_a->owner[orphan]) {
+	while (nocopy_seg_owner[orphan]) {
 		orphan++;
 	}
-	nocopy_a->owner[orphan] = (uint8_t) (sh->idx + 1);
+	nocopy_seg_owner[orphan] = (uint8_t) (sh->idx + 1);
 	sh->lock = dead_owner(); /* the holder dies */
 
 	nocopy_lock(sh); /* steals and repairs */
@@ -131,8 +131,8 @@ int main(void)
 		}
 	}
 	assert(n == N - 1 && sh->nlive == n && sh->live_bytes == live && !bad_slots(sh));
-	assert(!nocopy_a->owner[orphan] && !owns(sh, orphan) && sh->nown == (uint32_t) __builtin_popcountll(sh->own[0]));
-	assert(nocopy_a->segs[nocopy_seg_of(big)].pending == 1); /* its writer is not the dead holder: left for the reaper */
+	assert(!nocopy_seg_owner[orphan] && !owns(sh, orphan) && sh->nown == (uint32_t) __builtin_popcountll(sh->own[0]));
+	assert(nocopy_segs[nocopy_seg_of(big)].pending == 1); /* its writer is not the dead holder: left for the reaper */
 	nocopy_unlock(sh);
 	for (int x = 0; x < N; x++) {
 		snprintf(k, sizeof k, "k%d", x);
@@ -142,10 +142,10 @@ int main(void)
 	nocopy_clear(); /* reaps the dead writer's entry; afterwards only open segments are left */
 	uint32_t used = 0;
 	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
-		uint8_t st = nocopy_a->segs[s].state;
-		assert(nocopy_a->owner[s] ? owns(sh, s) && st == SEG_OPEN : st == SEG_FREE && !owns(sh, s)); /* freed ones are back in the pool */
+		uint8_t st = nocopy_segs[s].state;
+		assert(nocopy_seg_owner[s] ? owns(sh, s) && st == SEG_OPEN : st == SEG_FREE && !owns(sh, s)); /* freed ones are back in the pool */
 		used += st == SEG_OPEN;
-		assert(!nocopy_a->segs[s].pending);
+		assert(!nocopy_segs[s].pending);
 	}
 	assert(!nocopy_a->workers[1].wip && sh->live_bytes == 0 && used <= NOCOPY_TTL_BUCKETS);
 	printf("repair: ok (%u slots, %u open segments)\n", m + 1, used);

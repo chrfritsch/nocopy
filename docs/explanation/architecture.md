@@ -31,8 +31,9 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 
 ## Layout
 
-`[ header | workers | segment table | slot tables ][ segment 0 ][ segment 1 ] ...`
-- Segment size = power of two so that there are at most 256 segments (min 64 KB). Entries larger than half a segment take a run of contiguous segments.
+`[ header | workers | slot tables | segment table | segment owners | pin bitmaps ][ segment 0 ][ segment 1 ] ...`
+- Segment size = power of two, at least 64 KB, growing until there are at most 256 segments but not past 4 MB (`NOCOPY_SEG_MAX_SHIFT`): above 1G the count grows instead (8,192 at 32G), since an eviction round moves up to a segment's worth under the shard lock. Entries larger than half a segment take a run of contiguous segments.
+- Segment table, owners and the workers' pin bitmaps (`pin_stride` words each, on their own cache lines) sit behind the slot tables, sized for `size >> shift` segments (`segs_off`, `owner_off`, `pins_off`); bitmap loops stop at `nocopy_seg_words`. Arenas up to 1G keep 4-word bitmaps.
 - Entry = `nocopy_entry` header (hash, size, expiry, seq, 32-bit created, key length/offset, live/hot/flags, the user's 32-bit `user`: 48 bytes, `_Static_assert`ed) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
   Equal array keys, and equal strings of up to 64 bytes inside arrays and objects (`NOCOPY_VSTR_MAX`), are stored once per entry (rows of a result set share their column names and repeated values): a 256-slot table by hash (`NOCOPY_G(keys)`, `key_seen`) remembers this value's strings, keys and values alike; a miss overwrites the slot.

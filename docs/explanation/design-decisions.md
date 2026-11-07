@@ -122,6 +122,14 @@ per-segment sum of the entries' read estimates kept up to date on every `hot` bu
 Zipf 91.2 -> 92.2 / 92.9 -> 93.9, Zipf + 0.5 one-hit wonders 80.1 -> 88.0 / 83.2 -> 89.4, loop 1.1x 25 -> 49 / 25 -> 50, loop 1.5x 25 -> 25 / 18 -> 25;
 20% overwrites 84.9 -> 84.0 / 87.3 -> 87.2. Puts under eviction and fetches unchanged. Always taking the oldest keeps scans from sticking.
 
+**Segments stop growing at 4 MB; bigger arenas get more of them** (up to 8,192 at 32G) instead of 256 ever larger ones.
+An eviction round holds the shard lock while it moves up to a segment's worth, so writers waited in proportion to the
+segment size. `./dev big` at 4G (16 MB -> 4 MB segments), 20 s of evicting writes: put max 51-111 -> 26-42 ms, puts over
+50 ms 0-7 -> 0, over 10 ms 1,860 -> 646-658; rounds 4x as often, so puts over 1 ms 2,300-2,700 -> 7,800 and p99.99
+0.26-0.34 -> 4.8 ms (what 1G already had); gets 3.4-3.7 -> 4.2 M/s. Bitmaps and the segment table moved behind the slot
+tables, sized by the segment count, so arenas up to 1G keep their layout (`./dev ab`: within HEAD-vs-HEAD noise) and 1,000
+idle slot holders at 4G still cost nothing (put p99.99 441 vs 422-502 us).
+
 **Compact a segment alone up to 3/4 live**, not only segments at <= 1/4 that fit together into one: rewrites spread
 their dead copies evenly, and at 20% of hits rewritten only 63% of the taken segments were live, so merge evicted while a
 third of the arena was dead. `bench/hitratio.php` 32M / 64M, 20% rewrites 87.4 -> 91.0 / 85.3 -> 90.5, 50% rewrites
