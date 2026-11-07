@@ -9,6 +9,8 @@
 #include "zend_smart_str.h"
 #include "zend_lazy_objects.h"
 #include "zend_enum.h"
+#include "zend_exceptions.h"
+#include "ext/date/php_date.h"
 
 /* ---- the layout in the block ---- */
 
@@ -67,12 +69,13 @@ static zend_always_inline void graph_each(nc_graph *g, zval_fn f, void *ctx)
 #define K_SLEEPW 4 /* K_SLEEP, then __wakeup() */
 #define K_DATA 5   /* props[0]: __serialize()'s array, given to __unserialize() */
 #define K_ENUM 6   /* props[0]: the case's name */
+#define K_DATE 7   /* DateTime(Immutable): props[0] timestamp, [1] date_word(), [2] zone ID or abbreviation */
 #define K_MASK 7
 static zend_always_inline uint32_t fp_kind(uint64_t fp) { return (uint32_t) (fp & K_MASK); }
 static zend_always_inline bool kind_slots(uint32_t kind) { return kind <= K_SLEEPW; }
 static zend_always_inline bool kind_sleep(uint32_t kind) { return kind == K_SLEEP || kind == K_SLEEPW; }
 static zend_always_inline bool kind_hook(uint32_t kind) { return kind == K_WAKEUP || kind == K_SLEEPW || kind == K_DATA; }
-static zend_always_inline uint32_t kind_nprops(const zend_class_entry *ce, uint32_t kind) { return kind_slots(kind) ? (uint32_t) ce->default_properties_count : 1; }
+static zend_always_inline uint32_t kind_nprops(const zend_class_entry *ce, uint32_t kind) { return kind_slots(kind) ? (uint32_t) ce->default_properties_count : kind == K_DATE ? 3 : 1; }
 
 /* The kind (as serialize() treats the class) and a hash of what must not change: for slots, their names, visibility, types. */
 static uint64_t class_fp_compute(zend_class_entry *ce)
@@ -87,7 +90,7 @@ static uint64_t class_fp_compute(zend_class_entry *ce)
 		return 0;
 	}
 	bool wake = zend_hash_exists(&ce->function_table, ZSTR_KNOWN(ZEND_STR_WAKEUP));
-	uint32_t kind = ce->ce_flags & ZEND_ACC_ENUM ? K_ENUM : data ? K_DATA
+	uint32_t kind = ce->ce_flags & ZEND_ACC_ENUM ? K_ENUM : ce == php_date_get_date_ce() || ce == php_date_get_immutable_ce() ? K_DATE : data ? K_DATA
 		: zend_hash_str_exists(&ce->function_table, ZEND_STRL("__sleep")) ? (wake ? K_SLEEPW : K_SLEEP) : wake ? K_WAKEUP : K_SLOTS;
 	smart_str b = {0};
 	smart_str_append(&b, ce->name);
@@ -138,6 +141,117 @@ void nocopy_classes_clear(void)
 		zend_hash_destroy(&NOCOPY_G(classes));
 		NOCOPY_G(classes_on) = false;
 	}
+	if (NOCOPY_G(zones_on)) {
+		zend_hash_destroy(&NOCOPY_G(zones));
+		NOCOPY_G(zones_on) = false;
+	}
+}
+
+static bool has_dynamic(const HashTable *props);
+
+/* ---- dates: stored as timestamp and zone, not __serialize()'s string (formatting and parsing were ~95% of their cost) ---- */
+
+/* Stored natively: initialized, with a zone, no dynamic properties (__serialize() would add them). */
+static bool date_native(zend_object *o)
+{
+	const timelib_time *t = php_date_obj_from_obj(o)->time;
+	return t && t->is_localtime && t->zone_type >= TIMELIB_ZONETYPE_OFFSET && t->zone_type <= TIMELIB_ZONETYPE_ID
+		&& !(o->properties && has_dynamic(o->properties));
+}
+
+/* microseconds | zone type << 20 | dst << 24 | UTC offset << 32 */
+static uint64_t date_word(const timelib_time *t)
+{
+	return (uint64_t) t->us | (uint64_t) t->zone_type << 20 | (uint64_t) (t->dst != 0) << 24 | (uint64_t) (uint32_t) t->z << 32;
+}
+
+/* ID or abbreviation, as a string (persisted like a slot's), else null. */
+static bool date_zone_name(zend_object *o, zval *z)
+{
+	const timelib_time *t = php_date_obj_from_obj(o)->time;
+	const char *s = t->zone_type == TIMELIB_ZONETYPE_ID ? t->tz_info->name : t->zone_type == TIMELIB_ZONETYPE_ABBR ? t->tz_abbr : NULL;
+	if (!s) {
+		ZVAL_NULL(z);
+		return false;
+	}
+	ZVAL_STRING(z, s);
+	return true;
+}
+
+/* The zone as ext/date resolves it (its tzdb, its cache), cached by name per request. NULL: not in the tzdb anymore. */
+static timelib_tzinfo *date_tz(const zend_string *name)
+{
+	HashTable *t = &NOCOPY_G(zones);
+	if (!NOCOPY_G(zones_on)) {
+		zend_hash_init(t, 8, NULL, NULL, 0);
+		NOCOPY_G(zones_on) = true;
+	}
+	timelib_tzinfo *tz = zend_hash_str_find_ptr(t, ZSTR_VAL(name), ZSTR_LEN(name));
+	if (tz) {
+		return tz;
+	}
+	zval o, n;
+	object_init_ex(&o, php_date_get_timezone_ce());
+	ZVAL_STRINGL(&n, ZSTR_VAL(name), ZSTR_LEN(name));
+	zend_call_known_instance_method_with_1_params(Z_OBJCE(o)->constructor, Z_OBJ(o), NULL, &n);
+	zval_ptr_dtor(&n);
+	if (EG(exception)) {
+		zend_clear_exception();
+	} else if (Z_PHPTIMEZONE_P(&o)->type == TIMELIB_ZONETYPE_ID) {
+		tz = Z_PHPTIMEZONE_P(&o)->tzi.tz;
+		zend_hash_str_add_new_ptr(t, ZSTR_VAL(name), ZSTR_LEN(name), tz);
+	}
+	zval_ptr_dtor(&o);
+	return tz;
+}
+
+/* Built by ext/date's own calls (timelib is not exported): UTC from the timestamp, then date_timezone_set() with the stored zone. false: the zone is gone. */
+static bool date_out(zend_object *obj, const nc_obj *n)
+{
+	static zend_function *tz_set;
+	uint64_t w = (uint64_t) Z_LVAL(n->props[1]);
+	int type = (int) (w >> 20) & 0xf;
+	int32_t z = (int32_t) (w >> 32);
+	zend_object *d = obj; /* date_timezone_set() takes only a DateTime: an immutable one is built in one and takes its time */
+	if (obj->ce != php_date_get_date_ce()) {
+		zval t;
+		object_init_ex(&t, php_date_get_date_ce());
+		d = Z_OBJ(t);
+	}
+	php_date_initialize_from_ts_long(php_date_obj_from_obj(d), Z_LVAL(n->props[0]), (int) (w & 0xfffff));
+	bool ok = true;
+	if (type != TIMELIB_ZONETYPE_OFFSET || z) {
+		zval args[2], rv;
+		object_init_ex(&args[1], php_date_get_timezone_ce());
+		php_timezone_obj *tz = Z_PHPTIMEZONE_P(&args[1]);
+		if (type == TIMELIB_ZONETYPE_ID) {
+			ok = (tz->tzi.tz = date_tz(Z_STR(n->props[2]))) != NULL;
+		} else if (type == TIMELIB_ZONETYPE_ABBR) {
+			tz->tzi.z.utc_offset = z;
+			tz->tzi.z.dst = (int) (w >> 24) & 1;
+			tz->tzi.z.abbr = timelib_strdup(Z_STRVAL(n->props[2]));
+		} else {
+			tz->tzi.utc_offset = z;
+		}
+		tz->type = type;
+		tz->initialized = ok;
+		if (ok) {
+			if (!tz_set) {
+				tz_set = zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("date_timezone_set"));
+			}
+			ZVAL_OBJ(&args[0], d);
+			zend_call_known_function(tz_set, NULL, NULL, &rv, 2, args, NULL);
+			zval_ptr_dtor(&rv);
+			ok = !EG(exception);
+		}
+		zval_ptr_dtor(&args[1]);
+	}
+	if (d != obj) {
+		php_date_obj_from_obj(obj)->time = php_date_obj_from_obj(d)->time;
+		php_date_obj_from_obj(d)->time = NULL;
+		OBJ_RELEASE(d);
+	}
+	return ok;
 }
 
 /* A magic method with no arguments, run as serialize() runs it. false: it threw (rv is released). */
@@ -483,6 +597,10 @@ static bool object_node(graph_b *g, zend_object *o, uint32_t ck, gnode **out)
 		n->dyn = kind_sleep(kind) && Z_TYPE(h->data) == IS_ARRAY;
 		return h->ran;
 	}
+	if (kind == K_DATE) {
+		n->own = date_zone_name(o, &n->data);
+		return true;
+	}
 	n->dyn = (kind == K_SLOTS || kind == K_WAKEUP) && o->properties && has_dynamic(o->properties);
 	if (n->dyn && o->ce->default_properties_count) {
 		dyn_copy(&n->data, o);
@@ -531,7 +649,7 @@ __attribute__((noinline)) size_status nocopy_size_object(sizing *z, zend_object 
 	}
 	zend_class_entry *ce = o->ce;
 	uint32_t kind = fp_kind(class_fp(ce));
-	if (!kind || zend_object_is_lazy(o) || (kind_slots(kind) && o->handlers != &std_object_handlers)) {
+	if (!kind || zend_object_is_lazy(o) || (kind_slots(kind) && o->handlers != &std_object_handlers) || (kind == K_DATE && !date_native(o))) {
 		return SIZE_OBJECT;
 	}
 	uint32_t ck = pmap_add(&g->cls, (uintptr_t) ce, g->cls.n << 3 | kind, &added)->v;
@@ -550,7 +668,7 @@ __attribute__((noinline)) size_status nocopy_size_object(sizing *z, zend_object 
 		return SIZE_OK; /* sized in the next pass */
 	} else if (kind == K_ENUM) {
 		size_vstr(z, Z_STR_P(zend_enum_fetch_case_name(o)));
-	} else if (kind == K_DATA) {
+	} else if (kind == K_DATA || kind == K_DATE) {
 		st = nocopy_size_zval(z, &data, depth + 1);
 	} else {
 		for (int k = 0; k < ce->default_properties_count && st == SIZE_OK; k++) {
@@ -615,6 +733,12 @@ __attribute__((noinline)) void nocopy_persist_object(persist *p, zval *z)
 		} else if (kind == K_DATA) {
 			ZVAL_COPY_VALUE(&n->props[0], &gn->data);
 			nocopy_persist_zval(p, &n->props[0]);
+		} else if (kind == K_DATE) {
+			const timelib_time *t = php_date_obj_from_obj(o)->time;
+			ZVAL_LONG(&n->props[0], (zend_long) t->sse);
+			ZVAL_LONG(&n->props[1], (zend_long) date_word(t));
+			ZVAL_COPY_VALUE(&n->props[2], &gn->data);
+			nocopy_persist_zval(p, &n->props[2]);
 		} else {
 			const uint8_t *named = gn->named;
 			for (int k = 0; k < ce->default_properties_count; k++) {
@@ -797,7 +921,7 @@ static bool graph_classes(const nc_graph *g, zend_class_entry **ces)
 	return true;
 }
 
-/* Every object, empty (no constructor; enum cases looked up). Returns how many were made: fewer if an enum case is gone. */
+/* Every object, empty (no constructor; enum cases looked up; dates whole). Returns how many were made: fewer if an enum case or a date's zone is gone. */
 static uint32_t graph_objects_new(const nc_graph *g, zend_class_entry **ces, zend_object **objs)
 {
 	const nc_class *c = graph_cls(g);
@@ -813,9 +937,13 @@ static uint32_t graph_objects_new(const nc_graph *g, zend_class_entry **ces, zen
 			}
 			objs[i] = zend_enum_get_case(ce, Z_STR(n->props[0]));
 			GC_ADDREF(objs[i]);
-		} else if (kind == K_DATA) {
+		} else if (kind == K_DATA || kind == K_DATE) {
 			zval t;
 			if (object_init_ex(&t, ce) != SUCCESS) {
+				break;
+			}
+			if (kind == K_DATE && !date_out(Z_OBJ(t), n)) {
+				zval_ptr_dtor(&t);
 				break;
 			}
 			objs[i] = Z_OBJ(t);

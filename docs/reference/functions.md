@@ -27,8 +27,8 @@ Objects are stored as nodes and rebuilt on fetch without unserializing, with the
 calls (and their order) of `unserialize()`: user classes and `stdClass` as their property slots plus dynamic properties (then
 `__wakeup()` if declared), classes with `__sleep()` as the properties it names (the others get their class default, as
 `unserialize()` gives them; a name `serialize()` would warn about stores the value serialized, with that warning), classes with
-`__serialize`/`__unserialize` (also internal ones: `DateTime*`, `ArrayObject`, `SplObjectStorage`, ...) as `__serialize()`'s
-array, enums as their case. Identities, cycles, private, readonly and uninitialized properties are kept; strings and arrays
+`__serialize`/`__unserialize` (also internal ones: `ArrayObject`, `SplObjectStorage`, ...) as `__serialize()`'s
+array, enums as their case, `DateTime` and `DateTimeImmutable` as timestamp and zone (a zone gone from the time zone database makes a miss). Identities, cycles, private, readonly and uninitialized properties are kept; strings and arrays
 stay zero-copy, and so do arrays next to the objects. A fetch after a class was changed (another property layout), can't be
 loaded or lost the enum case is a miss; a `__wakeup`/`__unserialize` that throws makes it a miss with the exception thrown.
 A reference held more than once in the value stays one reference on fetch (writes through one place show in the others); its value stays zero-copy, the arrays holding it are copied.

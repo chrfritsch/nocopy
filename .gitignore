@@ -38,6 +38,7 @@ run-tests.php
 tests/**/*.diff
 tests/**/*.out
 tests/**/*.php
+!tests/fuzz.php
 tests/**/*.exp
 tests/**/*.log
 tests/**/*.sh

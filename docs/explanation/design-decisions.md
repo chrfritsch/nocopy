@@ -206,7 +206,7 @@ in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared ref
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
 **Shared references are graph nodes too** (were: the whole value serialized): a reference met more than once is `NC_RREF`, its value in
 the graph's `refs`, rebuilt as one `zend_reference` per fetch (typed slots holding it become its type sources); one met once is
-stored as its value, like `serialize()`. 1k rows + one shared ref, copy (`local_size=0`) / zero: fetch 124 / 113 µs -> 32 µs / 42 ns,
+stored as its value, like `serialize()` (except when that value is an object met elsewhere: `serialize()` writes `R:`, so after `unserialize()` both slots are references; nocopy leaves them as they were). 1k rows + one shared ref, copy (`local_size=0`) / zero: fetch 124 / 113 µs -> 32 µs / 42 ns,
 store 125 -> 24 µs; 3 keys, one shared: fetch 125 / 116 -> 77 / 42 ns. Price: graphs without shared refs fetch 1-3% slower
 (`prof.php`, best of 16 interleaved: get_prods 3647 -> 3773 ns, get_obj 100 -> 103 ns, get_json, get_ords within noise),
 stores within noise; the type sources first sat in the slot loop (get_prods -6%), now a pass of their own.
@@ -240,8 +240,16 @@ in a map from the start (512 B more in every store's frame) made put_int +3.7% a
 linearly. A `__serialize` result holding more hook objects costs one more pass; hooks run outer first, siblings before the
 ones their results hold (`serialize()` runs them depth first). Profile after (`./dev perf get_prods ...`): a fetch of
 100 objects is ~36% nocopy, the rest the engine creating and freeing objects; `DateTime*` objects cost ~550 ns each, over 95%
-in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup). Storing them natively
-(timestamp, microseconds, zone) would be the next lever.
+in ext/date's `__serialize`/`__unserialize` (string formatting, parsing, timezone lookup).
+
+**`DateTime` and `DateTimeImmutable` are stored natively** (kind `K_DATE`: timestamp, microseconds, zone type, offset, zone ID or
+abbreviation), not as `__serialize()`'s string. timelib's functions are not exported from the php binary, so a fetch uses ext/date's:
+`php_date_initialize_from_ts_long` (UTC), then `date_timezone_set()` with a `DateTimeZone` filled from the stored zone (IDs resolved
+once per request through `DateTimeZone`'s constructor, so ext/date's tzdb and cache); an immutable date is built in a `DateTime` that
+hands over its `timelib_time`. Subclasses stay `__serialize` nodes. `prof.php` best of 7 interleaved, 100 `Ord` objects (a
+`DateTimeImmutable` and an enum each), copy / zero: get_ords 43.2 / 43.1 -> 23.2 / 23.3 µs, put_ords 39.7 / 40.1 -> 7.2 / 7.3 µs.
+A fetched date still costs ~190 ns (the engine's object allocations and the internal call); unlike `unserialize()`, an ambiguous
+local time (DST fall-back) keeps its instant.
 
 **The Drupal module requires the polyfill.** Without APCu, `function_exists('apcu_fetch')` is false, so Composer's class loader
 (`setApcuPrefix`) and Drupal's FileCache fall back to the file system: 807 `faccessat` per logged-in request vs 65 with the

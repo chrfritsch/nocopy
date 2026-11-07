@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./dev tidy
       - run: ./dev asan
+      - run: ./dev fuzz
       - run: ./dev clang
   zts:
     strategy:

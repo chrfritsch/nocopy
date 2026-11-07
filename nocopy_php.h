@@ -59,6 +59,8 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_vk vk;
 	HashTable classes; /* class entry -> layout fingerprint (nocopy_graph.c), this request */
 	bool classes_on;
+	HashTable zones; /* time zone name -> timelib_tzinfo (ext/date's, freed with it), this request */
+	bool zones_on;
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
