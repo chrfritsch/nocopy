@@ -275,7 +275,7 @@ void nocopy_abort(nocopy_shard *sh, nocopy_entry *e)
 	seg_check(sh, s);
 }
 
-int nocopy_ttl_bucket(time_t ttl)
+static int ttl_bucket(time_t ttl)
 {
 	int b = ttl ? 1 : 0;
 	while (b && b < NOCOPY_TTL_BUCKETS - 1 && ttl >= ((time_t) 1 << (3 * b))) {
@@ -637,7 +637,7 @@ nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t no
 	if (total > (size_t) (nocopy_fair() - 1) << nocopy_seg_shift) {
 		return NULL; /* bigger than a shard's share */
 	}
-	int b = nocopy_ttl_bucket(exp ? exp - now : 0);
+	int b = ttl_bucket(exp ? exp - now : 0);
 	if (sh->exp_idle != now) { /* the common case: nothing left to expire this second */
 		nocopy_expire_step(sh, now, 64);
 	}

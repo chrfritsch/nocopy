@@ -47,7 +47,6 @@ uint64_t nocopy_owner_self(void);
 bool nocopy_owner_dead(uint64_t id); /* gone, a zombie, or its pid reused; reads /proc: no lock needed, better none held */
 
 /* ---- segments, entries, slots (nocopy_arena.c) ---- */
-int nocopy_ttl_bucket(time_t ttl);
 /* reserve: may take the last free segment (kept back so a merge can always make progress). */
 nocopy_entry *nocopy_seg_alloc(nocopy_shard *sh, size_t total, bool reserve, int bucket, time_t exp);
 void nocopy_entry_birth(nocopy_shard *sh, nocopy_entry *e); /* allocated -> live */
