@@ -10,7 +10,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 
 | Command | What it runs | Image |
 |---|---|---|
-| `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests), with a Valkey server for the 05x tests | `nocopy-linux:$PHP` |
+| `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests) on all cores, with a Valkey server for the 05x tests | `nocopy-linux:$PHP` |
 | `./dev novalkey [tests …]` | same, built with `--disable-nocopy-valkey` | `nocopy-linux:$PHP` |
 | `./dev asan [tests …]` | same, built with AddressSanitizer + UBSan (libasan preloaded into the uninstrumented php, `USE_ZEND_ALLOC=0`, no leak check) | `nocopy-linux:$PHP` |
 | `./dev clang [tests …]` | same, built with clang (warnings gcc does not give; `-Werror` too) | `nocopy-linux:$PHP` |

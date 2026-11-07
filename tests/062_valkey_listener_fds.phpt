@@ -6,6 +6,8 @@ nocopy
 <?php require __DIR__ . '/valkey_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t062-parent
+--CONFLICTS--
+valkey
 --FILE--
 <?php
 $code = '$f = fopen(PHP_BINARY, "r"); $s = stream_socket_server("tcp://127.0.0.1:0"); nocopy_put("a", 1); echo nocopy_stats()["valkey_listener"], "\n"; fgets(STDIN);';

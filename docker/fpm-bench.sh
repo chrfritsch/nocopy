@@ -1,7 +1,7 @@
 #!/bin/sh
 # Inside the image: bench/sfapp (with vendor, mounted at /appsrc) behind nginx + php-fpm (static workers), load from ab, median of 3.
 # PHP set up as https://symfony.com/doc/current/performance.html recommends (OPcache, realpath cache, preload). Run via ./dev sfbench.
-/src/docker/test.sh >/dev/null 2>&1
+/src/docker/build.sh || exit 1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
 rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && mkdir -p /app/nocopy-bundle && cp -r /src/symfony/src /app/nocopy-bundle/ && chown -R www-data /app/var 2>/dev/null; mkdir -p /app/var && chown -R www-data /app/var

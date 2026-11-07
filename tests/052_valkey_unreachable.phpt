@@ -8,6 +8,8 @@ nocopy
 nocopy.shm_name=/nocopy-t052
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t052:
+--CONFLICTS--
+valkey
 --FILE--
 <?php
 require __DIR__ . '/valkey.inc';

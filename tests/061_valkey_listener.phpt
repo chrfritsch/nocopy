@@ -8,6 +8,8 @@ nocopy
 nocopy.valkey=127.0.0.1:6379
 nocopy.valkey_prefix=t061:
 nocopy.shm_name=/nocopy-t061
+--CONFLICTS--
+valkey
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';

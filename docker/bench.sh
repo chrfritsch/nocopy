@@ -1,7 +1,7 @@
 #!/bin/sh
 # Inside the image: build, then bench/run.php groups x3 for APCu and nocopy; prints medians (APCu default serializer, nocopy copy, nocopy zero-copy).
 #   docker run --rm --shm-size=1g -v "$PWD":/src:ro nocopy-linux:8.5 /src/docker/bench.sh
-/src/docker/test.sh >/dev/null 2>&1
+/src/docker/build.sh || exit 1
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 R=/tmp/res; mkdir -p $R
 C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=512M -d apc.entries_hint=200000"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Inside the image: loop the concurrency tests on this release build; stop at the first failure. Usage: stress.sh [loops=30]
-/src/docker/test.sh >/dev/null 2>&1 || true
+/src/docker/build.sh && cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu || exit 1
 cd /build && export NOCOPY_SO=/build/modules/nocopy.so
 for n in $(seq "${1:-30}"); do
   timeout 300 env TEST_PHP_EXECUTABLE=$(command -v php) NO_INTERACTION=1 php /usr/local/lib/php/build/run-tests.php \

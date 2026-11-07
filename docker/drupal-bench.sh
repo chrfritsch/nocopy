@@ -14,7 +14,7 @@ B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memo
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
 
-/src/docker/test.sh >/dev/null 2>&1 || { echo "nocopy build failed"; exit 1; }
+/src/docker/build.sh || exit 1
 mkdir -p /out
 
 # MariaDB, data kept in the /site volume

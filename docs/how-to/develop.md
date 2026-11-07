@@ -40,7 +40,7 @@ Add `tests/0NN_what_it_checks.phpt` (next free number). Rules:
 - Tests run under the CLI, so they fetch copies. For zero-copy, run the body as a `php -S` request: `require __DIR__ . '/serve.inc'; echo serve(<<<'CODE' ... CODE);` (forwards the test's `nocopy.*` INI; 004 is an example).
 - Tests that need memory pressure use a small `nocopy.shm_size` (2M-4M, one shard).
 - Valkey tests require `valkey_skip.inc` in `--SKIPIF--` (they skip without a server) and set `nocopy.valkey=127.0.0.1:6379`
-  with their own `nocopy.valkey_prefix=tNNN:`; `valkey.inc` has helpers.
+  with their own `nocopy.valkey_prefix=tNNN:`; `valkey.inc` has helpers. Add `--CONFLICTS--` `valkey`: they share one server, so they run one at a time.
 - Forked processes: `pcntl_fork()`; threads (ZTS only): ext-parallel.
 
 ## Try things by hand

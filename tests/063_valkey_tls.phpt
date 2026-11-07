@@ -10,6 +10,8 @@ if (str_contains((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extens
 ?>
 --INI--
 nocopy.shm_name=/nocopy-t063
+--CONFLICTS--
+valkey
 --FILE--
 <?php
 $d = sys_get_temp_dir() . '/nocopy-t063';

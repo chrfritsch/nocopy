@@ -3,7 +3,7 @@
 # and the shared-cache check without nocopy.shm_name (no cache). /drupal caches the Drupal checkout.
 #   docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh
 # EXTRA: more INI lines, e.g. EXTRA="nocopy.shm_size=1M"
-/src/docker/test.sh >/dev/null 2>&1 || { echo "nocopy build/tests failed"; /src/docker/test.sh; exit 1; }
+/src/docker/build.sh || exit 1
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
 if [ ! -d /drupal/web ]; then
   composer create-project -q drupal/recommended-project:^11 /drupal/tmp && mv /drupal/tmp/* /drupal/tmp/.[!.]* /drupal/ 2>/dev/null; rmdir /drupal/tmp

@@ -7,6 +7,8 @@ nocopy
 --INI--
 nocopy.shm_name=/nocopy-t054
 nocopy.valkey=tcp://app:secret@127.0.0.1:1
+--CONFLICTS--
+valkey
 --FILE--
 <?php
 ob_start(); phpinfo(INFO_MODULES); $i = ob_get_clean();

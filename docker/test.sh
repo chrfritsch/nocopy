@@ -11,7 +11,7 @@ export NOCOPY_SO=/build/modules/nocopy.so
 # php itself is not instrumented: preload the runtime, plain malloc so emalloc overflows are seen, no leak report (php frees lazily)
 [ -n "$NOCOPY_ASAN" ] && export LD_PRELOAD="$(cc -print-file-name=libasan.so)" USE_ZEND_ALLOC=0 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1
 TEST_PHP_EXECUTABLE=$(command -v php) NO_INTERACTION=1 php /usr/local/lib/php/build/run-tests.php \
-  -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-runner -q "${@:-/build/tests}" 2>&1 | grep -E "^(FAIL|SKIP|BORK)|Tests (passed|failed|skipped)" || true
+  -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-runner -q -j"$(nproc)" "${@:-/build/tests}" 2>&1 | grep -E "^(FAIL|SKIP|BORK)|Tests (passed|failed|skipped)" || true
 bad=0
 for f in /build/tests/*.diff; do [ -f "$f" ] && { echo "== $f"; head -20 "$f"; bad=1; }; done
 exit $bad
