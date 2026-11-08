@@ -9,7 +9,7 @@ for mode in copy zero; do
   rm -f /dev/shm/nocopy-fuzz.*
   php -n -d extension=$NOCOPY_SO -d nocopy.shm_name=/nocopy-fuzz -d nocopy.shm_size=4M -d memory_limit=1G /src/tests/fuzz.php "${1:-20000}" "$seed" $mode > /tmp/fuzz.out 2>&1 || true
   cat /tmp/fuzz.out
-  grep -q " iterations .*, ok$" /tmp/fuzz.out || { echo "== fuzz $mode FAILED: ./dev fuzz ${1:-20000} $seed"; fail=1; }
+  grep -q " iterations .*, ok$" /tmp/fuzz.out && ! grep -qE "Sanitizer|runtime error|php -S died" /tmp/fuzz.out || { echo "== fuzz $mode FAILED: ./dev fuzz ${1:-20000} $seed"; fail=1; }
 done
 rm -f /dev/shm/nocopy-fuzz.*
 exit $fail

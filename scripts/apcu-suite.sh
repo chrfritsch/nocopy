@@ -15,9 +15,13 @@ sed -i.bak "s|\$ext = (substr(PHP_OS, 0, 3) == 'WIN') ? 'php_apcu.dll' : 'apcu.s
 echo "<?php require '$ROOT/apcu/apcu.php'; if (PHP_SAPI === 'cli') nocopy_clear();" > "$W/prepend.php"
 cd "$W" && NO_INTERACTION=1 TEST_PHP_EXECUTABLE=$PHP $PHP "$RT" -q \
   -d extension="$NOCOPY_SO" -d nocopy.shm_name=/nocopy-apcu-suite -d auto_prepend_file="$W/prepend.php" -d apc.enable_cli=1 $EXTRA tests 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
-  | awk '/^Tests (passed|failed|skipped)/; /^FAILED TEST SUMMARY/ {f=1; next} /^=+$/ {f=0} f' 
+  | awk '/^Tests (passed|failed|skipped)/; /^FAILED TEST SUMMARY/ {f=1; next} /^=+$/ {f=0} f' | tee "$W/summary.txt"
 # 13 expected failures (2026-11-07, Linux): exact insertion order (iterator_006); apc.* sizing aliases (apc_026, not_enough_shm, apc54_018);
 # apc.slam_defense (ghbug335, runs only with pcntl);
 # preload_path (apc54_014); disabled-mode warnings (apc_disabled); per-segment sma_info (apcu_sma_info); messages and traces naming
 # nocopy_* or the polyfill (apc_023, apc_099, apc_entry_002); outermost reference (apc_store_reference_php8);
 # debug_zval_dump of shared references: arrays come back packed like the stored ones, APCu unserializes them into hashes (apc_006_php81)
+KNOWN="apc54_014 apc54_018 apc_006_php81 apc_023 apc_026 apc_099 apc_disabled apc_entry_002 apc_store_reference_php8 apcu_sma_info ghbug335 iterator_006 not_enough_shm"
+new=$(sed -n 's|.*\[tests/\(.*\)\.phpt\]$|\1|p' "$W/summary.txt" | while read -r t; do case " $KNOWN " in (*" $t "*) ;; (*) echo "$t" ;; esac; done)
+grep -q '^Tests passed' "$W/summary.txt" || { echo "apcu suite did not run"; exit 1; }
+[ -z "$new" ] || { echo "new failures:" $new; exit 1; }

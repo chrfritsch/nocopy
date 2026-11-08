@@ -23,7 +23,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   apcu                        APCu's own suite against the polyfill (13 known failures)
   drupal                      Drupal module's PHPUnit tests in 3 cache modes
   tidy                        clang-tidy over the C sources (.clang-tidy)
-  ci                          everything above (what CI runs, one PHP version)
+  ci                          everything above but drupal (what CI runs, one PHP version)
 
   bench [groups]              micro benchmarks vs APCu (ONLY=regex: those measurements only)
   ab [ref=main] [reps=3] [groups]  A/B: ref vs working tree, interleaved, best of reps (ONLY=regex)
@@ -73,7 +73,7 @@ case $cmd in
   apcu)       img; run "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && /src/scripts/apcu-suite.sh' ;;
   drupal)     PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
-  ci)         for c in tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony; do
+  ci)         for c in tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony apcu; do
                 echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;

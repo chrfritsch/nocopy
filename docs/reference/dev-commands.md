@@ -22,10 +22,10 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev pie` | `pie install` (PIE 1.5.5) from the committed tree as a path repository: default, `--disable-nocopy-valkey`, `--disable-nocopy-lto`; each loads and round-trips a value | `nocopy-linux:$PHP` |
 | `./dev frankenphp` | FrankenPHP classic and worker mode; then the `shm` checks under FrankenPHP | `dunglas/frankenphp:1-php8.4` |
 | `./dev symfony [version=8.*]` | Symfony bundle smoke test, alone and next to APCu; installs `symfony/framework-bundle` into `.cache/` | `nocopy-linux:$PHP` |
-| `./dev apcu` | APCu's own test suite against the polyfill (13 known failures) | `nocopy-linux:$PHP` |
+| `./dev apcu` | APCu's own test suite against the polyfill; fails on any failure beyond the 13 known ones | `nocopy-linux:$PHP` |
 | `./dev drupal` | Drupal module PHPUnit tests in 3 modes: shared (CLI: copy mode), Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
 | `./dev tidy` | clang-tidy over the extension's C sources, checks in `.clang-tidy`; any finding fails | `nocopy-linux:$PHP` |
-| `./dev ci` | `tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony`, stops at the first failure | |
+| `./dev ci` | `tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony apcu`, stops at the first failure | |
 
 ## Benchmarks
 

@@ -13,13 +13,24 @@ function serve(string $code, array $ini = []): string
         array_push($cmd, '-d', "$k=$v");
     }
     array_push($cmd, '-S', $addr, '-t', $dir);
-    $p = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+    $p = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', "$dir/err", 'w']], $pipes);
     $ctx = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 3600]]);
     for ($i = 0; $i < 500 && ($out = @file_get_contents("http://$addr/", false, $ctx)) === false; $i++) {
         usleep(10000);
     }
+    usleep(20000);
+    $st = proc_get_status($p);
     proc_terminate($p);
     proc_close($p);
+    // crashes after the response was sent (request shutdown) would pass unseen
+    if (!$st['running']) {
+        $out .= "\nphp -S died: " . ($st['signaled'] ? "signal $st[termsig]" : "exit $st[exitcode]") . "\n";
+    }
+    $err = file_get_contents("$dir/err");
+    if (preg_match('/Sanitizer|runtime error/', $err)) {
+        $out .= "\n$err";
+    }
+    unlink("$dir/err");
     unlink("$dir/index.php");
     rmdir($dir);
     return (string) $out;

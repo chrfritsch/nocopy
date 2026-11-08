@@ -9,6 +9,7 @@ jobs:
         php: ["8.4", "8.5"]
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       PHP: ${{ matrix.php }}
     steps:
@@ -25,18 +26,21 @@ jobs:
   # gcc -Werror is in every build above; these once, on one PHP
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: ./dev tidy
       - run: ./dev asan
       - run: ./dev fuzz
       - run: ./dev clang
+      - run: ./dev apcu
   zts:
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: ./dev zts
@@ -50,6 +54,7 @@ jobs:
           - {php: "8.4", symfony: "7.4.*"}
           - {php: "8.5", symfony: "8.*"}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       PHP: ${{ matrix.php }}
     steps:
