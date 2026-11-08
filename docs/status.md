@@ -16,7 +16,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 
 | Check | Result |
 |---|---|
-| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` at 24 known with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
+| `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
 | `./dev ci` (8.5; 2026-11-07, again with the keep cap and big entries left out of compaction (tests 076, 077); also `./dev drupal`) | all passed |
 | `./dev ci` (8.5; 2026-11-07, dates stored natively (test 075), `./dev fuzz` added and in `ci`; also `./dev drupal`) | all passed, fuzz 20000 iterations clean in both modes |
 | `./dev ci` (8.5; 2026-11-07, `nocopy_keys()` and `APCUIterator` in the polyfill (test 078)) | all passed |
