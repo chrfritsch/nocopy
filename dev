@@ -18,6 +18,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   fuzz [iterations=20000] [seed]  random values round-tripped under ASan, copy + zero-copy (seed printed: replays the run)
   shm                         CLI + php-fpm share one cache by name, then with Valkey
   frankenphp                  FrankenPHP classic + worker mode, and shm with it
+  pie                         pie install from the committed tree, with and without each configure option
   symfony [version=8.*]       Symfony bundle smoke test (alone and next to APCu)
   apcu                        APCu's own suite against the polyfill (13 known failures)
   drupal                      Drupal module's PHPUnit tests in 3 cache modes
@@ -59,6 +60,7 @@ case $cmd in
   c)          img; run "nocopy-linux:$PHP" /src/tests/c/run.sh "${1:-3}" ;;
   fuzz)       img; run -e FUZZ_VALUE "nocopy-linux:$PHP" /src/docker/fuzz.sh "$@" ;;
   shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh ;;
+  pie)        img; run "nocopy-linux:$PHP" /src/docker/pie.sh ;;
   frankenphp) run dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
               run dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh ;;
   symfony)    v=${1:-8.*}; sf=.cache/sf-$PHP-$(echo "$v" | tr -d '.*')
@@ -70,7 +72,7 @@ case $cmd in
   apcu)       img; run "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && /src/scripts/apcu-suite.sh' ;;
   drupal)     PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
-  ci)         for c in tidy test novalkey asan clang stress c fuzz shm zts frankenphp symfony; do
+  ci)         for c in tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony; do
                 echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;

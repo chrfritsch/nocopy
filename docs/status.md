@@ -8,7 +8,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 - **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
   [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins + cache tags), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
-- **Distribution:** none yet. No GitHub remote, so CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
+- **Distribution:** PIE-ready (`composer.json`, `./dev pie` passes on 8.4, 8.5 and ZTS 8.4, 2026-11-08), not on Packagist yet. No GitHub remote, so CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) has only run locally through `./dev`.
 
 ## Last verified (2026-11-05, local Docker, arm64)
@@ -41,7 +41,7 @@ Works, tested, **not released**. MIT licensed, free, no paid edition.
 
 ## Roadmap (rough priority)
 
-1. **Release.** Push to GitHub and get CI green; `composer.json` and a GitHub release for PIE; split `drupal/`, `symfony/`,
+1. **Release.** Push to GitHub and get CI green; tag a GitHub release and submit `chrfritsch/nocopy` to Packagist for PIE; split `drupal/`, `symfony/`,
    `apcu/`, `cli/` into their own repositories for Packagist.
 2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`. Micro benchmarks cross-checked on Graviton4
    (c8g.xlarge pod, 3 vCPU): ratios hold. Symfony and Drupal there are still to come.

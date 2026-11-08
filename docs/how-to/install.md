@@ -1,11 +1,31 @@
 # Install on a server
 
-nocopy is not on PECL, PIE or in distribution packages yet: you build it from source.
+nocopy installs with [PIE](https://github.com/php/pie) or from source. Not on PECL or in distribution packages.
 
 **Requirements:** Linux (CI-tested on amd64 and arm64), PHP 8.4 or 8.5 (NTS or ZTS) with `phpize` (the `php-dev` /
 `php-devel` package, or the official Docker images), a C compiler. For Valkey over TLS: OpenSSL 1.1.1+ headers and `pkg-config`.
 
-## Build
+## With PIE
+
+```sh
+pie install chrfritsch/nocopy
+pie install chrfritsch/nocopy --disable-nocopy-valkey   # single server only: no Valkey tier, no OpenSSL
+```
+
+PIE builds it, copies `nocopy.so` to the extension directory and adds `extension=nocopy` to the `php.ini` of the PHP it
+runs with. It needs `libtool` and `unzip` (`--auto-install-build-tools` installs them). Then set `nocopy.shm_name`, see
+[Enable](#enable): until then every PHP start warns. `--disable-nocopy-lto` builds without link-time optimization.
+
+In a Dockerfile, on the official PHP images:
+
+```dockerfile
+COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
+RUN apt-get update && apt-get install -y --no-install-recommends libtool unzip libssl-dev pkg-config \
+ && pie install chrfritsch/nocopy \
+ && printf 'nocopy.shm_name=/nocopy\nnocopy.shm_size=128M\n' > /usr/local/etc/php/conf.d/nocopy.ini
+```
+
+## Build from source
 
 ```sh
 git clone <this repository> nocopy && cd nocopy
@@ -68,7 +88,7 @@ memory and process ids are per container.
 
 ## Upgrade
 
-1. Build and install the new `nocopy.so`.
+1. Build and install the new `nocopy.so` (with PIE: `pie install chrfritsch/nocopy:<version>`).
 2. Restart php-fpm (or FrankenPHP), and restart long-running CLI workers.
 
 A new build uses a new shared-memory object (its name includes a hash of `nocopy.so`), so the cache starts empty. Old

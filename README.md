@@ -119,13 +119,13 @@ Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, 
 You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required:
 
 ```sh
-phpize && ./configure && make
+pie install chrfritsch/nocopy     # or from source: phpize && ./configure && make
 ```
 
-Then load it in a config file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
+Then configure it in a file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
 
 ```ini
-extension=/path/to/nocopy/modules/nocopy.so
+extension=nocopy                  ; PIE adds this line itself
 nocopy.shm_name=/nocopy     ; required: the cache's name, so web and CLI share it
 nocopy.shm_size=128M        ; how much memory the cache may use
 ```

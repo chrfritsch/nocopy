@@ -19,6 +19,7 @@ jobs:
       - run: ./dev stress 30
       - run: ./dev c 5
       - run: ./dev shm
+      - run: ./dev pie
   # gcc -Werror is in every build above; these once, on one PHP
   lint:
     runs-on: ubuntu-latest
