@@ -48,7 +48,9 @@ around. Your code never notices.
 |---|---:|---:|
 | Read an array with 1,000 rows (vs APCu) | 200 µs | **12 ns** |
 | Read an int / a 100-byte string (vs APCu) | 28.2 / 34.4 ns | 11.0 / 11.5 ns |
-| Reads per second, 8 workers in parallel (vs APCu) | 3.7 M | **350 M** |
+| Reads per second (int), 8 workers in parallel (vs APCu) | 3.7 M | **350 M** |
+| Write an int / an array with 1,000 rows (vs APCu) | 55.3 ns / 191 µs | 27.3 ns / 59 µs |
+| Writes per second (int), 8 workers in parallel (vs APCu) | 10.4 M | **141 M** |
 | Symfony app, cache-heavy page (vs APCu) | 4,542 req/s (25% of an empty page) | **17,430 req/s (~100%)** |
 | Drupal 11, one server (vs stock): anonymous / logged-in node page | 4,671 / 835 req/s | **12,145 / 1,122 req/s** |
 | Drupal 11, several servers (vs drupal/redis): anonymous / logged-in node page | 4,837 / 634 req/s | **12,538 / 1,152 req/s** |
@@ -60,7 +62,7 @@ around. Your code never notices.
   <img alt="Symfony cache-heavy pages: nocopy 17,430 and 15,801 req/s, about all of an empty page (~17,000); APCu 4,542 and 4,416 req/s, 25% and 24%" src="docs/reference/symfony-ceiling.svg" width="720">
 </picture>
 
-Linux, Docker on arm64, PHP 8.5; the ratios hold on AWS Graviton4. How to reproduce: [benchmark results](docs/reference/benchmarks.md).
+Linux, Docker on arm64 (Apple M3 Pro), PHP 8.5; the read ratios hold on AWS Graviton4 (writes not cross-checked yet). How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
 **The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,
 entity lists). If your pages barely touch the cache, you won't see a difference. Objects are rebuilt from their
@@ -81,7 +83,8 @@ restarts, every cache bin and cache tag can move out of the database. Not copyin
 | 🌐 **Several servers** | Point it at [Valkey](https://valkey.io) (the open-source Redis fork) and all servers share one cache, while each keeps a fast local copy that stays in sync automatically. No extra PHP extension needed. |
 | 🛡️ **Crash-safe** | A worker killed mid-write (OOM killer, `kill -9`) can't corrupt the cache: the damage is detected and repaired. |
 | 🧩 **Framework integrations** | [Symfony bundle](docs/how-to/symfony.md) (`cache.adapter.nocopy`), [Drupal module](drupal/README.md) (all cache bins and cache tags). |
-| 🔁 **Easy switch from APCu** | A [polyfill](apcu) provides the `apcu_*` functions on top of nocopy, for code you can't change yet. |
+| 🔁 **Easy switch from APCu** | A [polyfill](apcu) provides the `apcu_*` functions on top of nocopy, for code you can't change yet ([differences](docs/reference/apcu-compatibility.md)). |
+| 🔍 **Console** | [`nocopy-cli`](cli) shows stats and keys, reads, deletes and clears entries in the running cache, like cachetool. |
 
 Works with php-fpm, Apache, LiteSpeed, CGI, `php -S` and FrankenPHP. Long-running processes (CLI scripts, queue workers,
 FrankenPHP worker mode) automatically get a safe mode that hands out private copies and reuses them while the entry is
@@ -112,7 +115,7 @@ nocopy_delete('products');
 ```
 
 Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, `nocopy_delete_multiple`,
-`nocopy_clear`, `nocopy_stats`. All of them: [function reference](docs/reference/functions.md).
+`nocopy_clear`, `nocopy_keys`, `nocopy_stats`, `nocopy_shared_with`. All of them: [function reference](docs/reference/functions.md).
 
 ## Install on a server
 
@@ -125,7 +128,7 @@ pie install chrfritsch/nocopy     # or from source: phpize && ./configure && mak
 Then configure it in a file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
 
 ```ini
-extension=nocopy                  ; PIE adds this line itself
+extension=nocopy            ; PIE adds this line itself
 nocopy.shm_name=/nocopy     ; required: the cache's name, so web and CLI share it
 nocopy.shm_size=128M        ; how much memory the cache may use
 ```
@@ -138,7 +141,7 @@ Step by step: [install guide](docs/how-to/install.md). Several servers: [Valkey 
 |---|---|---|
 | [Your first cache](docs/tutorials/first-cache.md) (10-minute tutorial) | [Symfony](docs/how-to/symfony.md) · [Drupal](drupal/README.md) · [Migrate from APCu](docs/how-to/migrate-from-apcu.md) | [How nocopy works](docs/explanation/how-it-works.md) |
 | [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
-| | [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
+| | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
 
 Everything: [docs/](docs/README.md).
 

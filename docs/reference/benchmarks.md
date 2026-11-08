@@ -9,10 +9,15 @@ Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`,
 |---|---:|---:|---:|
 | fetch int / 100 B string | 28.2 / 34.4 ns | 11.6 / 19.5 ns | 11.0 / 11.5 ns |
 | fetch array, 1k rows | 200 µs | 13 ns (kept copy) | **12 ns** |
-| store int / 100 B string | 56.5 / 81.3 ns | 27.2 / 28.9 ns | same as copy |
+| store int / 100 B string | 55.3 / 86.0 ns | 27.3 / 28.5 ns | same as copy |
+| store array, 1k rows | 191 µs | 59 µs | same as copy |
+| store object | 329 ns | 174 ns | same as copy |
+| inc counter | 22.6 ns | 11.1 ns | same as copy |
 | parallel fetch int, 8 workers | 3.7 M ops/s | 266 M ops/s | **350 M ops/s** |
+| parallel store int, 8 workers (own key each) | 10.4 M ops/s | 141 M ops/s | same as copy |
+| 4 readers fetch int while 4 writers store | 6.9 M ops/s | 134 M ops/s | same as copy |
 
-2026-11-06. Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): that is what the bench's
+Host: Apple M3 Pro, Docker VM with 11 CPUs and 16 GB. Reads 2026-11-06, writes (`./dev bench write contend mixed`) 2026-11-08. Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): that is what the bench's
 repeated fetch measures; the first fetch of 1k rows costs ~68 µs.
 
 **Cross-check on Graviton4** (AWS c8g.xlarge, Kubernetes pod capped at 3 vCPU, PHP 8.5.12, same `docker/bench.sh`, 2026-11-05):
