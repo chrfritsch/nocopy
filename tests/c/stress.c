@@ -239,6 +239,12 @@ int main(int argc, char **argv)
 		fprintf(stderr, "claim\n");
 		return 2;
 	}
+	nocopy_put xp; /* ttl < 0: an absolute expiry, kept as is */
+	nocopy_entry *xe = nocopy_put_begin(&xp, &mc, hash("x", 1), 1, HDR, HDR + NOCOPY_ALIGN(2), -12345);
+	assert(xe && xe->expires == 12345);
+	memcpy((char *) xe + HDR, "x", 2);
+	assert(nocopy_put_commit(&xp, false) == PUT_OK);
+	del("x");
 	for (int j = 0; j < CTRS; j++) {
 		assert(put_ctr(&mc, j));
 	}

@@ -57,6 +57,7 @@ ZEND_EXTERN_MODULE_GLOBALS(nocopy)
 
 typedef struct {
 	zend_long ttl; /* 0: none */
+	time_t expires; /* instead of ttl: the last second it lives (a Valkey fill keeps the remote expiry) */
 	bool add_only; /* fail if a live entry exists */
 } nocopy_opts;
 

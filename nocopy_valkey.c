@@ -928,7 +928,7 @@ static void vk_forget(zend_string *key)
 }
 
 /* A ttl as the last second it lives (0: never), and that second's end for SET PXAT (0: none). */
-static time_t vk_expires(zend_long ttl) { return ttl ? time(NULL) + MIN(ttl, NOCOPY_TTL_MAX) : 0; }
+static time_t vk_expires(zend_long ttl) { return ttl ? nocopy_now() + MIN(ttl, NOCOPY_TTL_MAX) : 0; }
 static int64_t vk_pxat(time_t expires) { return expires ? ((int64_t) expires + 1) * 1000 : 0; }
 
 #define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
@@ -977,7 +977,7 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 	memcpy(&x, b + 2, 8);
 	memcpy(user, b + 10, 4);
 	*expires = (time_t) x;
-	if (x && x < time(NULL)) {
+	if (x && x < nocopy_now()) {
 		return false;
 	}
 	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, ENTRY_SERIALIZED | (uint8_t) b[1]);
@@ -991,7 +991,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *
 	if (!vk_decode(raw, rv, &expires, &user)) {
 		return false;
 	}
-	const nocopy_opts o = {.ttl = expires ? MAX(1, expires - time(NULL)) : 0, .add_only = true};
+	const nocopy_opts o = {.expires = expires, .add_only = true};
 	nocopy_put_local(key, rv, &o, user);
 	if (exp) {
 		*exp = expires;

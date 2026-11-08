@@ -45,7 +45,7 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	nocopy_put p;
-	return nocopy_build(&p, key, val, o->ttl, user, o->add_only);
+	return nocopy_build(&p, key, val, o->expires ? -(zend_long) o->expires : o->ttl, user, o->add_only);
 }
 
 /* user: the compute time (ms). */

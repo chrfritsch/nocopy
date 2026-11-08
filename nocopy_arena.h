@@ -175,7 +175,7 @@ void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailo
 
 /* Locks h's shard and allocates a size-byte block; NULL (unlocked) if it does not fit. The header is set (flags and user 0):
  * the caller writes the key's klen bytes at koff and its payload, then commits. Blocks over NOCOPY_INLINE_PUT are filled
- * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires. */
+ * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires; < 0: -ttl is the expiry itself. */
 nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl);
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
