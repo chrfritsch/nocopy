@@ -60,7 +60,8 @@ case $cmd in
   c)          img; run "nocopy-linux:$PHP" /src/tests/c/run.sh "${1:-3}" ;;
   fuzz)       img; run -e FUZZ_VALUE "nocopy-linux:$PHP" /src/docker/fuzz.sh "$@" ;;
   shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh ;;
-  pie)        img; run "nocopy-linux:$PHP" /src/docker/pie.sh ;;
+  pie)        img; mkdir -p .cache; c=$(docker create ghcr.io/php/pie:1.5.5-bin x) && docker cp -q "$c":/pie .cache/pie && docker rm "$c" >/dev/null
+              run -v "$PWD/.cache/pie":/usr/local/bin/pie:ro "nocopy-linux:$PHP" /src/docker/pie.sh ;;
   frankenphp) run dunglas/frankenphp:1-php8.4 sh /src/docker/frankenphp.sh
               run dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh ;;
   symfony)    v=${1:-8.*}; sf=.cache/sf-$PHP-$(echo "$v" | tr -d '.*')
