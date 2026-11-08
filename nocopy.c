@@ -399,62 +399,12 @@ static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 
 /* ---- module ---- */
 
-#if defined(__linux__) && defined(COMPILE_DL_NOCOPY)
-#include <link.h>
-
-typedef struct {
-	uintptr_t self; /* an address inside our .so */
-	uint64_t id;
-	bool found;
-} build_note;
-
-/* dl_iterate_phdr callback: the GNU build id of the object that contains self (the linker's hash of its contents). */
-static int find_build_id(struct dl_phdr_info *info, size_t size, void *arg)
-{
-	(void) size;
-	build_note *b = arg;
-	bool ours = false;
-	for (int i = 0; i < info->dlpi_phnum && !ours; i++) {
-		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
-		ours = ph->p_type == PT_LOAD && b->self - (info->dlpi_addr + ph->p_vaddr) < ph->p_memsz;
-	}
-	if (!ours) {
-		return 0;
-	}
-	for (int i = 0; i < info->dlpi_phnum; i++) {
-		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
-		if (ph->p_type != PT_NOTE) {
-			continue;
-		}
-		const char *n = (const char *) (info->dlpi_addr + ph->p_vaddr), *end = n + ph->p_memsz;
-		while (n + sizeof(ElfW(Nhdr)) <= end) {
-			const ElfW(Nhdr) *h = (const ElfW(Nhdr) *) n;
-			const char *name = n + sizeof *h, *desc = name + ZEND_MM_ALIGNED_SIZE_EX(h->n_namesz, 4);
-			if (h->n_type == NT_GNU_BUILD_ID && h->n_namesz == 4 && memcmp(name, "GNU", 4) == 0 && desc + h->n_descsz <= end) {
-				b->id = zend_hash_func(desc, h->n_descsz);
-				b->found = true;
-				return 1;
-			}
-			n = desc + ZEND_MM_ALIGNED_SIZE_EX(h->n_descsz, 4);
-		}
-	}
-	return 1;
-}
-#endif
-
 /* What processes sharing a named arena must agree on: the code that lays out and reads it. The same binary gives the same id; any other build gets its own arena. */
 static uint64_t layout_id(void)
 {
 	uint64_t id = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION " " ZEND_EXTENSION_BUILD_ID));
 #ifdef COMPILE_DL_NOCOPY
-# ifdef __linux__
-	build_note b = {.self = (uintptr_t) layout_id};
-	dl_iterate_phdr(find_build_id, &b);
-	if (b.found) {
-		return id ^ b.id;
-	}
-# endif
-	/* no build id: hash the file itself */
+	/* hash the loaded .so */
 	Dl_info dl;
 	int fd = dladdr((void *) layout_id, &dl) && dl.dli_fname ? open(dl.dli_fname, O_RDONLY | O_CLOEXEC) : -1;
 	struct stat st;

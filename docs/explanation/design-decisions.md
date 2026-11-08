@@ -305,6 +305,10 @@ Built as three, `nocopy_*` stopped inlining the store: fetch miss -5%, failing a
 copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
 inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.
 
+**The layout id hashes the loaded `nocopy.so`** (was: its GNU build id from the ELF notes on Linux, the file hash elsewhere; ~50 lines
+dropped). Price: 200 bare CLI starts, 3 rounds, `php -r ';'` 5128-5457 -> 5370-5971 µs (+0.24-0.5 ms for a 1.16 MB `.so`; PHP alone
+5105); php-fpm pays it once, in the master.
+
 ## Code style
 
 Code comments are one short line, or none.
@@ -318,6 +322,8 @@ Code comments are one short line, or none.
 | Robust pthread mutexes to detect dead lock holders | 15% slower uncontended, 2-8x with 2-16 contending processes. Owner-id locks + `shard_repair` instead |
 | Ghost variants | 2-way: no better. 2x tags: +0-3 points on mixed loads for 4 B/slot more |
 | Dropping `nocopy_get_multiple`/`put_multiple` (PHP loop instead) | get 10 keys 142 -> 292 ns, 100 keys 1.3 -> 2.8 µs; put 100 keys 8.3 -> 9.3 µs |
+| Dropping `nocopy.serializer=igbinary` (~50 lines) | the Valkey tier serializes every non-integer value. Loopback, 2000 values, best of 5, put / cold get µs and bytes in Valkey, php -> igbinary: 1k rows 260 / 377 -> 236 / 182, 141 -> 47 KB; 100 objects 37 / 57 -> 26 / 36, 15.5 -> 4.6 KB; render-array-like nested 1.5 KB of 3.7; 10 rows 1374 -> 490 B, times within noise; a 10 KB string unchanged |
+| Dropping the frameless `nocopy_get`/`nocopy_put` (~55 lines with arginfo) | `./dev ab HEAD 5 read write`, copy / zero: fetch int 11.0 -> 15.2 / 11.0 -> 14.7 ns, fetch string 10KB 13.1 -> 18.0 / 11.2 -> 16.7, fetch int 100k distinct keys 27.8 -> 34.8 / 28.2 -> 34.9; stores 1-3 ns slower |
 | Folding `nocopy_shared_with()` into `nocopy_stats()` | 15 -> 430 ns, and Drupal calls it on every write |
 | Dropping `nocopy.entries_hint` for 1 slot per 128 B (was 256) | `fetch int, 100k distinct keys` 30.3 -> 39.2 ns (-22%), 500 B values -0.6/-1.1 hit points, 4.7% of the arena more in tables; only tiny entries gain (+7-9 points) |
 | GL-Cache's utility per age (reads / age) to rank merge victims | loops collapse: 1.5x loop 25 -> 0% (young unread segments evicted first); a read prior does not fix it. Reads alone + forced oldest kept |
