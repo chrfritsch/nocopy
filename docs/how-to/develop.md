@@ -89,6 +89,6 @@ The arena alone: `tests/c/run.sh` (needs a C compiler with ThreadSanitizer).
 
 ## Gotchas
 
-- Docker's `/dev/shm` is 64 MB unless you pass `--shm-size`; `./dev bench` and `./dev drupal-bench` do.
+- Docker's `/dev/shm` is 64 MB unless you pass `--shm-size` (Docker Desktop gives more, so a local pass can hide it); every `./dev` container gets 1 GB, benches more where they need it.
 - A container started right after you saved a file on macOS sometimes sees a truncated source file: rerun.
 - Don't edit `./dev` while a `./dev` command runs: the shell reads the script as it goes.
