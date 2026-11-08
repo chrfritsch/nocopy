@@ -24,18 +24,7 @@ _Static_assert(sizeof(nocopy_shared) <= sizeof(((nocopy_arena *) 0)->user), "noc
 
 /* ---- per process (thread) ---- */
 
-#define NOCOPY_LOCAL 4096 /* 1024 sets of NOCOPY_LOCAL_WAYS */
-#define NOCOPY_LOCAL_WAYS 4
-
-/* Copy mode: a private copy of an arena entry, valid while the entry is the same version (address + seq). */
-typedef struct {
-	const nocopy_entry *e;	/* kept copy's entry, NULL none */
-	const nocopy_entry *seen; /* last entry fetched here: kept only when it comes back (one-off fetches never evict) */
-	uint64_t seq;
-	size_t size;
-	zval v;
-	bool visited; /* SIEVE: used since the hand last passed */
-} nocopy_local;
+typedef struct nocopy_kept nocopy_kept; /* nocopy_kept.h */
 
 /* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
 typedef struct {
@@ -52,10 +41,10 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	zend_ulong leases[8]; /* key hashes leased: dropped at request end if a callback bailed out */
 	int nleases;
 	nocopy_keys keys;
-	nocopy_local *local; /* request memory, NULL until the first copy-mode fetch */
-	size_t local_bytes;
-	uint32_t local_hand; /* SIEVE hand over local */
-	bool local_ok; /* between RINIT and RSHUTDOWN */
+	nocopy_kept *kept; /* copy mode's kept copies (nocopy_kept.c): request memory, NULL until the first copy-mode fetch */
+	size_t kept_bytes;
+	uint32_t kept_hand; /* SIEVE hand over kept */
+	bool kept_ok; /* between RINIT and RSHUTDOWN */
 	nocopy_vk vk;
 	HashTable classes; /* class entry -> layout fingerprint (nocopy_graph.c), this request */
 	HashTable zones; /* time zone name -> timelib_tzinfo (ext/date's, freed with it), this request */
@@ -71,8 +60,6 @@ typedef struct {
 	bool add_only; /* fail if a live entry exists */
 } nocopy_opts;
 
-extern size_t nocopy_local_size; /* nocopy.local_size */
-void nocopy_store_rshutdown(void); /* drops copy mode's copies */
 void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
 bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */

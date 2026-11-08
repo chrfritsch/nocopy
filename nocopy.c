@@ -28,6 +28,7 @@
 /* One translation unit, so nocopy_* inlines the store and value layers (split: miss -5%, failing add -6%); each also compiles alone. */
 #include "nocopy_value.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_graph.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_kept.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_store.c" /* NOLINT(bugprone-suspicious-include) */
 
 ZEND_DECLARE_MODULE_GLOBALS(nocopy)
@@ -465,7 +466,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY1("nocopy.shm_size", "32M", PHP_INI_SYSTEM, OnSize, &arena_size)
 	PHP_INI_ENTRY("nocopy.entries_hint", "4096", PHP_INI_SYSTEM, OnHint)
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
-	PHP_INI_ENTRY1("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnSize, &nocopy_local_size)
+	PHP_INI_ENTRY1("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnSize, &nocopy_kept_size)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
 #ifdef HAVE_NOCOPY_VALKEY
 	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
@@ -645,7 +646,7 @@ PHP_RINIT_FUNCTION(nocopy)
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
 	NOCOPY_G(zero_copy) = sapi_zero_copy;
-	NOCOPY_G(local_ok) = nocopy_local_size > 0;
+	nocopy_kept_rinit();
 	nocopy_vk_new_request();
 	return SUCCESS;
 }
@@ -653,7 +654,7 @@ PHP_RINIT_FUNCTION(nocopy)
 PHP_RSHUTDOWN_FUNCTION(nocopy)
 {
 	NOCOPY_G(zero_copy) = false;
-	nocopy_store_rshutdown();
+	nocopy_kept_rshutdown();
 	return SUCCESS;
 }
 

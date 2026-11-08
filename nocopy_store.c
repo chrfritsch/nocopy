@@ -4,12 +4,11 @@
 # include <config.h>
 #endif
 
-#include "nocopy_php.h"
+#include "nocopy_kept.h"
 #include <math.h>
 #include <time.h>
 #include <unistd.h>
 
-size_t nocopy_local_size = 8 * 1024 * 1024;
 const nocopy_detour_ops *nocopy_detour;
 
 bool nocopy_tracked(void)
@@ -21,124 +20,21 @@ bool nocopy_tracked(void)
 	return true;
 }
 
-/* ---- copy mode: private copies kept for the request ---- */
-
-/* Graphs keep a template (IS_PTR): objects are rebuilt from it on every fetch. */
-static void local_val_free(zval *v)
-{
-	if (Z_TYPE_P(v) == IS_PTR) {
-		nocopy_graph_tpl_free(Z_PTR_P(v));
-	} else {
-		zval_ptr_dtor(v);
-	}
-}
-
-/* The way for e's copy in its set: e's own, else the best victim. */
-static zend_always_inline nocopy_local *local_way(const nocopy_entry *e)
-{
-	if (UNEXPECTED(!NOCOPY_G(local))) {
-		NOCOPY_G(local) = ecalloc(NOCOPY_LOCAL, sizeof(nocopy_local));
-	}
-	nocopy_local *set = &NOCOPY_G(local)[((((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 54) * NOCOPY_LOCAL_WAYS], *victim = set;
-	int best = 4;
-	for (int i = 0; i < NOCOPY_LOCAL_WAYS; i++) {
-		nocopy_local *l = &set[i];
-		if (l->e == e || l->seen == e) {
-			return l;
-		}
-		/* victim: a way with no copy and no pending sighting, else no copy, else one not used since the SIEVE hand passed */
-		int rank = !l->e ? (l->seen ? 1 : 0) : (l->visited ? 3 : 2);
-		if (rank < best) {
-			best = rank;
-			victim = l;
-		}
-	}
-	return victim;
-}
-
-/* The slot for e's copy, or NULL: nothing worth keeping, or not in a request. */
-static zend_always_inline nocopy_local *local_slot(const nocopy_entry *e, const zval *v)
-{
-	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
-	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(local_ok) || e->size > nocopy_local_size
-	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
-		return NULL;
-	}
-	return local_way(e);
-}
-
-static void local_flush(void)
-{
-	for (int i = 0; i < NOCOPY_LOCAL; i++) {
-		if (NOCOPY_G(local)[i].e) {
-			local_val_free(&NOCOPY_G(local)[i].v);
-			NOCOPY_G(local)[i].e = NULL;
-		}
-	}
-	NOCOPY_G(local_bytes) = 0;
-}
-
-static void local_drop(nocopy_local *l)
-{
-	NOCOPY_G(local_bytes) -= l->size;
-	local_val_free(&l->v);
-	l->e = NULL;
-}
-
-/* l holds this version of e's copy: it may be shared. */
-static zend_always_inline bool local_hit(nocopy_local *l, const nocopy_entry *e)
-{
-	if (l && l->e == e && l->seq == e->seq) {
-		l->visited = true;
-		return true;
-	}
-	return false;
-}
-
-/* TinyLFU's doorkeeper: true on e's second sighting in l (keep a copy), the first is only remembered. */
-static zend_always_inline bool local_again(nocopy_local *l, const nocopy_entry *e)
-{
-	if (!l || l->seen == e) {
-		return l != NULL;
-	}
-	l->seen = e;
-	return false;
-}
-
-/* Over budget: SIEVE evicts copies not used since the hand last passed (2 rounds at most: the first clears every bit). */
-static void local_put(nocopy_local *l, const nocopy_entry *e, const zval *copy)
-{
-	if (l->e) {
-		local_drop(l);
-	}
-	for (uint32_t n = 0; NOCOPY_G(local_bytes) + e->size > nocopy_local_size && n < 2 * NOCOPY_LOCAL; n++) {
-		nocopy_local *h = &NOCOPY_G(local)[NOCOPY_G(local_hand)++ % NOCOPY_LOCAL];
-		if (h->visited) {
-			h->visited = false;
-		} else if (h->e) {
-			local_drop(h);
-		}
-	}
-	l->e = e;
-	l->seq = e->seq;
-	l->size = e->size;
-	l->visited = false;
-	ZVAL_COPY(&l->v, copy);
-	NOCOPY_G(local_bytes) += e->size;
-}
+/* ---- copy mode ---- */
 
 /* Copy mode: from the kept template if this version has one; a second sighting keeps one. */
 static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 {
-	nocopy_local *l = NOCOPY_G(local_ok) && e->size <= nocopy_local_size ? local_way(e) : NULL;
-	if (local_hit(l, e)) {
-		return nocopy_graph_tpl_out(rv, Z_PTR(l->v));
+	const zval *k;
+	nocopy_kept *w = nocopy_kept_get_graph(e, &k);
+	if (k) {
+		return nocopy_graph_tpl_out(rv, Z_PTR_P(k));
 	}
-	void *t = local_again(l, e) ? nocopy_graph_tpl(e) : NULL;
+	void *t = w ? nocopy_graph_tpl(e) : NULL;
 	if (t) {
 		zval z;
 		ZVAL_PTR(&z, t);
-		local_put(l, e, &z);
+		nocopy_kept_put(w, e, &z);
 		return nocopy_graph_tpl_out(rv, t);
 	}
 	return nocopy_graph_out(rv, v, true);
@@ -297,13 +193,14 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 		} else if (Z_TYPE_P(v) < IS_STRING) {
 			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
 		} else if (copy) {
-			nocopy_local *l = local_slot(e, v);
-			if (local_hit(l, e)) {
-				ZVAL_COPY(rv, &l->v); /* same version as last time: share it, COW keeps it intact */
+			const zval *k;
+			nocopy_kept *w = nocopy_kept_get(e, v, &k);
+			if (k) {
+				ZVAL_COPY(rv, k);
 			} else {
 				nocopy_copy_out(rv, v);
-				if (local_again(l, e)) {
-					local_put(l, e, rv);
+				if (w) {
+					nocopy_kept_put(w, e, rv);
 				}
 			}
 		} else {
@@ -504,16 +401,6 @@ static void na_clear(void) {}
 const nocopy_detour_ops nocopy_no_arena = {
 	na_store, na_fetch, na_fetch_multi, nocopy_store_each, na_drop, na_drop_multi, na_add_long, na_cas_long, na_clear, false, "none",
 };
-
-void nocopy_store_rshutdown(void)
-{
-	NOCOPY_G(local_ok) = false; /* later fetches (session's RSHUTDOWN) copy without keeping */
-	if (NOCOPY_G(local)) {
-		local_flush();
-		efree(NOCOPY_G(local));
-		NOCOPY_G(local) = NULL;
-	}
-}
 
 void nocopy_leases_drop(void)
 {
