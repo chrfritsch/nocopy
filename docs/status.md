@@ -8,8 +8,8 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 - **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
   [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins + cache tags), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
-- **Distribution:** [github.com/chrfritsch/nocopy](https://github.com/chrfritsch/nocopy), tag 0.0.1. Not on Packagist yet: PIE installs it after
-  `pie repository:add vcs https://github.com/chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
+- **Distribution:** [github.com/chrfritsch/nocopy](https://github.com/chrfritsch/nocopy), tag 0.0.1, on [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
+  `pie install chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). The integrations are not on Packagist yet. CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) is green on GitHub Actions.
 
 ## Last verified (2026-11-05, local Docker, arm64)
@@ -42,7 +42,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 
 ## Roadmap (rough priority)
 
-1. **Release.** Submit `chrfritsch/nocopy` to Packagist for PIE (GitHub, green CI and tag 0.0.1 done); split `drupal/`, `symfony/`,
+1. **Release.** The extension is on Packagist (done); split `drupal/`, `symfony/`,
    `apcu/`, `cli/` into their own repositories for Packagist.
 2. **Numbers on real hardware:** a non-VM x86_64 box, `wrk` instead of `ab`. Micro benchmarks cross-checked on Graviton4
    (c8g.xlarge pod, 3 vCPU): ratios hold. Symfony and Drupal there are still to come.

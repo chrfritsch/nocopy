@@ -8,7 +8,6 @@ nocopy installs with [PIE](https://github.com/php/pie) or from source. Not on PE
 ## With PIE
 
 ```sh
-pie repository:add vcs https://github.com/chrfritsch/nocopy   # not on Packagist yet
 pie install chrfritsch/nocopy
 pie install chrfritsch/nocopy --disable-nocopy-valkey   # single server only: no Valkey tier, no OpenSSL
 ```
@@ -22,7 +21,6 @@ In a Dockerfile, on the official PHP images:
 ```dockerfile
 COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
 RUN apt-get update && apt-get install -y --no-install-recommends git libtool unzip libssl-dev pkg-config \
- && pie repository:add vcs https://github.com/chrfritsch/nocopy \
  && pie install chrfritsch/nocopy \
  && printf 'nocopy.shm_name=/nocopy\nnocopy.shm_size=128M\n' > /usr/local/etc/php/conf.d/nocopy.ini
 ```
