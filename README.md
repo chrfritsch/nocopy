@@ -119,18 +119,10 @@ Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, 
 
 ## Install on a server
 
-You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required. With
-[PIE](https://github.com/php/pie), from [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
+You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. Install it with [PIE](https://github.com/php/pie):
 
 ```sh
 pie install chrfritsch/nocopy
-```
-
-Or from source:
-
-```sh
-git clone https://github.com/chrfritsch/nocopy && cd nocopy
-phpize && ./configure && make && sudo make install
 ```
 
 Then configure it in a file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
