@@ -17,6 +17,8 @@ jobs:
       - run: ./dev novalkey
       # release build, loop: races show up only sometimes (docs/explanation/architecture.md, invariants)
       - run: ./dev stress 30
+      # gcc's TSan dies on the runner's 32-bit mmap ASLR ("unexpected memory mapping")
+      - run: sudo sysctl -w vm.mmap_rnd_bits=28
       - run: ./dev c 5
       - run: ./dev shm
       - run: ./dev pie

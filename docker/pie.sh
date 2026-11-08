@@ -3,7 +3,7 @@
 set -e
 export DEBIAN_FRONTEND=noninteractive; apt-get -qq update >/dev/null && apt-get -qq install -y --no-install-recommends libtool unzip git >/dev/null
 curl -fsSL -o /usr/local/bin/pie https://github.com/php/pie/releases/download/1.5.5/pie.phar && chmod +x /usr/local/bin/pie
-mkdir -p /tmp/n && cd /src && git ls-files -z | tar --null -T - -cf - | tar -xf - -C /tmp/n
+mkdir -p /tmp/n && cd /src && git -c safe.directory=/src ls-files -z | tar --null -T - -cf - | tar -xf - -C /tmp/n
 cd /tmp && pie repository:add path /tmp/n >/dev/null
 check() {
   pie uninstall -n chrfritsch/nocopy >/dev/null 2>&1 || true
