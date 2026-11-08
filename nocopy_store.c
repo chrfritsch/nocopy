@@ -163,14 +163,7 @@ static zend_always_inline nocopy_status store_as(zend_string *key, zval *val, co
 
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o) { return store_as(key, val, o, 0); }
 
-static zend_always_inline bool drop_local(const char *k, size_t len, zend_ulong h)
-{
-	nocopy_shard *sh = nocopy_shard_of(h);
-	nocopy_lock(sh);
-	bool found = nocopy_remove(sh, h, k, (uint32_t) len);
-	nocopy_unlock(sh);
-	return found;
-}
+static zend_always_inline bool drop_local(const char *k, size_t len, zend_ulong h) { return nocopy_delete(h, k, (uint32_t) len); }
 
 bool nocopy_drop_local(const char *k, size_t len)
 {
@@ -208,18 +201,35 @@ void nocopy_clear_all(void)
 	nocopy_clear();
 }
 
-/* Shard locked: key's live entry, or NULL. */
-static nocopy_entry *live_entry(nocopy_shard *sh, zend_string *key, zend_ulong h)
-{
-	nocopy_entry *e = nocopy_lookup(sh, h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key));
-	return e && !nocopy_expired(e) ? e : NULL;
-}
-
 /* e's integer, changed in place under the shard lock (lock-free readers copy the word), or NULL: not an integer. */
 static zval *entry_long(nocopy_entry *e)
 {
 	zval *v = entry_val(e);
 	return Z_TYPE_P(v) == IS_LONG && !(e->flags & ENTRY_SERIALIZED) ? v : NULL;
+}
+
+typedef struct { zend_long a, b; } long_op; /* add: delta, result; cas: old, new */
+
+static int add_fn(nocopy_entry *e, void *arg)
+{
+	long_op *o = arg;
+	zval *v = entry_long(e);
+	if (!v) {
+		return 0;
+	}
+	o->b = __atomic_add_fetch(&Z_LVAL_P(v), o->a, __ATOMIC_RELAXED);
+	return 1;
+}
+
+static int cas_fn(nocopy_entry *e, void *arg)
+{
+	long_op *o = arg;
+	zval *v = entry_long(e);
+	if (!v || Z_LVAL_P(v) != o->a) {
+		return 0;
+	}
+	__atomic_store_n(&Z_LVAL_P(v), o->b, __ATOMIC_RELAXED);
+	return 1;
 }
 
 bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
@@ -228,19 +238,13 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 		return nocopy_detour->add_long(key, delta, ttl, out);
 	}
 	zend_ulong h = zend_string_hash_val(key);
-	nocopy_shard *sh = nocopy_shard_of(h);
 	for (;;) {
-		nocopy_lock(sh);
-		nocopy_entry *e = live_entry(sh, key, h);
-		if (e) {
-			zval *v = entry_long(e);
-			if (v) {
-				*out = __atomic_add_fetch(&Z_LVAL_P(v), delta, __ATOMIC_RELAXED);
-			}
-			nocopy_unlock(sh);
-			return v != NULL;
+		long_op op = {.a = delta};
+		int r = nocopy_update(h, ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key), add_fn, &op);
+		if (r != NOCOPY_GONE) {
+			*out = op.b;
+			return r;
 		}
-		nocopy_unlock(sh);
 		zval init;
 		ZVAL_LONG(&init, delta);
 		const nocopy_opts create = {.ttl = ttl, .add_only = true};
@@ -258,17 +262,8 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 	if (UNEXPECTED(nocopy_detour)) {
 		return nocopy_detour->cas_long(key, old, nw);
 	}
-	zend_ulong h = zend_string_hash_val(key);
-	nocopy_shard *sh = nocopy_shard_of(h);
-	nocopy_lock(sh);
-	nocopy_entry *e = live_entry(sh, key, h);
-	zval *v = e ? entry_long(e) : NULL;
-	bool ok = v && Z_LVAL_P(v) == old;
-	if (ok) {
-		__atomic_store_n(&Z_LVAL_P(v), nw, __ATOMIC_RELAXED);
-	}
-	nocopy_unlock(sh);
-	return ok;
+	long_op op = {.a = old, .b = nw};
+	return nocopy_update(zend_string_hash_val(key), ZSTR_VAL(key), (uint32_t) ZSTR_LEN(key), cas_fn, &op) == 1;
 }
 
 /* ---- reads ---- */

@@ -40,6 +40,17 @@ static inline uint32_t *ghost_cell(const nocopy_shard *sh, uint64_t h)
 }
 static inline uint32_t ghost_tag(uint64_t h) { return (uint32_t) h | 1; }
 
+/* ---- shard locks: not reentrant, and a holder's own process never looks dead (nocopy_arena.c) ---- */
+void nocopy_lock_wait(nocopy_shard *sh);
+static inline void nocopy_lock(nocopy_shard *sh)
+{
+	uint64_t z = 0;
+	if (!__atomic_compare_exchange_n(&sh->lock, &z, nocopy_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+		nocopy_lock_wait(sh);
+	}
+}
+static inline void nocopy_unlock(nocopy_shard *sh) { __atomic_store_n(&sh->lock, 0, __ATOMIC_RELEASE); }
+
 /* ---- owner ids (nocopy_owner.c): pid + process start time, so a recycled pid does not look like its dead predecessor ---- */
 uint64_t nocopy_owner_self(void);
 bool nocopy_owner_dead(uint64_t id); /* gone, a zombie, or its pid reused; reads /proc: no lock needed, better none held */
@@ -54,6 +65,8 @@ void nocopy_abort(nocopy_shard *sh, nocopy_entry *e);       /* allocated, never 
 nocopy_slot *nocopy_slot_of(nocopy_shard *sh, const nocopy_entry *e);
 nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t now);
 nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only);
+nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen); /* may be expired */
+bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* true if it was live */
 
 /* ---- expiry and merge (nocopy_evict.c) ---- */
 bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget); /* true if it unlinked anything */

@@ -6,7 +6,7 @@ Start with [How nocopy works](how-it-works.md) for the overview; this page is fo
 ## Layers
 
 Layers, each using only the one below it:
-- Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins, the lock fast path) is inline there. `nocopy_arena_int.h` is shared by its units only:
+- Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins) is inline there. Every public call that writes takes its shard lock itself: the lock (fast path inline), `nocopy_lookup` and `nocopy_remove` are in `nocopy_arena_int.h`, which is shared by its units only:
   `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
 - Values, interface `nocopy_value.h` (the block layout, entry flags, the key table, `nocopy_build`, copy-out, graphs out, serialize): `nocopy_value.c` puts PHP values in and out of an arena block (size, persist, rebase, copy-out, serialize, `nocopy_build`: size, `nocopy_put_begin`, persist, `nocopy_put_commit`); objects and shared references it hands to
   `nocopy_graph.c` (class fingerprints, the graph builder, persisting and rebuilding graphs, copy mode's templates). `nocopy_value_int.h` is shared by these two only: the walk states (`sizing`, `persist`, `rebase`), the graph builder, the graph markers and the calls each makes into the other.
@@ -18,7 +18,7 @@ Layers, each using only the one below it:
 - Detour: each store-API function tests `nocopy_detour` once (NULL: the local fast path) and otherwise calls that table: Valkey or no arena. Positional initializers, so `-Wextra` flags a table missing a slot.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_a` NULL, the `nocopy_no_arena` table): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
-`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
+`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`), shared counters bumped through `nocopy_update` among them (exact sum when none was evicted); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
 Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT (php-fpm's master as root: in each worker's first RINIT, after it dropped to the pool's user, so root never maps memory workers write) at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
 - Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
@@ -140,7 +140,7 @@ The callback's run time (ms) is kept in the header's `user` field (the arena cop
 
 ## Counters and INI
 
-`nocopy_inc`/`nocopy_cas` go through `nocopy_add_long`/`nocopy_cas_long`: the integer is modified in place under the shard lock with relaxed atomics (readers copy that word). `nocopy_clear` takes all shard locks in index order.
+`nocopy_inc`/`nocopy_cas` go through `nocopy_add_long`/`nocopy_cas_long`: `nocopy_update` runs their callback on the live entry under the shard lock, which modifies the integer in place with relaxed atomics (readers copy that word). Deletes: `nocopy_delete`. The lock is not reentrant, so a callback never calls back into the arena. `nocopy_clear` takes all shard locks in index order.
 INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, never `zend_alter_ini_entry`: that one records the entry in `EG(modified_ini_directives)`, emalloc'ed memory that `php_module_startup` frees at its end, and the next `ini_set()` of a new directive wrote into it (segfault in Symfony's boot).
 
 ## Valkey tier (`nocopy_valkey.c`)

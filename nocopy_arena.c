@@ -771,6 +771,25 @@ bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen)
 	return found;
 }
 
+bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
+{
+	nocopy_shard *sh = nocopy_shard_of(h);
+	nocopy_lock(sh);
+	bool found = nocopy_remove(sh, h, k, klen);
+	nocopy_unlock(sh);
+	return found;
+}
+
+int nocopy_update(uint64_t h, const char *k, uint32_t klen, int (*fn)(nocopy_entry *e, void *arg), void *arg)
+{
+	nocopy_shard *sh = nocopy_shard_of(h);
+	nocopy_lock(sh);
+	nocopy_entry *e = nocopy_lookup(sh, h, k, klen);
+	int r = e && !nocopy_expired(e) ? fn(e, arg) : NOCOPY_GONE;
+	nocopy_unlock(sh);
+	return r;
+}
+
 void nocopy_clear(void)
 {
 	for (uint32_t s = 0; s < nocopy_a->nshards; s++) { /* in order: two clears never deadlock */

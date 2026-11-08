@@ -180,10 +180,12 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 
-/* ---- read-modify-write: the caller holds nocopy_lock(nocopy_shard_of(h)) ---- */
-void nocopy_lock_wait(nocopy_shard *sh);
-nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen); /* locked; may be expired */
-bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* locked; true if it was live */
+/* ---- read-modify-write: each takes and drops h's shard lock ---- */
+bool nocopy_delete(uint64_t h, const char *k, uint32_t klen); /* true if it was live */
+#define NOCOPY_GONE (-1)
+/* fn(e, arg) on h's live entry under its shard lock; NOCOPY_GONE: none, else fn's result.
+ * fn changes the payload in place only, with atomics (readers copy without the lock); no allocation, no arena calls, no user code. */
+int nocopy_update(uint64_t h, const char *k, uint32_t klen, int (*fn)(nocopy_entry *e, void *arg), void *arg);
 void nocopy_clear(void);
 
 /* Single-flight per key hash, under the hash's shard lock. A dead or expired holder is taken over. */
@@ -246,16 +248,6 @@ static inline void nocopy_cpu_relax(void)
 	__asm__ __volatile__("isb" ::: "memory");
 #endif
 }
-
-static inline void nocopy_lock(nocopy_shard *sh)
-{
-	uint64_t z = 0;
-	if (!__atomic_compare_exchange_n(&sh->lock, &z, nocopy_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-		nocopy_lock_wait(sh);
-	}
-}
-
-static inline void nocopy_unlock(nocopy_shard *sh) { __atomic_store_n(&sh->lock, 0, __ATOMIC_RELEASE); }
 
 /* Publish "I may touch this segment" before dereferencing anything in it.
  * True if the pin is new: the caller must then re-check that what it found is still linked. */

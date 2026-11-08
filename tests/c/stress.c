@@ -1,6 +1,7 @@
 /* Threaded stress test of the arena without PHP: build with tests/c/run.sh (plain -O2 and ThreadSanitizer).
  * Each thread writes, deletes and reads its own keys against a model, reads every other thread's keys,
- * and holds some values pinned across later operations: a value read must always be intact. */
+ * and holds some values pinned across later operations: a value read must always be intact.
+ * All threads also bump shared counters in place (nocopy_update) and read them lock-free: none may lose an increment. */
 #include "../../nocopy_arena.h"
 #include <assert.h>
 #include <pthread.h>
@@ -15,6 +16,8 @@
 static int nthreads = 8, seconds = 3;
 static volatile int stop;
 static uint64_t failures;
+#define CTRS 8
+static uint64_t bumps; /* successful nocopy_update increments, all threads */
 
 typedef struct { uint32_t ver, len; } payload; /* after the key; then len bytes of a pattern of (key, ver) */
 
@@ -80,13 +83,47 @@ static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t
 	return nocopy_put_commit(&p, false) == PUT_OK;
 }
 
-static void del(const char *k)
+static void del(const char *k) { nocopy_delete(hash(k, strlen(k)), k, (uint32_t) strlen(k)); }
+
+static uint64_t *ctr(nocopy_entry *e) { return (uint64_t *) pl(e); }
+static int bump(nocopy_entry *e, void *arg) { (void) arg; __atomic_add_fetch(ctr(e), 1, __ATOMIC_RELAXED); return 1; }
+
+static bool put_ctr(nocopy_ctx *c, int j)
 {
-	uint64_t h = hash(k, strlen(k));
-	nocopy_shard *sh = nocopy_shard_of(h);
-	nocopy_lock(sh);
-	nocopy_remove(sh, h, k, (uint32_t) strlen(k));
-	nocopy_unlock(sh);
+	char k[8];
+	snprintf(k, sizeof k, "c%d", j);
+	size_t klen = strlen(k);
+	nocopy_put p;
+	nocopy_entry *e = nocopy_put_begin(&p, c, hash(k, klen), (uint32_t) klen, HDR, HDR + NOCOPY_ALIGN(klen + 1) + sizeof(uint64_t), 0);
+	if (!e) {
+		return false;
+	}
+	memcpy((char *) e + HDR, k, klen + 1);
+	*ctr(e) = 0;
+	return nocopy_put_commit(&p, false) == PUT_OK;
+}
+
+/* Bumps or reads (lock-free) a shared counter. */
+static void ctr_op(nocopy_ctx *c, unsigned *seed)
+{
+	char k[8];
+	snprintf(k, sizeof k, "c%d", rand_r(seed) % CTRS);
+	uint32_t klen = (uint32_t) strlen(k);
+	uint64_t h = hash(k, klen);
+	if (rand_r(seed) % 2) {
+		if (nocopy_update(h, k, klen, bump, NULL) == 1) {
+			__atomic_add_fetch(&bumps, 1, __ATOMIC_RELAXED);
+		}
+		return;
+	}
+	nocopy_borrow_begin(c);
+	nocopy_entry *e = nocopy_find(c, h, k, klen);
+	if (e && (e->klen != klen || memcmp(nocopy_key(e), k, klen))) {
+		fail("corrupt counter", k);
+	} else if (e) {
+		(void) __atomic_load_n(ctr(e), __ATOMIC_RELAXED);
+	}
+	nocopy_borrow_end(c);
 }
 
 typedef struct { nocopy_entry *e; uint64_t h; char k[32]; long ver; } held;
@@ -111,6 +148,10 @@ static void *worker(void *arg)
 	char k[32];
 	uint32_t ver = 0;
 	while (!__atomic_load_n(&stop, __ATOMIC_RELAXED)) {
+		if (rand_r(&seed) % 8 == 0) {
+			ctr_op(&c, &seed);
+			continue;
+		}
 		int i = rand_r(&seed) % KEYS, r = rand_r(&seed) % 100;
 		snprintf(k, sizeof k, "t%d_%d", me, i);
 		if (r < 35) {
@@ -193,6 +234,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s\n", err);
 		return 2;
 	}
+	nocopy_ctx mc = {.slot = -1};
+	if (!nocopy_claim(&mc)) {
+		fprintf(stderr, "claim\n");
+		return 2;
+	}
+	for (int j = 0; j < CTRS; j++) {
+		assert(put_ctr(&mc, j));
+	}
 	pthread_t t[64];
 	for (int i = 0; i < nthreads; i++) {
 		pthread_create(&t[i], NULL, worker, (void *) (intptr_t) i);
@@ -204,8 +253,26 @@ int main(int argc, char **argv)
 	}
 	nocopy_stats_t s;
 	nocopy_stats(&s);
-	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, failures %llu\n", mb, nthreads, seconds,
-		(unsigned long long) s.entries, s.shards, (unsigned long long) s.expunges, (unsigned long long) (s.evacuated >> 20),
-		(unsigned long long) failures);
+	uint64_t sum = 0;
+	int found = 0;
+	nocopy_borrow_begin(&mc);
+	for (int j = 0; j < CTRS; j++) {
+		char k[8];
+		snprintf(k, sizeof k, "c%d", j);
+		nocopy_entry *e = nocopy_find(&mc, hash(k, strlen(k)), k, (uint32_t) strlen(k));
+		if (e) {
+			sum += *ctr(e);
+			found++;
+		}
+	}
+	nocopy_borrow_end(&mc);
+	if (found == CTRS && sum != bumps) { /* evicted counters lose their count: only exact when all survived */
+		fprintf(stderr, "FAIL counters: %llu, expected %llu\n", (unsigned long long) sum, (unsigned long long) bumps);
+		failures++;
+	}
+	nocopy_release(&mc);
+	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, %llu bumps (%d/%d counters kept), failures %llu\n",
+		mb, nthreads, seconds, (unsigned long long) s.entries, s.shards, (unsigned long long) s.expunges, (unsigned long long) (s.evacuated >> 20),
+		(unsigned long long) bumps, found, CTRS, (unsigned long long) failures);
 	return failures ? 1 : 0;
 }
