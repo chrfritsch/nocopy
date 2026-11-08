@@ -95,7 +95,7 @@ unchanged.
 All you need is Docker:
 
 ```sh
-git clone <this repository> nocopy && cd nocopy
+git clone https://github.com/chrfritsch/nocopy && cd nocopy
 ./dev shell
 php -r 'nocopy_put("a", [1, 2, 3]); var_dump(nocopy_get("a"));'
 ```
@@ -119,10 +119,18 @@ Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, 
 
 ## Install on a server
 
-You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required:
+You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required. With
+[PIE](https://github.com/php/pie), from [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
 
 ```sh
-pie install chrfritsch/nocopy     # or from source: phpize && ./configure && make
+pie install chrfritsch/nocopy
+```
+
+Or from source:
+
+```sh
+git clone https://github.com/chrfritsch/nocopy && cd nocopy
+phpize && ./configure && make && sudo make install
 ```
 
 Then configure it in a file read by both php-fpm and the CLI (e.g. `conf.d/nocopy.ini`):
@@ -133,7 +141,20 @@ nocopy.shm_name=/nocopy     ; required: the cache's name, so web and CLI share i
 nocopy.shm_size=128M        ; how much memory the cache may use
 ```
 
-Step by step: [install guide](docs/how-to/install.md). Several servers: [Valkey guide](docs/how-to/valkey.md).
+Step by step (Docker, Valkey over TLS, upgrades): [install guide](docs/how-to/install.md). Several servers: [Valkey guide](docs/how-to/valkey.md).
+
+### Integrations
+
+The Composer packages are not on Packagist yet. Require them from a checkout of this repository:
+
+```sh
+composer config repositories.nocopy-apcu path /path/to/nocopy/apcu
+composer require chrfritsch/nocopy-apcu:@dev          # apcu_* polyfill
+```
+
+Same for `symfony/` (`chrfritsch/nocopy-bundle`), `drupal/` (`chrfritsch/nocopy-drupal`, needs the polyfill too) and
+`cli/` (`chrfritsch/nocopy-cli`). Setup: [Symfony](docs/how-to/symfony.md), [Drupal](drupal/README.md),
+[APCu polyfill](docs/how-to/migrate-from-apcu.md#route-b-the-polyfill-no-code-changes).
 
 ## Learn more
 

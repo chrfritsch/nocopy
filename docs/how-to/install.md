@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git libtool unz
 ## Build from source
 
 ```sh
-git clone <this repository> nocopy && cd nocopy
+git clone https://github.com/chrfritsch/nocopy && cd nocopy
 phpize && ./configure && make
 ```
 
