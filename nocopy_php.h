@@ -72,7 +72,6 @@ typedef struct {
 } nocopy_opts;
 
 extern size_t nocopy_local_size; /* nocopy.local_size */
-extern bool nocopy_detour; /* Valkey on, or no arena: operations leave the local fast path */
 void nocopy_store_rshutdown(void); /* drops copy mode's copies */
 void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
@@ -95,10 +94,29 @@ void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
 bool nocopy_drop_local(const char *k, size_t len);
+bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as one store per key */
 /* A HashTable key as a string (release it). */
 static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
 
-/* ---- Valkey tier (nocopy_valkey.c): with nocopy.valkey set, the cache of record behind the arena. Store ops need an arena. ---- */
+/* ---- the detour: where the store ops go off the local fast path. Positional initializers: -Wextra flags a missing slot. ---- */
+typedef struct {
+	nocopy_status (*store)(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
+	bool (*fetch)(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
+	void (*fetch_multi)(HashTable *keys, HashTable *out);
+	bool (*store_multi)(HashTable *vals, const nocopy_opts *o);
+	bool (*drop)(zend_string *key);
+	zend_long (*drop_multi)(HashTable *keys);
+	bool (*add_long)(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
+	bool (*cas_long)(zend_string *key, zend_long old, zend_long nw);
+	void (*clear)(void);
+	bool leases;	  /* nocopy_remember single-flights through the arena's leases */
+	const char *name; /* nocopy_shared_with() */
+} nocopy_detour_ops;
+
+extern const nocopy_detour_ops *nocopy_detour; /* NULL: the local store */
+extern const nocopy_detour_ops nocopy_no_arena; /* every op misses or fails; stores still check the value */
+
+/* ---- Valkey tier (nocopy_valkey.c): with nocopy.valkey set, the cache of record behind the arena (needs one). ---- */
 #ifdef HAVE_NOCOPY_VALKEY
 extern bool nocopy_vk_on;
 ZEND_INI_MH(nocopy_vk_on_url);
@@ -113,32 +131,15 @@ void nocopy_vk_mshutdown(void);
 void nocopy_vk_new_request(void);
 void nocopy_vk_close(nocopy_vk *v);
 uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
-nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
-bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
-void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out);
-bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o);
-bool nocopy_vk_drop(zend_string *key);
-zend_long nocopy_vk_drop_multi(HashTable *keys);
-bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
-bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw);
-void nocopy_vk_clear(void); /* Valkey's keys under the prefix */
+extern const nocopy_detour_ops nocopy_vk_detour;
 #else
-/* --disable-nocopy-valkey: never on, so the store ops below are never reached */
+/* --disable-nocopy-valkey: never on */
 #define nocopy_vk_on false
 static inline void nocopy_vk_minit(void) {}
 static inline void nocopy_vk_mshutdown(void) {}
 static inline void nocopy_vk_new_request(void) {}
 static inline void nocopy_vk_close(nocopy_vk *v) { (void) v; }
 static inline uint32_t nocopy_vk_listener(void) { return 0; }
-static inline nocopy_status nocopy_vk_store(zend_string *k, zval *v, const nocopy_opts *o, uint32_t u) { (void) k, (void) v, (void) o, (void) u; return NOCOPY_NO_ROOM; }
-static inline bool nocopy_vk_fetch(zend_string *k, zval *rv, time_t *e, uint32_t *d) { (void) k, (void) e, (void) d; ZVAL_NULL(rv); return false; }
-static inline void nocopy_vk_fetch_multi(HashTable *k, HashTable *o) { (void) k, (void) o; }
-static inline bool nocopy_vk_store_multi(HashTable *v, const nocopy_opts *o) { (void) v, (void) o; return false; }
-static inline bool nocopy_vk_drop(zend_string *k) { (void) k; return false; }
-static inline zend_long nocopy_vk_drop_multi(HashTable *k) { (void) k; return 0; }
-static inline bool nocopy_vk_add_long(zend_string *k, zend_long d, zend_long t, zend_long *o) { (void) k, (void) d, (void) t; *o = 0; return false; }
-static inline bool nocopy_vk_cas_long(zend_string *k, zend_long o, zend_long n) { (void) k, (void) o, (void) n; return false; }
-static inline void nocopy_vk_clear(void) {}
 #endif
 
 #endif

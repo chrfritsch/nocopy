@@ -37,8 +37,9 @@ over loopback (scratch script, 9 interleaved rounds, rounds where both builds ra
 (each reply is a malloc'd tree), get 3.9-4.0 -> 3.7-4.0, inc 11.8-13.8 -> 12.5-13.0, get_multiple of 100 58-75 -> 52-71. Price: ~7k lines
 of C in the repo, updated with `scripts/vendor-libvalkey.sh <tag>`.
 
-**Valkey tier behind a seam.** `nocopy_store.c` reaches it only through `nocopy_vk_*`, and `--disable-nocopy-valkey` compiles it
+**Valkey tier behind a seam.** `nocopy_store.c` reaches it only through `nocopy_detour`, a table of the store ops whose other implementation is no arena; `--disable-nocopy-valkey` compiles the Valkey table
 out, so the core builds and ships without it. CI runs the suite both ways. Default stays on.
+The table replaced ten hand-written `detour`/`nocopy_vk_on`/`nocopy_a` branches; the local path only tests a pointer instead of a bool (`./dev ab main 7 read`: fetch int 10.96 -> 10.69 ns, 100k distinct keys 27.0 -> 26.9, within noise).
 
 ## Hashing and slots
 

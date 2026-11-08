@@ -1001,7 +1001,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *
 }
 
 /* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
-bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	if (!vk_ready()) {
 		ZVAL_NULL(rv);
@@ -1024,7 +1024,7 @@ bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 }
 
 /* Valkey first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
-nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	if (!vk_ready()) {
 		return NOCOPY_NO_ROOM;
@@ -1054,8 +1054,11 @@ nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o,
 }
 
 /* nocopy_vk_store for many keys: local copies first, then every SET in one pipeline. */
-bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
+static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 {
+	if (o->add_only) {
+		return nocopy_store_each(vals, o); /* ponytail: add stays one round trip per key (NX decides first) */
+	}
 	if (!vk_ready()) {
 		return false;
 	}
@@ -1100,7 +1103,7 @@ bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 	return all;
 }
 
-void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
+static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 {
 	if (!vk_ready()) {
 		return;
@@ -1145,7 +1148,7 @@ void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 	efree(miss);
 }
 
-bool nocopy_vk_drop(zend_string *key)
+static bool nocopy_vk_drop(zend_string *key)
 {
 	int64_t gone = 0;
 	int r = vk_ready() ? vk_unlink_n(1, &key, &gone) : -1;
@@ -1153,7 +1156,7 @@ bool nocopy_vk_drop(zend_string *key)
 	return r == 1 && gone > 0;
 }
 
-zend_long nocopy_vk_drop_multi(HashTable *keys)
+static zend_long nocopy_vk_drop_multi(HashTable *keys)
 {
 	zend_string **ks = safe_emalloc(zend_hash_num_elements(keys), sizeof *ks, 0);
 	uint32_t n = 0;
@@ -1175,7 +1178,7 @@ zend_long nocopy_vk_drop_multi(HashTable *keys)
 	return (zend_long) gone;
 }
 
-bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
+static bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	int64_t v = 0;
 	int r = vk_ready() ? vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) MIN(ttl, NOCOPY_TTL_MAX) * 1000, &v) : -1;
@@ -1184,16 +1187,22 @@ bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_l
 	return r == 1;
 }
 
-bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw)
+static bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
 	int r = vk_ready() ? vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
 	vk_forget(key);
 	return r == 1;
 }
 
-void nocopy_vk_clear(void)
+static void nocopy_vk_clear(void)
 {
 	if (vk_ready()) {
 		vk_clear();
 	}
+	nocopy_clear();
 }
+
+const nocopy_detour_ops nocopy_vk_detour = {
+	nocopy_vk_store, nocopy_vk_fetch, nocopy_vk_fetch_multi, nocopy_vk_store_multi, nocopy_vk_drop, nocopy_vk_drop_multi,
+	nocopy_vk_add_long, nocopy_vk_cas_long, nocopy_vk_clear, true, "valkey",
+};

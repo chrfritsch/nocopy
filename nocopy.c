@@ -348,7 +348,7 @@ PHP_FUNCTION(nocopy_keys)
 PHP_FUNCTION(nocopy_shared_with)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	RETURN_STRING(!nocopy_a ? "none" : nocopy_vk_on ? "valkey" : "host");
+	RETURN_STRING(nocopy_detour ? nocopy_detour->name : "host");
 }
 
 PHP_FUNCTION(nocopy_stats)
@@ -579,6 +579,17 @@ static void arena_open(bool late)
 	}
 }
 
+/* Where the store ops go: the local store (NULL), else no arena, else Valkey. */
+static void route(void)
+{
+	nocopy_detour = nocopy_a ? NULL : &nocopy_no_arena;
+#ifdef HAVE_NOCOPY_VALKEY
+	if (nocopy_a && nocopy_vk_on) {
+		nocopy_detour = &nocopy_vk_detour;
+	}
+#endif
+}
+
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
@@ -594,7 +605,7 @@ PHP_MINIT_FUNCTION(nocopy)
 		arena_open(false);
 	}
 	nocopy_vk_minit();
-	nocopy_detour = nocopy_vk_on || !nocopy_a;
+	route();
 	pthread_atfork(NULL, NULL, atfork_child);
 
 	zend_function *hr = zend_hash_str_find_ptr(CG(function_table), ZEND_STRL("frankenphp_handle_request"));
@@ -628,7 +639,7 @@ PHP_RINIT_FUNCTION(nocopy)
 	if (UNEXPECTED(open_deferred)) {
 		open_deferred = false;
 		arena_open(true);
-		nocopy_detour = nocopy_vk_on || !nocopy_a;
+		route();
 	}
 	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) {
 		nocopy_claim(&NOCOPY_G(ctx));
