@@ -18,7 +18,7 @@ nocopy_put('products', $rows);      // 1,000 rows
 $rows = nocopy_get('products');     // APCu: ~200 µs. nocopy: ~12 ns. Any size.
 ```
 
-> **Status:** works and is tested, not released yet: build from source ([status and roadmap](docs/status.md)).
+> **Status:** 0.0.1, the first release: works and is tested, no stability promise yet. Install with `pie install chrfritsch/nocopy` ([status and roadmap](docs/status.md)).
 
 ## The idea in one picture
 
