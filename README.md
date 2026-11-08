@@ -122,6 +122,7 @@ Also: `nocopy_add`, `nocopy_cas`, `nocopy_get_multiple`, `nocopy_put_multiple`, 
 You need Linux, PHP 8.4+ with its dev tools (`phpize`) and a C compiler. No C knowledge required:
 
 ```sh
+pie repository:add vcs https://github.com/chrfritsch/nocopy   # until it is on Packagist
 pie install chrfritsch/nocopy     # or from source: phpize && ./configure && make
 ```
 
