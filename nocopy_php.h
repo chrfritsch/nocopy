@@ -81,7 +81,7 @@ void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too
 /* The local store alone, for the Valkey tier. */
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
-bool nocopy_drop_local(const char *k, size_t len);
+bool nocopy_drop_local(const char *k, size_t len); /* needs an arena */
 bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as one store per key */
 /* A HashTable key as a string (release it). */
 static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }

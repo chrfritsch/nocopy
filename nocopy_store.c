@@ -63,7 +63,7 @@ static zend_always_inline bool drop_local(const char *k, size_t len, zend_ulong 
 
 bool nocopy_drop_local(const char *k, size_t len)
 {
-	return nocopy_a && drop_local(k, len, zend_hash_func(k, len)); /* = zend_string_hash_val() */
+	return drop_local(k, len, zend_hash_func(k, len)); /* = zend_string_hash_val() */
 }
 
 bool nocopy_drop(zend_string *key)
@@ -274,13 +274,6 @@ bool nocopy_store_each(HashTable *vals, const nocopy_opts *o)
 
 #define LEASE_TTL 30 /* s: a live holder stuck longer than this stops blocking the others */
 
-static double now_s(clockid_t clk)
-{
-	struct timespec ts;
-	clock_gettime(clk, &ts);
-	return (double) ts.tv_sec + ts.tv_nsec / 1e9;
-}
-
 static int lease_take(zend_ulong h)
 {
 	if (NOCOPY_G(nleases) == (int) (sizeof NOCOPY_G(leases) / sizeof NOCOPY_G(leases)[0])) {
@@ -313,7 +306,7 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 	fci.param_count = fcc.function_handler->type == ZEND_USER_FUNCTION ? 2 : 1; /* internal ones reject extra args */
 	fci.params = args;
 	fci.retval = rv;
-	double t0 = now_s(CLOCK_MONOTONIC);
+	int64_t t0 = nocopy_mono_ms();
 	zend_result r = zend_call_function(&fci, &fcc);
 	zend_release_fcall_info_cache(&fcc);
 	zend_long ttl = zval_get_long(Z_REFVAL(args[1]));
@@ -321,7 +314,7 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 	if (r == FAILURE || EG(exception) || ttl < 0) {
 		return; /* ttl < 0: the callback asks not to store */
 	}
-	double ms = (now_s(CLOCK_MONOTONIC) - t0) * 1000;
+	int64_t ms = nocopy_mono_ms() - t0;
 	const nocopy_opts as = {.ttl = ttl, .add_only = o->add_only};
 	store_as(key, rv, &as, ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms);
 }
@@ -339,7 +332,9 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 			return;
 		}
 		double r = ((nocopy_rand(&NOCOPY_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
-		if (now_s(CLOCK_REALTIME) - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
+		struct timespec ts;
+		nocopy_clock(&ts); /* exp's clock */
+		if ((double) ts.tv_sec + ts.tv_nsec / 1e9 - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
 		if (lease_take(zend_string_hash_val(key)) != NOCOPY_LEASE_TAKEN) {
@@ -352,7 +347,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		return;
 	}
 	zend_ulong h = zend_string_hash_val(key);
-	double deadline = now_s(CLOCK_MONOTONIC) + LEASE_TTL;
+	int64_t deadline = nocopy_mono_ms() + LEASE_TTL * 1000;
 	unsigned wait = 50;
 	bool mine = false;
 	for (;;) {
@@ -367,7 +362,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		if (beta > 0 && !nocopy_detour && local_fetch(key, rv, NULL, NULL, true)) {
 			return; /* stale-while-revalidate: the expired value, while the holder computes the new one */
 		}
-		if (now_s(CLOCK_MONOTONIC) > deadline) {
+		if (nocopy_mono_ms() > deadline) {
 			break;
 		}
 		usleep(wait);

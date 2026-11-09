@@ -295,10 +295,7 @@ static void keys_collect(const nocopy_entry *e, void *arg)
 	if (e->klen < ZSTR_LEN(w->prefix) || memcmp(nocopy_key(e), ZSTR_VAL(w->prefix), ZSTR_LEN(w->prefix)) != 0) {
 		return;
 	}
-	if (w->n == w->cap) {
-		w->cap = w->cap ? w->cap * 2 : 256;
-		w->e = erealloc(w->e, w->cap * sizeof *w->e);
-	}
+	GROW(w->e, w->n, w->cap, 256);
 	w->e[w->n++] = e;
 }
 

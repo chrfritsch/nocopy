@@ -258,6 +258,15 @@ static inline time_t nocopy_now(void)
 	nocopy_clock(&ts);
 	return ts.tv_sec;
 }
+/* For durations and deadlines: CLOCK_MONOTONIC ms. */
+static inline int64_t nocopy_mono_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+/* The last second an entry lives: ttl 0 never expires (0), < 0 is -ttl itself, else now + ttl, capped. */
+static inline time_t nocopy_expiry(time_t now, int64_t ttl) { return ttl < 0 ? (time_t) -ttl : ttl ? now + (ttl < NOCOPY_TTL_MAX ? (time_t) ttl : NOCOPY_TTL_MAX) : 0; }
 #define NOCOPY_SEQ_SHARD_BITS 3 /* seq: microseconds << 3 | shard, unique across shards (a segment changes shard, copy mode keys on address + seq) */
 _Static_assert(NOCOPY_MAX_SHARDS <= 1 << NOCOPY_SEQ_SHARD_BITS, "shard index must fit seq's low bits");
 /* Like APCu: alive through the whole second `expires`, so ttl=1 lives 1-2 s, not 0-1 s. */

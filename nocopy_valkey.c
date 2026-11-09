@@ -147,13 +147,6 @@ ZEND_INI_MH(nocopy_vk_on_timeout)
 
 /* ---- connection ---- */
 
-static int64_t now_ms(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 static void vk_close_c(nocopy_vk *v)
 {
 	if (v->c) {
@@ -173,7 +166,7 @@ static bool vk_fail(nocopy_vk *v)
 	}
 	vk_close_c(v);
 	v->synced = false;
-	int64_t now = now_ms();
+	int64_t now = nocopy_mono_ms();
 	v->retry_at = now + 500 + (int64_t) (((uint64_t) now * 2654435761u ^ (uint64_t) getpid()) % 1001); /* jitter: no reconnects in step */
 	return false;
 }
@@ -350,8 +343,8 @@ static void vk_apply(const valkeyReply *push)
 	}
 }
 
-/* The next reply (freeReplyObject it); pushes in front of it are applied. NULL: the connection failed and is closed. */
-static valkeyReply *vk_get(nocopy_vk *v)
+/* The next reply, or push named stop (freeReplyObject it); other pushes in front of it are applied. NULL: the connection failed and is closed. */
+static valkeyReply *vk_get_until(nocopy_vk *v, const char *stop)
 {
 	for (;;) {
 		valkeyReply *r;
@@ -359,13 +352,15 @@ static valkeyReply *vk_get(nocopy_vk *v)
 			vk_fail(v);
 			return NULL;
 		}
-		if (r->type != VALKEY_REPLY_PUSH) {
+		if (r->type != VALKEY_REPLY_PUSH || (stop && push_is(r, stop, strlen(stop)))) {
 			return r;
 		}
 		vk_apply(r);
 		freeReplyObject(r);
 	}
 }
+
+static valkeyReply *vk_get(nocopy_vk *v) { return vk_get_until(v, NULL); }
 
 /* Applies the complete pushes read so far. false: a protocol error, an error reply, or (strict) any other reply. */
 static bool vk_pushes(valkeyContext *c, bool strict)
@@ -470,21 +465,10 @@ static valkeyReply *vk_call(nocopy_vk *v, smart_str *s)
 /* SUBSCRIBE's reply: a push, or an error (NOPERM) that is read here so later replies stay in step. Refused: only the idle exemption is lost. */
 static bool vk_subscribed(nocopy_vk *v)
 {
-	for (;;) {
-		valkeyReply *r;
-		if (valkeyGetReply(v->c, (void **) &r) != VALKEY_OK) {
-			return vk_fail(v);
-		}
-		bool push = r->type == VALKEY_REPLY_PUSH;
-		bool sub = push_is(r, ZEND_STRL("subscribe"));
-		if (push && !sub) {
-			vk_apply(r);
-		}
-		freeReplyObject(r);
-		if (!push || sub) {
-			return true;
-		}
-	}
+	valkeyReply *r = vk_get_until(v, "subscribe");
+	bool ok = r != NULL;
+	freeReplyObject(r);
+	return ok;
 }
 
 /* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from Valkey's idle `timeout`.
@@ -525,7 +509,7 @@ static bool vk_handshake(nocopy_vk *v, bool track)
 static bool vk_connect(nocopy_vk *v)
 {
 	v->err[0] = 0;
-	if (now_ms() < v->retry_at) {
+	if (nocopy_mono_ms() < v->retry_at) {
 		return false;
 	}
 	const char *msg;
@@ -574,7 +558,7 @@ static ZEND_NORETURN void vk_listen(void)
 	struct pollfd p = {.fd = -1, .events = POLLIN};
 	int64_t ping_at = 0, heard_by = 0;
 	for (;;) {
-		int64_t now = now_ms();
+		int64_t now = nocopy_mono_ms();
 		if (__atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) != me || !nocopy_arena_current()) {
 			_exit(0); /* replaced, or the arena is gone */
 		}
@@ -605,7 +589,7 @@ static ZEND_NORETURN void vk_listen(void)
 			continue;
 		}
 		bool got = p.revents || !wait, ok = !got || (valkeyBufferRead(c) == VALKEY_OK && vk_pushes(c, false));
-		now = now_ms();
+		now = nocopy_mono_ms();
 		if (got) {
 			heard_by = 0; /* anything from Valkey answers the PING */
 		}
@@ -687,9 +671,9 @@ static void vk_spawn(void)
 static bool listener_live(int wait_ms)
 {
 	nocopy_shared *a = NOCOPY_SHARED;
-	int64_t until = now_ms() + wait_ms;
+	int64_t until = nocopy_mono_ms() + wait_ms;
 	for (;;) {
-		int64_t now = now_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
+		int64_t now = nocopy_mono_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
 		bool fresh = beat && now - beat < STALE_MS;
 		if (fresh && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE)) {
 			return true;
@@ -712,7 +696,7 @@ uint32_t nocopy_vk_listener(void)
 {
 	nocopy_shared *a = nocopy_a ? NOCOPY_SHARED : NULL;
 	int64_t beat = a ? __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE) : 0;
-	return beat && now_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
+	return beat && nocopy_mono_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
 }
 
 static bool vk_ready(void)
@@ -727,10 +711,10 @@ static bool vk_ready(void)
 	if (!v->c && !vk_connect(v)) {
 		return false;
 	}
-	bool wait = now_ms() >= v->retry_at;
+	bool wait = nocopy_mono_ms() >= v->retry_at;
 	if (!listener_live(wait ? vk_timeout_ms : 0)) {
 		if (wait) {
-			v->retry_at = now_ms() + 500; /* the next calls check without waiting */
+			v->retry_at = nocopy_mono_ms() + 500; /* the next calls check without waiting */
 		}
 		return false;
 	}
@@ -763,15 +747,22 @@ static nocopy_vk *vk_conn(void)
 	return v->c || vk_ready() ? v : NULL;
 }
 
-static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
+/* vk_call on this worker's connection; NULL also when Valkey is unreachable. s is freed either way. */
+static valkeyReply *vk_cmd(smart_str *s)
 {
 	nocopy_vk *v = vk_conn();
 	if (!v) {
-		return -1;
+		smart_str_free(s);
+		return NULL;
 	}
+	return vk_call(v, s);
+}
+
+static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
+{
 	smart_str s = {0};
 	keys_cmd(&s, ZEND_STRL("MGET"), n, keys);
-	valkeyReply *r = vk_call(v, &s);
+	valkeyReply *r = vk_cmd(&s);
 	bool ok = r && r->type == VALKEY_REPLY_ARRAY && r->elements == n;
 	for (uint32_t i = 0; ok && i < n; i++) {
 		const valkeyReply *c = r->element[i];
@@ -808,13 +799,9 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 
 static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)
 {
-	nocopy_vk *v = vk_conn();
-	if (!v) {
-		return -1;
-	}
 	smart_str s = {0};
 	set_cmd(&s, k, kl, val, vl, pxat, nx);
-	valkeyReply *r = vk_call(v, &s);
+	valkeyReply *r = vk_cmd(&s);
 	int ret = !r ? -1 : r->type == VALKEY_REPLY_STATUS ? 1 : r->type == VALKEY_REPLY_NIL ? 0 : -1;
 	freeReplyObject(r);
 	return ret;
@@ -823,13 +810,9 @@ static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 /* UNLINK of n keys; *gone: how many existed. */
 static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
 {
-	nocopy_vk *v = vk_conn();
-	if (!v) {
-		return -1;
-	}
 	smart_str s = {0};
 	keys_cmd(&s, ZEND_STRL("UNLINK"), n, keys);
-	valkeyReply *r = vk_call(v, &s);
+	valkeyReply *r = vk_cmd(&s);
 	bool ok = r && r->type == VALKEY_REPLY_INTEGER;
 	if (ok) {
 		*gone = r->integer;
@@ -840,13 +823,9 @@ static int vk_unlink_n(uint32_t n, zend_string *const *keys, int64_t *gone)
 
 static int vk_eval_long(const char *script, size_t sl, const char *k, size_t kl, int64_t a1, int64_t a2, int64_t *out)
 {
-	nocopy_vk *v = vk_conn();
-	if (!v) {
-		return -1;
-	}
 	smart_str s = {0};
 	head(&s, 6), ARG(&s, "EVAL"), arg(&s, script, sl), ARG(&s, "1"), key_arg(&s, k, kl), arg_long(&s, a1), arg_long(&s, a2);
-	valkeyReply *r = vk_call(v, &s);
+	valkeyReply *r = vk_cmd(&s);
 	if (!r) {
 		return -1;
 	}
@@ -934,7 +913,7 @@ static void vk_forget(zend_string *key)
 }
 
 /* A ttl as the last second it lives (0: never), and that second's end for SET PXAT (0: none). */
-static time_t vk_expires(zend_long ttl) { return ttl ? nocopy_now() + MIN(ttl, NOCOPY_TTL_MAX) : 0; }
+static time_t vk_expires(zend_long ttl) { return nocopy_expiry(nocopy_now(), ttl); }
 static int64_t vk_pxat(time_t expires) { return expires ? ((int64_t) expires + 1) * 1000 : 0; }
 
 #define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */

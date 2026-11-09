@@ -220,7 +220,7 @@ static void reclaim(nocopy_shard *sh)
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	uint64_t held[NOCOPY_SEG_WORDS] = {0};
 	uint32_t nw = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_ACQUIRE);
-	time_t now = time(NULL);
+	time_t now = nocopy_now();
 	uint32_t nwords = nocopy_seg_words;
 	for (uint32_t i = 0; i < nw; i++) {
 		uint64_t b[NOCOPY_SEG_WORDS], blocks = 0;
@@ -716,7 +716,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	nocopy_lock(sh);
 	struct timespec ts;
 	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
-	time_t now = ts.tv_sec, exp = ttl < 0 ? -ttl : ttl ? now + (ttl < NOCOPY_TTL_MAX ? ttl : NOCOPY_TTL_MAX) : 0;
+	time_t now = ts.tv_sec, exp = nocopy_expiry(now, ttl);
 	nocopy_entry *e = nocopy_alloc(sh, size, exp, now);
 	if (!e) {
 		nocopy_unlock(sh);
@@ -845,7 +845,7 @@ void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), vo
 void nocopy_stats(nocopy_stats_t *st)
 {
 	memset(st, 0, sizeof *st);
-	time_t now = time(NULL);
+	time_t now = nocopy_now();
 	for (uint32_t i = 0; i < nocopy_a->nshards; i++) { /* lock-free: a snapshot that may be off by concurrent writes */
 		nocopy_shard *sh = &nocopy_a->shards[i];
 		st->used += __atomic_load_n(&sh->live_bytes, __ATOMIC_RELAXED);
@@ -998,7 +998,7 @@ static void init(nocopy_arena *p, const layout *l)
 			sh->cur[b] = -1;
 		}
 	}
-	p->start_time = time(NULL);
+	p->start_time = nocopy_now();
 }
 
 /* ---- named arenas ---- */

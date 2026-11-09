@@ -365,10 +365,7 @@ static gnode *graph_b_node(graph_b *g)
 
 static void graph_b_hook(graph_b *g, uint32_t i)
 {
-	if (g->nh == g->hcap) {
-		g->hcap = g->hcap ? 2 * g->hcap : 16;
-		g->hooks = erealloc(g->hooks, g->hcap * sizeof(uint32_t));
-	}
+	GROW(g->hooks, g->nh, g->hcap, 16);
 	g->hooks[g->nh++] = i;
 }
 
