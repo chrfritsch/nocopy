@@ -42,5 +42,15 @@ for f in *.c *.h; do
 done
 grep -nE '\b(e|pe|safe_e)(m|c|re)alloc|\b(p?efree|estrdup|zend_string_(init|alloc|tolower|concat|dup|release)|smart_str_[a-z]+|zend_new_array|array_init|zend_hash_(add|update|index_add|index_update|str_add|str_update|next_index_insert|init|copy|destroy|extend|rehash)[a-z_]*|zend_call_[a-z_]+|nc_call_magic|zend_throw_[a-z_]+|php_error_docref|zend_error|zval_ptr_dtor|OBJ_RELEASE|object_init_ex|zend_lookup_class|ZVAL_STRINGL?)\b' nocopy_write.c \
 	| sed 's/^/check-layers: nocopy_write.c runs under a shard lock (no allocation, no user code): /' | grep . && bad=1
+# Above the value layer: no name of nocopy_value_int.h (nocopy.c's one translation unit would let them through).
+outer="nocopy.c nocopy_store.c nocopy_kept.c nocopy_kept.h nocopy_valkey.c nocopy_valkey.h nocopy_php.h"
+int=$( { sed -n 's/^#define \([A-Za-z_0-9]*\).*/\1/p' nocopy_value_int.h; sed -n 's/^}[ ]*\([a-z_0-9]*\);.*/\1/p;s/^typedef .*} *\([a-z_0-9]*\);.*/\1/p' nocopy_value_int.h
+	grep -E '^[a-z]' nocopy_value_int.h | grep -v '^typedef' | sed -n 's/^[^(]*[^a-z_0-9]\([a-z_0-9]*\)(.*/\1/p'; } | grep -v '^NOCOPY_VALUE_INT_H$' | grep . | paste -sd'|' -)
+for f in $outer; do
+	[ -f "$f" ] && grep -nwE "$int" "$f" | sed "s|^|check-layers: $f: value layer internal: |" | grep . && bad=1
+done
+# The arena's data operations: the store's (and the Valkey tier's nocopy_clear), not the module's.
+data='\bnocopy_(find(_ex)?|each|borrow_(begin|end)|keep|count|put_(begin|commit|abort)|delete|update|clear|lease_(take|drop)|atom_[a-z_]+)\('
+grep -nE "$data" nocopy.c | sed 's/^/check-layers: nocopy.c: arena data through the store: /' | grep . && bad=1
 [ $bad = 0 ] && echo "check-layers: ok"
 exit $bad

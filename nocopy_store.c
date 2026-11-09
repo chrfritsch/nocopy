@@ -199,6 +199,58 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 	nocopy_borrow_end(&NOCOPY_G(ctx));
 }
 
+typedef struct {
+	const nocopy_entry **e;
+	size_t n, cap;
+	zend_string *prefix;
+} keys_walk;
+
+static void keys_collect(const nocopy_entry *e, void *arg)
+{
+	keys_walk *w = arg;
+	if (nocopy_entry_klen(e) < ZSTR_LEN(w->prefix) || memcmp(nocopy_key(e), ZSTR_VAL(w->prefix), ZSTR_LEN(w->prefix)) != 0) {
+		return;
+	}
+	if (w->n == w->cap) {
+		w->cap = w->cap ? 2 * w->cap : 256;
+		w->e = erealloc(w->e, w->cap * sizeof *w->e);
+	}
+	w->e[w->n++] = e;
+}
+
+static int keys_by_seq(const void *a, const void *b)
+{
+	uint64_t x = nocopy_entry_version(*(const nocopy_entry *const *) a), y = nocopy_entry_version(*(const nocopy_entry *const *) b);
+	return (x > y) - (x < y);
+}
+
+void nocopy_list_keys(zend_string *prefix, HashTable *out)
+{
+	if (!nocopy_attached()) {
+		return;
+	}
+	nocopy_ctx *c = &NOCOPY_G(ctx);
+	keys_walk w = {.prefix = prefix};
+	nocopy_borrow_begin(c);
+	nocopy_each(c, keys_collect, &w);
+	if (w.n) {
+		qsort(w.e, w.n, sizeof *w.e, keys_by_seq); /* seq: oldest first, to the coarse clock's tick */
+	}
+	for (size_t i = 0; i < w.n; i++) {
+		const nocopy_entry *e = w.e[i];
+		zval info;
+		array_init_size(&info, 3);
+		add_assoc_long(&info, "size", (zend_long) nocopy_entry_size(e));
+		add_assoc_long(&info, "created", (zend_long) nocopy_entry_created(e));
+		add_assoc_long(&info, "expires", (zend_long) nocopy_entry_expires(e));
+		zend_symtable_str_update(out, nocopy_key(e), nocopy_entry_klen(e), &info);
+	}
+	nocopy_borrow_end(c);
+	if (w.e) {
+		efree(w.e);
+	}
+}
+
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o)
 {
 	if (UNEXPECTED(nocopy_detour)) {

@@ -74,6 +74,7 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
 /* Fetch, or run fn once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv); /* fn: a valid callable */
 void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too */
+void nocopy_list_keys(zend_string *prefix, HashTable *out); /* this host's entries under prefix, oldest first: key => size, created, expires */
 
 /* The local store alone, for the Valkey tier. */
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
