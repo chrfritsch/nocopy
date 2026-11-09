@@ -37,6 +37,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, ROWS_ONLY=1 its DB cache rows in an arena, PERF_ONLY=1 perf profile; CONFIGS=...)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
   hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
+  trace [raw.csv...]          Twitter traces with TTLs replayed read-through: nocopy vs libCacheSim's policies at equal bytes (SIZES, ALGOS, N; traces in .cache/traces, see docker/trace.sh)
 
   stub                        regenerate nocopy_arginfo.h from nocopy.stub.php
   shell                       bash in the image with nocopy built and loaded (php -m, php -a)
@@ -97,6 +98,8 @@ case $cmd in
               run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g nocopy-drupal /src/docker/hitratio-compare.sh ;;
+  trace)      PHP=8.5; img; docker build -q -t nocopy-trace -f docker/Dockerfile.trace docker >/dev/null
+              run -e SIZES -e ALGOS -e N nocopy-trace /src/docker/trace.sh "$@" ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e MEM_ONLY -e ROWS_ONLY -e REPLAY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it --shm-size=1g -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \

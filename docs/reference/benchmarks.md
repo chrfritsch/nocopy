@@ -302,6 +302,14 @@ over the stored keys) and 4 writers of new keys, so every write evicts, for 20 s
 `bench/hitratio.php` measures read-through hit ratios under Zipf and loop workloads (optionally next to a few hot big values, which load some shards more than others); results back the eviction choices in
 [Design decisions](../explanation/design-decisions.md#eviction).
 
+### Twitter traces
+
+`./dev trace` replays production traces with TTLs (Twitter, OSDI'20; cluster4: TTLs 60 s-1 d mixed, cluster42: 300/600 s)
+read-through: every get or set is a get, a miss puts the value with the key's TTL. The clock is the trace's (libfaketime),
+so entries expire as they did in production. libCacheSim's `cachesim` runs the same requests through LRU, SIEVE, S3-FIFO,
+LeCaR and ARC at the same byte size; it counts key + value bytes only, nocopy's sizes include its slot tables and block
+headers. cachesim prints miss ratios, `bench/trace.php` hit ratios. No results yet.
+
 ### Against APCu and Redis
 
 `./dev hitratio`: the same request sequence against each store, each given the same memory (`nocopy.shm_size`,

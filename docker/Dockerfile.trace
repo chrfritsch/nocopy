@@ -1,0 +1,10 @@
+# Trace replay image: nocopy-linux plus libCacheSim's cachesim (TTL support) and libfaketime for bench/trace.php.
+#   docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-trace -f docker/Dockerfile.trace docker
+FROM nocopy-linux:8.5
+# sed: v1.0.0 (and master, 2026-11-09) dereferences an expired object in cache_find_base
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ git libglib2.0-dev libzstd-dev faketime \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone -q https://github.com/1a1a11a/libCacheSim.git /opt/libCacheSim && cd /opt/libCacheSim && git checkout -q v1.0.0 \
+ && sed -i 's/^      cache_obj = NULL;$/      return NULL;/' libCacheSim/cache/cache.c \
+ && cmake -S . -B build -DSUPPORT_TTL=ON -DENABLE_TESTS=OFF -DUSE_HUGEPAGE=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-Wno-error=calloc-transposed-args >/dev/null \
+ && cmake --build build -j --target cachesim >/dev/null && ln -s /opt/libCacheSim/build/bin/cachesim /usr/local/bin/cachesim
