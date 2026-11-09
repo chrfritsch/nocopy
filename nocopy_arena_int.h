@@ -65,8 +65,6 @@ void nocopy_abort(nocopy_shard *sh, nocopy_entry *e);       /* allocated, never 
 nocopy_slot *nocopy_slot_of(nocopy_shard *sh, const nocopy_entry *e);
 nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t now);
 nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only);
-nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen); /* may be expired */
-bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* true if it was live */
 
 /* ---- atoms (nocopy_atom.c) ---- */
 void nocopy_atom_init(nocopy_arena *p); /* at creation */

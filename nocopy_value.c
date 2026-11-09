@@ -153,6 +153,9 @@ static zend_always_inline zend_string *atom_next(persist *p, const zend_string *
 	return p->found && ZSTR_LEN(s) <= NOCOPY_VSTR_MAX ? p->found[p->fi++] : NULL;
 }
 
+/* A string first met in the value: its atom, else a copy in the block; recorded in k. */
+static zend_always_inline zend_string *persist_new(persist *p, nocopy_kslot *k, const zend_string *s) { zend_string *a = atom_next(p, s); return k->copy = a ? a : nocopy_persist_str(p, s); }
+
 /* A key: stored once per value, or an atom (size_str decides alike). */
 static zend_always_inline zend_string *persist_key(persist *p, zend_string *s, zend_ulong h)
 {
@@ -160,8 +163,7 @@ static zend_always_inline zend_string *persist_key(persist *p, zend_string *s, z
 	if (key_seen(&p->keys, s, h, &k)) {
 		return k->copy;
 	}
-	zend_string *a = atom_next(p, s);
-	return k->copy = a ? a : nocopy_persist_str(p, s);
+	return persist_new(p, k, s);
 }
 
 static zend_always_inline zend_string *persist_vstr(persist *p, zend_string *s)
@@ -177,8 +179,7 @@ static zend_always_inline zend_string *persist_vstr(persist *p, zend_string *s)
 		}
 		return k->copy;
 	}
-	zend_string *a = atom_next(p, s);
-	return k->copy = a ? a : nocopy_persist_str(p, s);
+	return persist_new(p, k, s);
 }
 
 /* The table's data (hash and buckets) into the block; a map's hash shrunk to map_mask, its buckets rechained as opcache compacts. */

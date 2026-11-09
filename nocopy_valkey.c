@@ -324,13 +324,16 @@ static bool is_str(const valkeyReply *r)
 	return r->type == VALKEY_REPLY_STRING || r->type == VALKEY_REPLY_STATUS || r->type == VALKEY_REPLY_VERB;
 }
 
+/* A push whose first element is name. */
+static bool push_is(const valkeyReply *r, const char *name, size_t n) { return r->type == VALKEY_REPLY_PUSH && r->elements && is_str(r->element[0]) && r->element[0]->len == n && memcmp(r->element[0]->str, name, n) == 0; }
+
 /* The fill guard: a fill that read Valkey before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
 static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->inval_gen, __ATOMIC_SEQ_CST); }
 static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->inval_gen, 1, __ATOMIC_SEQ_CST); }
 
 static void vk_apply(const valkeyReply *push)
 {
-	if (push->elements < 2 || !is_str(push->element[0]) || push->element[0]->len != 10 || memcmp(push->element[0]->str, "invalidate", 10) != 0) {
+	if (push->elements < 2 || !push_is(push, ZEND_STRL("invalidate"))) {
 		return;
 	}
 	const valkeyReply *keys = push->element[1];
@@ -428,6 +431,18 @@ static void arg_long(smart_str *s, int64_t v)
 	arg(s, b, (size_t) snprintf(b, sizeof b, "%" PRId64, v));
 }
 
+/* SET key val [NX] [PXAT pxat] */
+static void set_cmd(smart_str *s, const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)
+{
+	head(s, 3 + nx + (pxat ? 2 : 0)), ARG(s, "SET"), key_arg(s, k, kl), arg(s, val, vl);
+	if (nx) {
+		ARG(s, "NX");
+	}
+	if (pxat) {
+		ARG(s, "PXAT"), arg_long(s, pxat);
+	}
+}
+
 /* cmd key... */
 static void keys_cmd(smart_str *s, const char *cmd, size_t cl, uint32_t n, zend_string *const *keys)
 {
@@ -461,7 +476,7 @@ static bool vk_subscribed(nocopy_vk *v)
 			return vk_fail(v);
 		}
 		bool push = r->type == VALKEY_REPLY_PUSH;
-		bool sub = push && r->elements && is_str(r->element[0]) && r->element[0]->len == 9 && memcmp(r->element[0]->str, "subscribe", 9) == 0;
+		bool sub = push_is(r, ZEND_STRL("subscribe"));
 		if (push && !sub) {
 			vk_apply(r);
 		}
@@ -775,10 +790,7 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 	}
 	smart_str s = {0};
 	for (uint32_t i = 0; i < n; i++) {
-		head(&s, pxat ? 5 : 3), ARG(&s, "SET"), key_arg(&s, kv[i].k, kv[i].kl), arg(&s, kv[i].v, kv[i].vl);
-		if (pxat) {
-			ARG(&s, "PXAT"), arg_long(&s, pxat);
-		}
+		set_cmd(&s, kv[i].k, kv[i].kl, kv[i].v, kv[i].vl, pxat, false);
 	}
 	if (!vk_send(v, &s)) {
 		return -1;
@@ -801,13 +813,7 @@ static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t 
 		return -1;
 	}
 	smart_str s = {0};
-	head(&s, 3 + nx + (pxat ? 2 : 0)), ARG(&s, "SET"), key_arg(&s, k, kl), arg(&s, val, vl);
-	if (nx) {
-		ARG(&s, "NX");
-	}
-	if (pxat) {
-		ARG(&s, "PXAT"), arg_long(&s, pxat);
-	}
+	set_cmd(&s, k, kl, val, vl, pxat, nx);
 	valkeyReply *r = vk_call(v, &s);
 	int ret = !r ? -1 : r->type == VALKEY_REPLY_STATUS ? 1 : r->type == VALKEY_REPLY_NIL ? 0 : -1;
 	freeReplyObject(r);

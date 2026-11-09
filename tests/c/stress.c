@@ -247,7 +247,7 @@ static void *worker(void *arg)
 				}
 			}
 			nh = 0;
-			nocopy_keep_release(&c);
+			nocopy_request_end(&c);
 		}
 	}
 	nocopy_release(&c);

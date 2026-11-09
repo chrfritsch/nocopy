@@ -114,17 +114,6 @@ void nocopy_after_fork(nocopy_ctx *c)
 	}
 }
 
-/* Drop the kept pins: the caller promises no earlier zero-copy result is used again. */
-void nocopy_keep_release(nocopy_ctx *c)
-{
-	memset(c->keep, 0, sizeof c->keep);
-	c->nkeep = 0;
-	if (!c->pin_refs) {
-		c->transient = true;
-		nocopy_drop_transient(c);
-	}
-}
-
 void nocopy_request_end(nocopy_ctx *c)
 {
 	if (c->anest) { /* a write bailed out between nocopy_atom_begin and _end */
@@ -132,7 +121,10 @@ void nocopy_request_end(nocopy_ctx *c)
 		nocopy_atom_end(c);
 	}
 	c->pin_refs = 0;
-	nocopy_keep_release(c);
+	memset(c->keep, 0, sizeof c->keep); /* no earlier zero-copy result is used again */
+	c->nkeep = 0;
+	c->transient = true;
+	nocopy_drop_transient(c);
 }
 
 /* ---- segments (shard locked) ---- */
@@ -146,6 +138,17 @@ static void seg_check(nocopy_shard *sh, uint32_t s)
 		seg_set(s, SEG_DEAD);
 		sh->ndead++;
 		sh->hint = true;
+	}
+}
+
+/* Bucket b's open segment, if any, sealed: no more writes go to it. */
+static void seg_seal(nocopy_shard *sh, int b)
+{
+	int32_t cur = sh->cur[b];
+	if (cur >= 0) {
+		seg_set((uint32_t) cur, SEG_SEALED);
+		seg_check(sh, (uint32_t) cur);
+		sh->cur[b] = -1;
 	}
 }
 
@@ -360,11 +363,7 @@ static __attribute__((noinline)) nocopy_entry *seg_alloc_new(nocopy_shard *sh, s
 	if (got == UINT32_MAX) {
 		return NULL;
 	}
-	int32_t cur = sh->cur[b];
-	if (cur >= 0) {
-		seg_set(cur, SEG_SEALED);
-		seg_check(sh, cur);
-	}
+	seg_seal(sh, b);
 	nocopy_segs[got].bucket = (uint8_t) b;
 	sh->cur[b] = (int32_t) got;
 	return seg_carve(got, total, exp);
@@ -673,13 +672,6 @@ nocopy_entry *nocopy_alloc(nocopy_shard *sh, size_t total, time_t exp, time_t no
 	return e;
 }
 
-nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen)
-{
-	nocopy_entry *e;
-	locate(sh, h, k, klen, &e);
-	return e;
-}
-
 /* Publish e under its key; add_only fails if a live entry exists. Consumes e either way. Shard stays locked. */
 nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only)
 {
@@ -703,7 +695,6 @@ nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only
 		sh->ghost_hits++;
 	}
 	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + (1u << NOCOPY_SEQ_SHARD_BITS); /* keeps the shard bits */
-	sh->inserts++;
 	sh->nlive += !old;
 	entry_birth(sh, e);
 	__atomic_store_n(sp, slot_make(e), __ATOMIC_RELEASE);
@@ -763,36 +754,37 @@ nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 	return r;
 }
 
-bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen)
-{
-	nocopy_entry *old;
-	nocopy_slot *sp = locate(sh, h, k, klen, &old);
-	if (!old) {
-		return false;
-	}
-	bool found = !nocopy_expired(old);
-	slot_remove(sh, sp);
-	nocopy_entry_die(sh, old);
-	if (sh->hint) {
-		reclaim(sh);
-	}
-	return found;
-}
-
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 {
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
-	bool found = nocopy_remove(sh, h, k, klen);
+	nocopy_entry *old;
+	nocopy_slot *sp = locate(sh, h, k, klen, &old);
+	bool found = old && !nocopy_expired(old);
+	if (old) {
+		slot_remove(sh, sp);
+		nocopy_entry_die(sh, old);
+		if (sh->hint) {
+			reclaim(sh);
+		}
+	}
 	nocopy_unlock(sh);
 	return found;
+}
+
+/* Out of line: locate inlined into nocopy_update made inc 10% slower (ab write). */
+static __attribute__((noinline)) nocopy_entry *lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen)
+{
+	nocopy_entry *e;
+	locate(sh, h, k, klen, &e);
+	return e;
 }
 
 int nocopy_update(uint64_t h, const char *k, uint32_t klen, int (*fn)(nocopy_entry *e, void *arg), void *arg)
 {
 	nocopy_shard *sh = nocopy_shard_of(h);
 	nocopy_lock(sh);
-	nocopy_entry *e = nocopy_lookup(sh, h, k, klen);
+	nocopy_entry *e = lookup(sh, h, k, klen);
 	int r = e && !nocopy_expired(e) ? fn(e, arg) : NOCOPY_GONE;
 	nocopy_unlock(sh);
 	return r;
@@ -819,12 +811,8 @@ void nocopy_clear(void)
 	for (uint32_t s = 0; s < nocopy_a->nshards; s++) {
 		nocopy_shard *sh = &nocopy_a->shards[s];
 		wip_reap(sh);
-		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) { /* sealed, so they die and go back to the pool (with their atom bits) */
-			if (sh->cur[b] >= 0) {
-				seg_set((uint32_t) sh->cur[b], SEG_SEALED);
-				seg_check(sh, (uint32_t) sh->cur[b]);
-				sh->cur[b] = -1;
-			}
+		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+			seg_seal(sh, b); /* so they die and go back to the pool (with their atom bits) */
 		}
 		reclaim(sh);
 		nocopy_unlock(sh);
@@ -867,7 +855,6 @@ void nocopy_stats(nocopy_stats_t *st)
 		st->expired += __atomic_load_n(&sh->expired, __ATOMIC_RELAXED);
 		st->ghost_hits += __atomic_load_n(&sh->ghost_hits, __ATOMIC_RELAXED);
 		st->dead_segments += __atomic_load_n(&sh->ndead, __ATOMIC_RELAXED);
-		st->inserts += __atomic_load_n(&sh->inserts, __ATOMIC_RELAXED);
 		for (int l = 0; l < NOCOPY_LEASES; l++) {
 			st->leases += __atomic_load_n(&sh->leases[l].owner, __ATOMIC_RELAXED) && sh->leases[l].until >= now;
 		}
@@ -1092,6 +1079,13 @@ static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1
 
 typedef enum { OPEN_OK, OPEN_RETRY, OPEN_FAIL } open_result;
 
+static open_result open_fail(int fd, const char **err, const char *why)
+{
+	close(fd);
+	*err = why;
+	return OPEN_FAIL;
+}
+
 /* fd: just created (O_EXCL), empty. */
 static open_result create_new(const char *name, int fd, const layout *l, uint64_t abi, const char **err)
 {
@@ -1134,9 +1128,7 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 	size_t size = 0;
 	uint32_t nshards = 0;
 	if (!owned(fd)) {
-		close(fd);
-		*err = "it is owned by another user or open to others";
-		return OPEN_FAIL;
+		return open_fail(fd, err, "it is owned by another user or open to others");
 	}
 	for (int waited = 0;; waited++) {
 		struct stat st;
@@ -1159,21 +1151,15 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 			return OPEN_RETRY; /* its creator died before it was set up */
 		}
 		if (waited == 2000) {
-			close(fd);
-			*err = "its creator has not finished setting it up for 2 s";
-			return OPEN_FAIL;
+			return open_fail(fd, err, "its creator has not finished setting it up for 2 s");
 		}
 		usleep(1000);
 	}
 	if (habi != abi) {
-		close(fd);
-		*err = "it belongs to another build";
-		return OPEN_FAIL;
+		return open_fail(fd, err, "it belongs to another build");
 	}
 	if (!nshards || nshards > NOCOPY_MAX_SHARDS || (nshards & (nshards - 1))) {
-		close(fd);
-		*err = "its header is corrupt";
-		return OPEN_FAIL;
+		return open_fail(fd, err, "its header is corrupt");
 	}
 	if (!hold(name, fd)) {
 		close(fd);
@@ -1181,9 +1167,7 @@ static open_result attach(const char *name, int fd, uint64_t abi, const char **e
 	}
 	void *p = map_at(fd, size, base);
 	if (!p) {
-		close(fd);
-		*err = "its address is taken in this process";
-		return OPEN_FAIL;
+		return open_fail(fd, err, "its address is taken in this process");
 	}
 	named_fd = fd;
 	mapped_size = size;

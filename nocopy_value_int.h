@@ -11,6 +11,8 @@
 /* buf if n elements fit, else request memory (SMALL_FREE). */
 #define SMALL_ALLOC(buf, n) ((n) <= sizeof(buf) / sizeof *(buf) ? (buf) : emalloc((n) * sizeof *(buf)))
 #define SMALL_FREE(buf, p) do { if ((p) != (buf)) efree(p); } while (0)
+/* p grown to size bytes: out of inl (used bytes kept) into request memory, or reallocated there. */
+static inline void *inl_grow(void *p, const void *inl, size_t used, size_t size) { return p == inl ? memcpy(emalloc(size), inl, used) : erealloc(p, size); }
 
 typedef void (*zval_fn)(void *ctx, zval *z);
 

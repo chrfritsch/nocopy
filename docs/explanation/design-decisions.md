@@ -41,7 +41,7 @@ of C in the repo, updated with `scripts/vendor-libvalkey.sh <tag>`.
 out, so the core builds and ships without it. CI runs the suite both ways. Default stays on.
 The table replaced ten hand-written `detour`/`nocopy_vk_on`/`nocopy_a` branches; the local path only tests a pointer instead of a bool (`./dev ab main 7 read`: fetch int 10.96 -> 10.69 ns, 100k distinct keys 27.0 -> 26.9, within noise).
 
-**The arena takes its shard locks itself.** `nocopy_delete` and `nocopy_update(fn)` replaced the store's own lock/lookup/remove; the lock is internal to the arena. `inc` pays one indirect call: `./dev ab main 7 write contend` 10.59 -> 10.49 ns, within noise.
+**The arena takes its shard locks itself.** `nocopy_delete` and `nocopy_update(fn)` replaced the store's own lock/lookup/remove; the lock is internal to the arena. `inc` pays one indirect call: `./dev ab main 7 write contend` 10.59 -> 10.49 ns, within noise. Its lookup stays out of line: `locate` inlined into `nocopy_update` made `inc` 10% slower (`./dev ab main 7 write`: 13.0 -> 14.4 ns; back to 12.9 with a noinline `lookup`).
 
 **Kept copies as their own module** (`nocopy_kept.c|h`, one call order for callers, accepted at a layout cost): `./dev ab main 9 read` fetch miss 8.80 -> 9.08 / 8.81 -> 9.09 ns (copy / zero), string 100B copy 17.9 -> 18.7, the rest within ±1.5%. Zero-copy and misses run none of its code; `noinline` on `put`, the other include order and the old call sequence each only moved the loss to other rows, so it is the unity TU's layout, not work.
 

@@ -354,7 +354,7 @@ static gnode *graph_b_node(graph_b *g)
 {
 	if (g->nn == g->ncap) {
 		g->ncap *= 4;
-		g->nodes = g->nodes == g->inl ? memcpy(emalloc(g->ncap * sizeof(gnode)), g->inl, sizeof(g->inl)) : erealloc(g->nodes, g->ncap * sizeof(gnode));
+		g->nodes = inl_grow(g->nodes, g->inl, sizeof(g->inl), g->ncap * sizeof(gnode));
 	}
 	gnode *n = &g->nodes[g->nn++];
 	ZVAL_UNDEF(&n->data);
@@ -453,7 +453,7 @@ static ghook *graph_b_res(graph_b *g, zend_object *o)
 	if (added) {
 		if (g->nres == g->rcap) {
 			g->rcap *= 4;
-			g->res = g->res == g->rinl ? memcpy(emalloc(g->rcap * sizeof(ghook)), g->rinl, sizeof(g->rinl)) : erealloc(g->res, g->rcap * sizeof(ghook));
+			g->res = inl_grow(g->res, g->rinl, sizeof(g->rinl), g->rcap * sizeof(ghook));
 		}
 		i = g->nres;
 		ghook *h = &g->res[g->nres++];

@@ -70,7 +70,7 @@ typedef struct {
 	int32_t cur[NOCOPY_TTL_BUCKETS] __attribute__((aligned(64))); /* open segment per TTL bucket, or -1 */
 	uint32_t nown, ndead; /* nown: read racily by other shards (rebalance) */
 	uint32_t idx;       /* own index: sh - shards would divide by sizeof(nocopy_shard) */
-	uint64_t last_seq, inserts; /* a global atomic counter here cost 9x at 8 parallel writers */
+	uint64_t last_seq; /* a global atomic counter here cost 9x at 8 parallel writers */
 	bool hint;          /* a segment died: worth a reclaim pass */
 	time_t exp_idle;    /* second in which a full expiry pass found nothing */
 	uint32_t exp_next, exp_gen; /* expiry cursor: segment, its gen, and offset of the next entry */
@@ -190,7 +190,6 @@ void nocopy_arena_destroy(void);
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
 void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
 void nocopy_after_fork(nocopy_ctx *c);
-void nocopy_keep_release(nocopy_ctx *c);
 void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailout left open */
 
 /* ---- writes ---- */
@@ -217,7 +216,7 @@ int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
 void nocopy_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it */
 
 typedef struct {
-	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases, inserts;
+	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
 	uint64_t atoms, atoms_used, atoms_size, atom_rotations;
 	uint64_t segment_size;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
@@ -290,7 +289,7 @@ static inline bool nocopy_hold(nocopy_ctx *c, const void *p)
 	return true;
 }
 
-/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_keep_release().
+/* A zero-copy pointer into p's segment is leaving the caller: keep it pinned until nocopy_request_end().
  * True once more than a quarter of the segments are kept: kept pins block reclaim for everyone, so the caller's further fetches
  * should copy. Not gated on pressure: a writer first meets a pinned dead segment when nearly all are kept. */
 static inline bool nocopy_keep(nocopy_ctx *c, const void *p)

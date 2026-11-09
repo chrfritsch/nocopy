@@ -16,6 +16,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 
 | Check | Result |
 |---|---|
+| `./dev ci` (8.5; 2026-11-09, cleanup: shared helpers (`set_cmd`, `push_is`, `seg_seal`, `open_fail`, `inl_grow`, `persist_new`), `nocopy_lookup`/`nocopy_remove`/`nocopy_keep_release` folded in, the unread `inserts` counter gone; `./dev ab main 7`: within noise) | all passed, stress 30 loops, fuzz 20000 iterations clean in both modes, apcu 13 known failures |
 | `./dev ci` (8.5; 2026-11-09, slot holes (test 087), reference roots reset the key table (test 088), `pie` fetched once; also `./dev drupal`, its `testInvalidate` 10 runs clean) | all passed, stress 30 loops, fuzz 20000 iterations clean in both modes, apcu 13 known failures |
 | `./dev ci` (8.5; 2026-11-09, short strings shared arena-wide (tests 034, 086, `tests/c/atoms.c`); `pie` rerun alone after a missing mount) | all passed, stress 30 loops, fuzz 20000 iterations clean in both modes, apcu 13 known failures |
 | `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
