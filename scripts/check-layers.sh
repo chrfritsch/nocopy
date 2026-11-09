@@ -42,6 +42,10 @@ for f in *.c *.h; do
 done
 grep -nE '\b(e|pe|safe_e)(m|c|re)alloc|\b(p?efree|estrdup|zend_string_(init|alloc|tolower|concat|dup|release)|smart_str_[a-z]+|zend_new_array|array_init|zend_hash_(add|update|index_add|index_update|str_add|str_update|next_index_insert|init|copy|destroy|extend|rehash)[a-z_]*|zend_call_[a-z_]+|nc_call_magic|zend_throw_[a-z_]+|php_error_docref|zend_error|zval_ptr_dtor|OBJ_RELEASE|object_init_ex|zend_lookup_class|ZVAL_STRINGL?)\b' nocopy_write.c \
 	| sed 's/^/check-layers: nocopy_write.c runs under a shard lock (no allocation, no user code): /' | grep . && bad=1
+# Kept copies (nocopy_kept.h): no module state either, the store passes its cache and env.
+for f in nocopy_kept.c nocopy_kept.h; do
+	grep -nE '#include "nocopy_php\.h"|\bNOCOPY_(G|SHARED)\b' "$f" | sed "s|^|check-layers: $f: module state in the kept copies: |" | grep . && bad=1
+done
 # Above the value layer: no name of nocopy_value_int.h (nocopy.c's one translation unit would let them through).
 outer="nocopy.c nocopy_store.c nocopy_kept.c nocopy_kept.h nocopy_valkey.c nocopy_valkey.h nocopy_php.h"
 int=$( { sed -n 's/^#define \([A-Za-z_0-9]*\).*/\1/p' nocopy_value_int.h; sed -n 's/^}[ ]*\([a-z_0-9]*\);.*/\1/p;s/^typedef .*} *\([a-z_0-9]*\);.*/\1/p' nocopy_value_int.h

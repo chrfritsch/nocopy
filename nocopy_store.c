@@ -4,7 +4,7 @@
 # include <config.h>
 #endif
 
-#include "nocopy_kept.h"
+#include "nocopy_php.h"
 #include <math.h>
 #include <time.h>
 #include <unistd.h>
@@ -155,7 +155,7 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 		if (nocopy_value_scalar(e, rv)) {
 			/* hit */
 		} else if (copy) {
-			hit = nocopy_kept_read(e, rv);
+			hit = nocopy_kept_read(&NOCOPY_G(kept), &NOCOPY_G(env), e, rv);
 		} else {
 			int r = nocopy_value_read(&NOCOPY_G(env), e, false, rv);
 			hit = r & NOCOPY_HIT;

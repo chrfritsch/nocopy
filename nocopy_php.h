@@ -8,6 +8,7 @@
 #include "php_nocopy.h"
 #include "arena/nocopy_arena.h"
 #include "nocopy_value.h"
+#include "nocopy_kept.h"
 
 /* ---- the arena header's user area: the same address in every process that maps it ---- */
 
@@ -22,8 +23,6 @@ _Static_assert(sizeof(nocopy_shared) <= NOCOPY_USER_BYTES, "nocopy_shared outgre
 #define NOCOPY_SHARED ((nocopy_shared *) nocopy_user_area())
 
 /* ---- per process (thread) ---- */
-
-typedef struct nocopy_kept nocopy_kept; /* nocopy_kept.h */
 
 /* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
 typedef struct {
@@ -40,10 +39,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	zend_ulong leases[8]; /* key hashes leased: dropped at request end if a callback bailed out */
 	int nleases;
 	nocopy_env env; /* the value layer's */
-	nocopy_kept *kept; /* copy mode's kept copies (nocopy_kept.c): request memory, NULL until the first copy-mode fetch */
-	size_t kept_bytes;
-	uint32_t kept_hand; /* SIEVE hand over kept */
-	bool kept_ok; /* between RINIT and RSHUTDOWN */
+	nocopy_kept_cache kept; /* copy mode's kept copies */
 	nocopy_vk vk;
 ZEND_END_MODULE_GLOBALS(nocopy)
 

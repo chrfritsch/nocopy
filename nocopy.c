@@ -599,7 +599,7 @@ PHP_RINIT_FUNCTION(nocopy)
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
 	NOCOPY_G(zero_copy) = sapi_zero_copy;
-	nocopy_kept_rinit();
+	nocopy_kept_rinit(&NOCOPY_G(kept));
 	nocopy_vk_new_request();
 	return SUCCESS;
 }
@@ -607,7 +607,7 @@ PHP_RINIT_FUNCTION(nocopy)
 PHP_RSHUTDOWN_FUNCTION(nocopy)
 {
 	NOCOPY_G(zero_copy) = false;
-	nocopy_kept_rshutdown();
+	nocopy_kept_rshutdown(&NOCOPY_G(kept));
 	return SUCCESS;
 }
 

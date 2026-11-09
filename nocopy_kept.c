@@ -18,25 +18,25 @@ static void val_free(zval *v)
 	}
 }
 
-static void drop(nocopy_kept *l)
+static void drop(nocopy_kept_cache *k, nocopy_kept *l)
 {
-	NOCOPY_G(kept_bytes) -= l->size;
+	k->bytes -= l->size;
 	val_free(&l->v);
 	l->e = NULL;
 }
 
 /* Over budget: SIEVE evicts copies not used since the hand last passed (2 rounds at most: the first clears every bit). */
-void nocopy_kept_put(nocopy_kept *l, const nocopy_entry *e, const zval *copy)
+void nocopy_kept_put(nocopy_kept_cache *k, nocopy_kept *l, const nocopy_entry *e, const zval *copy)
 {
 	if (l->e) {
-		drop(l);
+		drop(k, l);
 	}
-	for (uint32_t n = 0; NOCOPY_G(kept_bytes) + nocopy_entry_size(e) > nocopy_kept_size && n < 2 * NOCOPY_KEPT; n++) {
-		nocopy_kept *h = &NOCOPY_G(kept)[NOCOPY_G(kept_hand)++ % NOCOPY_KEPT];
+	for (uint32_t n = 0; k->bytes + nocopy_entry_size(e) > nocopy_kept_size && n < 2 * NOCOPY_KEPT; n++) {
+		nocopy_kept *h = &k->ways[k->hand++ % NOCOPY_KEPT];
 		if (h->visited) {
 			h->visited = false;
 		} else if (h->e) {
-			drop(h);
+			drop(k, h);
 		}
 	}
 	l->e = e;
@@ -44,23 +44,23 @@ void nocopy_kept_put(nocopy_kept *l, const nocopy_entry *e, const zval *copy)
 	l->size = nocopy_entry_size(e);
 	l->visited = false;
 	ZVAL_COPY(&l->v, copy);
-	NOCOPY_G(kept_bytes) += nocopy_entry_size(e);
+	k->bytes += nocopy_entry_size(e);
 }
 
-void nocopy_kept_rinit(void) { NOCOPY_G(kept_ok) = nocopy_kept_size > 0; }
+void nocopy_kept_rinit(nocopy_kept_cache *k) { k->ok = nocopy_kept_size > 0; }
 
-void nocopy_kept_rshutdown(void)
+void nocopy_kept_rshutdown(nocopy_kept_cache *k)
 {
-	NOCOPY_G(kept_ok) = false;
-	if (!NOCOPY_G(kept)) {
+	k->ok = false;
+	if (!k->ways) {
 		return;
 	}
 	for (int i = 0; i < NOCOPY_KEPT; i++) {
-		if (NOCOPY_G(kept)[i].e) {
-			val_free(&NOCOPY_G(kept)[i].v);
+		if (k->ways[i].e) {
+			val_free(&k->ways[i].v);
 		}
 	}
-	efree(NOCOPY_G(kept));
-	NOCOPY_G(kept) = NULL;
-	NOCOPY_G(kept_bytes) = 0;
+	efree(k->ways);
+	k->ways = NULL;
+	k->bytes = 0;
 }
