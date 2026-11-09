@@ -80,6 +80,7 @@ bool nocopy_claim(nocopy_ctx *c)
 			if (__atomic_compare_exchange_n(&nocopy_a->workers[i].owner, &o, nocopy_self, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
 				bits_clear(i);
 				wip_abort(i); /* its previous owner died filling an entry */
+				__atomic_store_n(&nocopy_a->workers[i].agen, 0, __ATOMIC_RELAXED); /* ... or holding an atom view */
 				uint32_t cur = __atomic_load_n(&nocopy_a->nworkers, __ATOMIC_RELAXED);
 				while (cur < (uint32_t) i + 1
 				 && !__atomic_compare_exchange_n(&nocopy_a->nworkers, &cur, i + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
@@ -126,6 +127,10 @@ void nocopy_keep_release(nocopy_ctx *c)
 
 void nocopy_request_end(nocopy_ctx *c)
 {
+	if (c->anest) { /* a write bailed out between nocopy_atom_begin and _end */
+		c->anest = 1;
+		nocopy_atom_end(c);
+	}
 	c->pin_refs = 0;
 	nocopy_keep_release(c);
 }
@@ -711,7 +716,7 @@ nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only
 	return PUT_OK;
 }
 
-nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl)
+nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl, uint8_t atoms)
 {
 	if (!c->pin_refs) {
 		nocopy_drop_transient(c); /* our own idle pins would block reclaim; only mixed read/write loops pay */
@@ -733,6 +738,9 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_
 	e->created = (uint32_t) now;
 	e->flags = 0;
 	e->user = 0;
+	if (atoms) { /* before the writer drops its view: atom_rotate relies on it */
+		nocopy_segs[nocopy_seg_of(e)].atoms |= atoms;
+	}
 	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | sh->idx; /* commit makes it unique */
 	*p = (nocopy_put) {.c = c, .sh = sh, .e = e, .locked = size <= NOCOPY_INLINE_PUT};
 	if (!p->locked) {
@@ -809,9 +817,17 @@ void nocopy_clear(void)
 	}
 	__atomic_add_fetch(&nocopy_a->expunges, 1, __ATOMIC_RELAXED);
 	for (uint32_t s = 0; s < nocopy_a->nshards; s++) {
-		wip_reap(&nocopy_a->shards[s]);
-		reclaim(&nocopy_a->shards[s]);
-		nocopy_unlock(&nocopy_a->shards[s]);
+		nocopy_shard *sh = &nocopy_a->shards[s];
+		wip_reap(sh);
+		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) { /* sealed, so they die and go back to the pool (with their atom bits) */
+			if (sh->cur[b] >= 0) {
+				seg_set((uint32_t) sh->cur[b], SEG_SEALED);
+				seg_check(sh, (uint32_t) sh->cur[b]);
+				sh->cur[b] = -1;
+			}
+		}
+		reclaim(sh);
+		nocopy_unlock(sh);
 	}
 }
 
@@ -876,6 +892,11 @@ void nocopy_stats(nocopy_stats_t *st)
 	st->slots = (uint64_t) nocopy_a->nshards * (nocopy_tab_mask + 1);
 	st->expunges = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
 	st->lock_steals = __atomic_load_n(&nocopy_a->lock_steals, __ATOMIC_RELAXED);
+	const nocopy_atom_half *cur = &nocopy_a->atom[__atomic_load_n(&nocopy_a->atom_gen, __ATOMIC_RELAXED) & 1];
+	st->atoms = __atomic_load_n(&cur->n, __ATOMIC_RELAXED);
+	st->atoms_used = __atomic_load_n(&nocopy_a->atom[0].used, __ATOMIC_RELAXED) + __atomic_load_n(&nocopy_a->atom[1].used, __ATOMIC_RELAXED) - 16;
+	st->atoms_size = 2 * (uint64_t) nocopy_a->atom_half;
+	st->atom_rotations = __atomic_load_n(&nocopy_a->atom_rotations, __ATOMIC_RELAXED);
 }
 
 /* ---- setup ---- */
@@ -899,13 +920,18 @@ static void adopt(nocopy_arena *p)
 		nocopy_tabs[s] = (nocopy_slot *) (p->tables + (size_t) s * p->tab_per * sizeof(nocopy_slot));
 		nocopy_ghosts[s] = (uint32_t *) (p->tables + (size_t) p->nshards * p->tab_per * sizeof(nocopy_slot)) + (size_t) s * p->tab_per;
 	}
+	nocopy_atoms = (char *) p + p->atom_off;
+	nocopy_atom_tab = (nocopy_slot *) ((char *) p + p->atom_tab_off);
+	nocopy_atom_dk = (uint32_t *) ((char *) p + p->atom_dk_off);
+	nocopy_atom_mask = p->atom_slots - 1;
+	nocopy_atom_bytes = p->atom_half;
 	nocopy_self = nocopy_owner_self();
 }
 
 typedef struct {
-	size_t size, header, segs_off, owner_off, pins_off;
+	size_t size, header, segs_off, owner_off, pins_off, atom_off, atom_tab_off, atom_dk_off;
 	unsigned shift;
-	uint32_t nshards, per, pin_stride;
+	uint32_t nshards, per, pin_stride, atom_half, atom_slots;
 } layout;
 
 const char NOCOPY_TOO_SMALL[] = "shm_size is too small or entries_hint too large";
@@ -935,7 +961,15 @@ static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 	size_t segs_off = (NOCOPY_ALIGN(sizeof(nocopy_arena)) + (size_t) nshards * per * (sizeof(nocopy_slot) + sizeof(uint32_t)) + 63) & a64;
 	size_t owner_off = (segs_off + maxsegs * sizeof(nocopy_seg) + 63) & a64;
 	size_t pins_off = (owner_off + maxsegs + 63) & a64;
-	size_t header = pins_off + (size_t) NOCOPY_MAX_WORKERS * stride * sizeof(uint64_t);
+	/* atoms: two halves of size/128 each (a warmed Drupal shares 0.3 MB of strings in a 47 MB arena); a slot per 32 bytes, at most 3/4 used */
+	uint32_t atom_half = (uint32_t) ((size >> 7) & ~(size_t) 7), atom_slots = 64;
+	while (atom_slots < atom_half / 32) {
+		atom_slots <<= 1;
+	}
+	size_t atom_tab_off = (pins_off + (size_t) NOCOPY_MAX_WORKERS * stride * sizeof(uint64_t) + 63) & a64;
+	size_t atom_dk_off = atom_tab_off + 2 * (size_t) atom_slots * sizeof(nocopy_slot);
+	size_t atom_off = (atom_dk_off + 2 * (size_t) atom_slots * sizeof(uint32_t) + 63) & a64;
+	size_t header = (atom_off + 2 * (size_t) atom_half + 63) & a64;
 	*need = header + ((size_t) 4 << shift);
 	if (per > ((uint64_t) 1 << 31) || size < *need) {
 		return NOCOPY_TOO_SMALL;
@@ -944,7 +978,8 @@ static const char *plan(layout *l, size_t size, uint64_t hint, size_t *need)
 		return "larger than 32G";
 	}
 	*l = (layout) {.size = size, .header = header, .segs_off = segs_off, .owner_off = owner_off, .pins_off = pins_off,
-		.shift = shift, .nshards = nshards, .per = (uint32_t) per, .pin_stride = stride};
+		.atom_off = atom_off, .atom_tab_off = atom_tab_off, .atom_dk_off = atom_dk_off,
+		.shift = shift, .nshards = nshards, .per = (uint32_t) per, .pin_stride = stride, .atom_half = atom_half, .atom_slots = atom_slots};
 	return NULL;
 }
 
@@ -962,6 +997,12 @@ static void init(nocopy_arena *p, const layout *l)
 	p->owner_off = l->owner_off;
 	p->pins_off = l->pins_off;
 	p->pin_stride = l->pin_stride;
+	p->atom_off = l->atom_off;
+	p->atom_tab_off = l->atom_tab_off;
+	p->atom_dk_off = l->atom_dk_off;
+	p->atom_half = l->atom_half;
+	p->atom_slots = l->atom_slots;
+	nocopy_atom_init(p);
 	for (uint32_t s = 0; s < l->nshards; s++) {
 		nocopy_shard *sh = &p->shards[s];
 		sh->idx = s;

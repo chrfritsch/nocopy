@@ -11,9 +11,10 @@
 #define HDR NOCOPY_ALIGN(sizeof(nocopy_entry))
 #define N 400
 
-void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	(void) e, (void) from;
+	return 0;
 }
 
 static uint64_t hash(const char *k)
@@ -139,15 +140,15 @@ int main(void)
 		assert(found(&c, k) == (strcmp(k, vk) != 0)); /* the victim's miss returns instead of retrying forever */
 	}
 
-	nocopy_clear(); /* reaps the dead writer's entry; afterwards only open segments are left */
-	uint32_t used = 0;
+	nocopy_drop_idle(&c);
+	nocopy_clear(); /* reaps the dead writer's entry, seals the open segments: with nothing pinned, all go back to the pool */
 	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
-		uint8_t st = nocopy_segs[s].state;
-		assert(nocopy_seg_owner[s] ? owns(sh, s) && st == SEG_OPEN : st == SEG_FREE && !owns(sh, s)); /* freed ones are back in the pool */
-		used += st == SEG_OPEN;
-		assert(!nocopy_segs[s].pending);
+		assert(!nocopy_seg_owner[s] && nocopy_segs[s].state == SEG_FREE && !owns(sh, s) && !nocopy_segs[s].pending);
 	}
-	assert(!nocopy_a->workers[1].wip && sh->live_bytes == 0 && used <= NOCOPY_TTL_BUCKETS);
-	printf("repair: ok (%u slots, %u open segments)\n", m + 1, used);
+	assert(!nocopy_a->workers[1].wip && sh->live_bytes == 0 && sh->nown == 0);
+	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+		assert(sh->cur[b] == -1);
+	}
+	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;
 }

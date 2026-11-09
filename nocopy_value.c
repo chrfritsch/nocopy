@@ -52,9 +52,8 @@ static size_status size_array(sizing *z, zend_array *a, int depth)
 	} else {
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
-			nocopy_kslot *s;
-			if (b->key && !key_seen(&z->keys, b->key, b->h, &s)) {
-				z->n += str_size(ZSTR_LEN(b->key));
+			if (b->key) {
+				size_str(z, b->key, b->h);
 			}
 			if ((st = nocopy_size_zval(z, &b->val, depth + 1)) != SIZE_OK) {
 				return st;
@@ -127,19 +126,59 @@ zend_string *nocopy_persist_str(persist *p, const zend_string *s)
 	return r;
 }
 
+__attribute__((noinline)) void nocopy_found_grow(sizing *z)
+{
+	z->cap *= 2;
+	z->found = z->heap ? erealloc(z->found, z->cap * sizeof *z->found) : memcpy(emalloc(z->cap * sizeof *z->found), z->found, z->nfound * sizeof *z->found);
+	z->heap = true;
+}
+
+/* An atom: stored with its hash, refcount 3 above one byte (copy-out shares one copy). Sizing pass 0 only. */
+zend_string *nocopy_atom_sight(const nocopy_atom_view *v, const zend_string *s, zend_ulong h)
+{
+	if (!nocopy_atom_admit(h)) {
+		return NULL;
+	}
+	zend_string hdr;
+	GC_SET_REFCOUNT(&hdr, ZSTR_LEN(s) > 1 ? 3 : 2);
+	GC_TYPE_INFO(&hdr) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+	ZSTR_H(&hdr) = h;
+	ZSTR_LEN(&hdr) = ZSTR_LEN(s);
+	return nocopy_atom_add(v, h, &hdr, (uint32_t) _ZSTR_HEADER_SIZE, ZSTR_VAL(s), (uint32_t) ZSTR_LEN(s));
+}
+
+/* What sizing found for the next short string first met in the value (size_str). */
+static zend_always_inline zend_string *atom_next(persist *p, const zend_string *s)
+{
+	return p->found && ZSTR_LEN(s) <= NOCOPY_VSTR_MAX ? p->found[p->fi++] : NULL;
+}
+
+/* A key: stored once per value, or an atom (size_str decides alike). */
+static zend_always_inline zend_string *persist_key(persist *p, zend_string *s, zend_ulong h)
+{
+	nocopy_kslot *k;
+	if (key_seen(&p->keys, s, h, &k)) {
+		return k->copy;
+	}
+	zend_string *a = atom_next(p, s);
+	return k->copy = a ? a : nocopy_persist_str(p, s);
+}
+
 static zend_always_inline zend_string *persist_vstr(persist *p, zend_string *s)
 {
 	if (ZSTR_LEN(s) > NOCOPY_VSTR_MAX) {
 		return nocopy_persist_str(p, s);
 	}
+	zend_ulong h = zend_string_hash_val(s);
 	nocopy_kslot *k;
-	if (key_seen(&p->keys, s, zend_string_hash_val(s), &k)) {
-		if (ZSTR_LEN(s) > 1) {
-			GC_SET_REFCOUNT(k->copy, 3); /* used more than once in the block: copy-out shares one copy (shorter: PHP's interned) */
+	if (key_seen(&p->keys, s, h, &k)) {
+		if (ZSTR_LEN(s) > 1 && !nocopy_atom_bits(k->copy)) {
+			GC_SET_REFCOUNT(k->copy, 3); /* used more than once in the block: copy-out shares one copy (shorter: PHP's interned; atoms have it) */
 		}
 		return k->copy;
 	}
-	return k->copy = nocopy_persist_str(p, s);
+	zend_string *a = atom_next(p, s);
+	return k->copy = a ? a : nocopy_persist_str(p, s);
 }
 
 /* The table's data (hash and buckets) into the block; a map's hash shrunk to map_mask, its buckets rechained as opcache compacts. */
@@ -198,9 +237,8 @@ static zend_array *persist_array(persist *p, const zend_array *src)
 	} else {
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(ht, b) {
-			nocopy_kslot *s;
 			if (b->key) {
-				b->key = key_seen(&p->keys, b->key, b->h, &s) ? s->copy : (s->copy = nocopy_persist_str(p, b->key));
+				b->key = persist_key(p, b->key, b->h);
 			} else if ((zend_long) b->h > max) {
 				max = (zend_long) b->h;
 			}
@@ -245,10 +283,10 @@ void nocopy_persist_zval(persist *p, zval *z)
 }
 
 /* Fills e after its header: the key's bytes (at KEY_OFF), then the value. */
-static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, nocopy_keys *keys, graph_b *g)
+static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, nocopy_keys *keys, const sizing *z, graph_b *g)
 {
 	keys_reset_for(keys, val);
-	persist p = {.cursor = (char *) e + SALIGN(sizeof(php_entry)), .keys = *keys, .g = g};
+	persist p = {.cursor = (char *) e + SALIGN(sizeof(php_entry)), .keys = *keys, .found = z->av ? z->found : NULL, .g = g};
 	memcpy(take(&p, ZSTR_LEN(key)), ZSTR_VAL(key), ZSTR_LEN(key));
 	if (g) {
 		ZVAL_PTR(entry_val(e), nocopy_persist_graph(&p, val));
@@ -259,7 +297,7 @@ static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, no
 		ZVAL_COPY_VALUE(entry_val(e), val);
 		nocopy_persist_zval(&p, entry_val(e));
 	}
-	ZEND_ASSERT(p.cursor == (char *) e + e->size);
+	ZEND_ASSERT(p.cursor == (char *) e + e->size && (!p.found || p.fi == z->nfound));
 }
 
 /* ---- moving ---- */
@@ -268,10 +306,14 @@ void nocopy_rebase_zval(void *ctx, zval *z)
 {
 	rebase *r = ctx;
 	switch (Z_TYPE_P(z)) {
-		case IS_STRING:
-			Z_STR_P(z) = moved(r, Z_STR_P(z));
-			ZSTR_H(Z_STR_P(z)) = 0; /* readers may have been hashing the old copy while it was copied: rehash on use */
+		case IS_STRING: {
+			zend_string *s = moved(r, Z_STR_P(z));
+			if (s != Z_STR_P(z)) {
+				Z_STR_P(z) = s;
+				ZSTR_H(s) = 0; /* readers may have been hashing the old copy while it was copied: rehash on use */
+			}
 			break;
+		}
 		case NC_SPINE: /* only in graphs */
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(z) = moved(r, Z_ARR_P(z));
@@ -298,7 +340,7 @@ void nocopy_rebase_zval(void *ctx, zval *z)
 	}
 }
 
-void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	rebase r = {.from = (uintptr_t) from, .size = from->size, .by = (char *) e - (const char *) from};
 	if (e->flags & ENTRY_GRAPH) {
@@ -306,6 +348,7 @@ void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 	} else {
 		nocopy_rebase_zval(&r, entry_val(e));
 	}
+	return r.atoms;
 }
 
 /* ---- leaving shared memory ---- */
@@ -445,6 +488,7 @@ bool nocopy_unserialize(zval *rv, const char *buf, size_t len, uint8_t flags)
 static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 {
 	size_status st = size_root(z, val);
+	z->sight = false; /* a later pass meets the same strings again */
 	for (int pass = 0; st == SIZE_OK && graph_b_pending(z->g); pass++) {
 		if (pass == NOCOPY_MAX_DEPTH || (st = nocopy_graph_b_hooks(z->g)) != SIZE_OK) {
 			st = st == SIZE_OK ? SIZE_DEEP : st;
@@ -453,6 +497,8 @@ static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 		keys_reset(keys); /* a hook may have stored */
 		z->keys = *keys;
 		z->n = 0;
+		z->atoms = false;
+		z->nfound = 0;
 		nocopy_graph_b_rewind(z->g);
 		st = size_root(z, val);
 	}
@@ -462,13 +508,14 @@ static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 	return st;
 }
 
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only)
+static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only, const nocopy_atom_view *av)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
 	keys_reset_for(keys, val);
 	graph_b g;
 	graph_b_off(&g);
-	sizing z = {.keys = *keys, .g = &g};
+	zend_string *found[32]; /* not zeroed: in sizing, it cost every store */
+	sizing z = {.keys = *keys, .g = &g, .av = av, .sight = av != NULL, .found = found, .cap = 32};
 	zval ser;
 	bool serialized = false, igb = false;
 	size_status st = size_value(&z, val, keys);
@@ -476,7 +523,10 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long
 	if (!graph) { /* nothing to persist from it: references held once only, or a value to serialize */
 		nocopy_graph_b_free(&g);
 	}
-	if (st != SIZE_OK) {
+	if (st != SIZE_OK) { /* stored serialized, if at all: no atoms */
+		sizing_free(&z);
+		z.av = NULL;
+		z.atoms = false;
 		if (st == SIZE_ERROR) {
 			return NOCOPY_REFUSED;
 		}
@@ -493,12 +543,13 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;
-	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size, ttl);
+	uint8_t atoms = z.atoms && av ? nocopy_atom_bit(av) : 0;
+	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size, ttl, atoms);
 	nocopy_status r = NOCOPY_NO_ROOM;
 	if (e) {
 		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : graph ? ENTRY_GRAPH : 0;
 		e->user = user;
-		persist_entry(e, key, val, keys, graph ? &g : NULL);
+		persist_entry(e, key, val, keys, &z, graph ? &g : NULL);
 		nocopy_put_result c = nocopy_put_commit(p, add_only);
 		r = c == PUT_OK ? NOCOPY_OK : c == PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
@@ -508,5 +559,18 @@ nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long
 	if (serialized) {
 		zend_string_release(Z_STR(ser));
 	}
+	sizing_free(&z);
+	return r;
+}
+
+/* Arrays and objects see the atoms: a view announced from sizing until the commit (nocopy_atom_begin). Anything else: a tail call. */
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only)
+{
+	nocopy_atom_view av;
+	if ((Z_TYPE_P(val) != IS_ARRAY && Z_TYPE_P(val) != IS_OBJECT) || !p || !nocopy_atom_begin(&NOCOPY_G(ctx), &av)) {
+		return build(p, key, val, ttl, user, add_only, NULL);
+	}
+	nocopy_status r = build(p, key, val, ttl, user, add_only, &av);
+	nocopy_atom_end(&NOCOPY_G(ctx));
 	return r;
 }

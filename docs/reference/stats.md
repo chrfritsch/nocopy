@@ -24,6 +24,10 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | `slots` | Slot table size; a shard fills at most 3/4 of its slots |
 | `lock_steals` | Locks taken over from a dead process (and its shard repaired). Should be 0 |
 | `leases` | `nocopy_remember()` computations in progress |
+| `shared_strings` | Short strings (up to 64 bytes) stored once for the whole arena, in the current generation; entries point at them instead of holding a copy |
+| `shared_strings_used` | Bytes those take, in both generations (the current one and the one before) |
+| `shared_strings_size` | Bytes reserved for them: two halves of `size / 128` |
+| `shared_strings_rotations` | Times a full generation's successor took over the older half (only once no entry or write in progress used that half) |
 | `shm_name` | Name of the attached shared-memory object (`nocopy.shm_name` + `.` + build id), or `null` |
 | `valkey_listener` | Pid of this arena's Valkey listener, `0` if none |
 

@@ -34,7 +34,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   big [sizes="1G 4G"] [secs=20]  large arenas: create/attach time, fill, eviction pauses (needs RAM for the arena)
   soak [minutes=60] [workers=8] [interval_s=30]  long mixed workload, one line per interval to spot drift
   tail [workers=8] [secs=10] [scenarios]  get/put latency percentiles (p50..p99.99, max) under eviction and contention, vs APCu
-  drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, PERF_ONLY=1 perf profile; CONFIGS=...)
+  drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, ROWS_ONLY=1 its DB cache rows in an arena, PERF_ONLY=1 perf profile; CONFIGS=...)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
   hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
 
@@ -97,7 +97,7 @@ case $cmd in
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g nocopy-drupal /src/docker/hitratio-compare.sh ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
-              run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e MEM_ONLY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
+              run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e MEM_ONLY -e ROWS_ONLY -e REPLAY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it --shm-size=1g -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \
                 '/src/docker/build.sh && printf "extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy-shell\n" > /usr/local/etc/php/conf.d/zz-nocopy.ini && cd /src && exec bash' ;;
   stub)       img; docker run --rm -v "$PWD":/src -w /src "nocopy-linux:$PHP" php /usr/local/lib/php/build/gen_stub.php nocopy.stub.php ;;

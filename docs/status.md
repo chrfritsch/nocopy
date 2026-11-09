@@ -12,10 +12,11 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
   `pie install chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). The integrations are not on Packagist yet. CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) is green on GitHub Actions.
 
-## Last verified (2026-11-05, local Docker, arm64)
+## Last verified (2026-11-09, local Docker, arm64)
 
 | Check | Result |
 |---|---|
+| `./dev ci` (8.5; 2026-11-09, short strings shared arena-wide (tests 034, 086, `tests/c/atoms.c`); `pie` rerun alone after a missing mount) | all passed, stress 30 loops, fuzz 20000 iterations clean in both modes, apcu 13 known failures |
 | `./dev ci` (8.5, fetch mode from the SAPI, no `request_scope`; 2026-11-06, after objects moved to `nocopy_graph.c`, again after the layer seams were cleaned up (`nocopy_value.h`, `nocopy_shared`), again with hooks run between sizing passes (test 074); also `./dev drupal`; `./dev apcu` with short value strings deduped) | all passed: tidy, test, novalkey, asan, clang, stress (30 loops), c, shm, zts, frankenphp, symfony |
 | `./dev ci` (8.5; 2026-11-07, again with the keep cap and big entries left out of compaction (tests 076, 077); also `./dev drupal`) | all passed |
 | `./dev ci` (8.5; 2026-11-07, dates stored natively (test 075), `./dev fuzz` added and in `ci`; also `./dev drupal`) | all passed, fuzz 20000 iterations clean in both modes |
@@ -49,8 +50,9 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 3. **Eviction tuning:** large arenas done: segments stop at 4 MB, so an eviction round stalls a shard's writers no longer at 4G than at 1G ([design decisions](explanation/design-decisions.md#eviction)). Also victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
-4. **Arena size: strings shared across entries.** Up to 64 bytes, in a fixed append-only area: ~20% of a warmed Drupal's arena for 0.3 MB, hits unchanged
-   ([design decisions](explanation/design-decisions.md#writes)). Compression came after it: LZ4/zstd on entries cost every hit, on Valkey payloads pay only when Valkey is short of memory or bandwidth.
+4. **Arena size:** strings up to 64 bytes are stored once arena-wide (done, 2026-11-09): a warmed Drupal's 6,477 database cache rows take 16% less (46.2 -> 38.7 MB), and read through a 32M arena they hit 94.6% instead of 91.9%; fetches unchanged, array stores 4-6% slower
+   ([design decisions](explanation/design-decisions.md#writes)). Open: compression (LZ4/zstd on entries costs every hit; on Valkey payloads it pays only when Valkey is short of memory or bandwidth).
+   Found while measuring: `./dev drupal-bench` ran without a cache since fpm workers create it as `www-data` (Drush, as root, created it first; fixed: Drush runs as `www-data`). With the cache back, `nocopy-all` crashes php-fpm workers in some runs (1 of 3 on `main` and on this change: `zend_mm_heap corrupted`, then SIGSEGV in every worker at the editor phase's start and in every new one at boot): not yet explained.
 5. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).
    Open: a shard without writes expires only under memory pressure (soak: entries and `used` stay frozen, harmless since the memory is reserved up front); RSS drifts to `nocopy.shm_size`. Steering segments
    by `ghost_hits` (Cliffhanger, CacheLib's MarginalHits) instead of an even share: only with a workload that needs it.

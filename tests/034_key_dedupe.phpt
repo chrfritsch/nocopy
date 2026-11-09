@@ -7,8 +7,9 @@ nocopy.shm_name=/nocopy-t034
 nocopy.shm_size=2M
 --FILE--
 <?php
+$p = str_repeat('_', 64); // keys over 64 bytes are never shared arena-wide: this measures the per-value dedupe alone
 $rows = [];
-for ($i = 0; $i < 500; $i++) $rows["r$i"] = ['id' => $i, 'name' => "n$i", "k$i" => $i % 7];
+for ($i = 0; $i < 500; $i++) $rows["{$p}r$i"] = ["{$p}id" => $i, "{$p}name" => "{$p}n$i", "{$p}k$i" => $i % 7];
 $fresh = unserialize(serialize($rows)); // same keys, every one a separate string
 
 $used = fn() => nocopy_stats()['used'];
@@ -22,7 +23,7 @@ nocopy_put('w', $wide);
 var_dump(nocopy_get('w') === $wide);
 
 // keys in a copied value are shared strings; writing to it must not leak into others
-$c = nocopy_get('a'); $c['r1']['id'] = -1; $c['r2']['new'] = 1;
+$c = nocopy_get('a'); $c["{$p}r1"]["{$p}id"] = -1; $c["{$p}r2"]['new'] = 1;
 var_dump(nocopy_get('a') === $rows);
 
 $small = unserialize(serialize(array_slice($rows, 0, 40)));

@@ -1,7 +1,8 @@
 /* Threaded stress test of the arena without PHP: build with tests/c/run.sh (plain -O2 and ThreadSanitizer).
  * Each thread writes, deletes and reads its own keys against a model, reads every other thread's keys,
  * and holds some values pinned across later operations: a value read must always be intact.
- * All threads also bump shared counters in place (nocopy_update) and read them lock-free: none may lose an increment. */
+ * All threads also bump shared counters in place (nocopy_update) and read them lock-free: none may lose an increment.
+ * Many values point at an atom (a word from a pool too large for one half, so generations rotate): it must still hold its word. */
 #include "../../nocopy_arena.h"
 #include <assert.h>
 #include <pthread.h>
@@ -19,11 +20,29 @@ static uint64_t failures;
 #define CTRS 8
 static uint64_t bumps; /* successful nocopy_update increments, all threads */
 
-typedef struct { uint32_t ver, len; } payload; /* after the key; then len bytes of a pattern of (key, ver) */
+/* after the key; then len bytes of a pattern of (key, ver) */
+typedef struct {
+	uint32_t ver, len;
+	const char *atom; /* NULL, or the atom of word `word` */
+	uint32_t word;
+} payload;
 
-void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+#define WORDS 400
+#define WLEN 400 /* long: a half holds ~80, so generations turn over faster than values die */
+static void word(char *w, uint32_t i) /* WLEN bytes and a NUL */
 {
-	(void) e, (void) from; /* the payload holds no pointers */
+	char n[16];
+	memset(w, '.', WLEN);
+	w[WLEN] = 0;
+	memcpy(w, n, (size_t) snprintf(n, sizeof n, "word-%05u", i));
+}
+
+static payload *pl(nocopy_entry *e);
+
+uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+{
+	(void) from; /* moved bytes: the atom pointer still holds */
+	return e->flags ? nocopy_atom_bits(pl(e)->atom) : 0;
 }
 
 static uint64_t hash(const char *k, size_t n)
@@ -55,6 +74,13 @@ static long check(nocopy_entry *e, uint64_t h, const char *k, size_t klen)
 			return -1;
 		}
 	}
+	if (e->flags && p->atom) {
+		char w[WLEN + 1];
+		word(w, p->word);
+		if (memcmp(p->atom, w, WLEN + 1)) {
+			return -1;
+		}
+	}
 	return p->ver;
 }
 
@@ -64,23 +90,42 @@ static void fail(const char *what, const char *k)
 	fprintf(stderr, "FAIL %s %s\n", what, k);
 }
 
-static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t ttl)
+/* With wi < WORDS the value references that word's atom, admitted on its second sighting (as the PHP layer does). */
+static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t ttl, uint32_t wi)
 {
 	size_t klen = strlen(k), total = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len);
 	uint64_t h = hash(k, klen);
+	nocopy_atom_view v;
+	const char *atom = NULL;
+	bool viewed = wi < WORDS && nocopy_atom_begin(c, &v);
+	if (viewed) {
+		char w[WLEN + 1];
+		word(w, wi);
+		uint64_t wh = hash(w, WLEN);
+		if (!(atom = nocopy_atom_find(&v, wh, w, WLEN)) && nocopy_atom_admit(wh)) {
+			atom = nocopy_atom_add(&v, wh, NULL, 0, w, WLEN); /* usable right away, as the PHP layer does */
+		}
+	}
 	nocopy_put p;
-	nocopy_entry *e = nocopy_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl);
-	if (!e) {
-		return false;
+	nocopy_entry *e = nocopy_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl, atom ? nocopy_atom_bit(&v) : 0);
+	bool ok = false;
+	if (e) {
+		memcpy((char *) e + HDR, k, klen + 1);
+		e->flags = 1; /* a payload with an atom field */
+		payload *pp = pl(e);
+		pp->ver = ver;
+		pp->len = len;
+		pp->atom = atom;
+		pp->word = wi;
+		for (uint32_t i = 0; i < len; i++) {
+			((uint8_t *) (pp + 1))[i] = pat(h, ver, i);
+		}
+		ok = nocopy_put_commit(&p, false) == PUT_OK;
 	}
-	memcpy((char *) e + HDR, k, klen + 1);
-	payload *pp = pl(e);
-	pp->ver = ver;
-	pp->len = len;
-	for (uint32_t i = 0; i < len; i++) {
-		((uint8_t *) (pp + 1))[i] = pat(h, ver, i);
+	if (viewed) {
+		nocopy_atom_end(c);
 	}
-	return nocopy_put_commit(&p, false) == PUT_OK;
+	return ok;
 }
 
 static void del(const char *k) { nocopy_delete(hash(k, strlen(k)), k, (uint32_t) strlen(k)); }
@@ -94,7 +139,7 @@ static bool put_ctr(nocopy_ctx *c, int j)
 	snprintf(k, sizeof k, "c%d", j);
 	size_t klen = strlen(k);
 	nocopy_put p;
-	nocopy_entry *e = nocopy_put_begin(&p, c, hash(k, klen), (uint32_t) klen, HDR, HDR + NOCOPY_ALIGN(klen + 1) + sizeof(uint64_t), 0);
+	nocopy_entry *e = nocopy_put_begin(&p, c, hash(k, klen), (uint32_t) klen, HDR, HDR + NOCOPY_ALIGN(klen + 1) + sizeof(uint64_t), 0, 0);
 	if (!e) {
 		return false;
 	}
@@ -158,7 +203,8 @@ static void *worker(void *arg)
 			uint64_t ex = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
 			uint32_t len = sizes[rand_r(&seed) % (r < 2 ? 6 : 5)];
 			bool ttl = rand_r(&seed) % 8 == 0;
-			if (put(&c, k, ++ver, len, ttl ? 1 + rand_r(&seed) % 2 : 0)) {
+			uint32_t wi = rand_r(&seed) % 4 ? (uint32_t) (rand_r(&seed) % WORDS) : WORDS;
+			if (put(&c, k, ++ver, len, ttl ? 1 + rand_r(&seed) % 2 : 0, wi)) {
 				model[i] = ttl ? -2 : (long) ver; /* -2: may have expired */
 				at[i] = ex;
 			} else {
@@ -240,7 +286,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	nocopy_put xp; /* ttl < 0: an absolute expiry, kept as is */
-	nocopy_entry *xe = nocopy_put_begin(&xp, &mc, hash("x", 1), 1, HDR, HDR + NOCOPY_ALIGN(2), -12345);
+	nocopy_entry *xe = nocopy_put_begin(&xp, &mc, hash("x", 1), 1, HDR, HDR + NOCOPY_ALIGN(2), -12345, 0);
 	assert(xe && xe->expires == 12345);
 	memcpy((char *) xe + HDR, "x", 2);
 	assert(nocopy_put_commit(&xp, false) == PUT_OK);
@@ -277,8 +323,8 @@ int main(int argc, char **argv)
 		failures++;
 	}
 	nocopy_release(&mc);
-	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, %llu bumps (%d/%d counters kept), failures %llu\n",
+	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, %llu bumps (%d/%d counters kept), %llu atoms, %llu rotations, failures %llu\n",
 		mb, nthreads, seconds, (unsigned long long) s.entries, s.shards, (unsigned long long) s.expunges, (unsigned long long) (s.evacuated >> 20),
-		(unsigned long long) bumps, found, CTRS, (unsigned long long) failures);
+		(unsigned long long) bumps, found, CTRS, (unsigned long long) s.atoms, (unsigned long long) s.atom_rotations, (unsigned long long) failures);
 	return failures ? 1 : 0;
 }

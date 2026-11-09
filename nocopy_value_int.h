@@ -6,7 +6,7 @@
 #include "nocopy_php.h"
 
 #define NOCOPY_MAX_DEPTH 64
-#define NOCOPY_VSTR_MAX 64 /* value strings up to this length share the key table: stored once per value */
+#define NOCOPY_VSTR_MAX 64 /* strings up to this length are stored once: per value (the key table), and arena-wide (atoms) */
 
 /* buf if n elements fit, else request memory (SMALL_FREE). */
 #define SMALL_ALLOC(buf, n) ((n) <= sizeof(buf) / sizeof *(buf) ? (buf) : emalloc((n) * sizeof *(buf)))
@@ -42,6 +42,11 @@ static zend_always_inline bool key_seen(nocopy_keys *t, const zend_string *k, ze
 	key_put(t, s, k, h);
 	return false;
 }
+
+/* ---- atoms: short strings stored once for the whole arena (nocopy_arena.h) ---- */
+
+/* Met while sizing, not an atom: its second sighting admits it, and the atom is returned if this write may use it. */
+zend_string *nocopy_atom_sight(const nocopy_atom_view *v, const zend_string *s, zend_ulong h);
 
 /* ---- graph values: what an ENTRY_GRAPH block holds besides plain values ---- */
 
@@ -118,16 +123,58 @@ typedef struct {
 	size_t n;         /* out-of-line bytes persisting will consume */
 	nocopy_keys keys; /* this value's view of the table (after keys_reset) */
 	graph_b *g;
+	const nocopy_atom_view *av; /* NULL: no atoms */
+	bool sight;       /* first pass: strings that are not atoms count towards admission */
+	bool atoms;       /* an atom was used */
+	/* per short string met first in the value (a table miss), in walk order: its atom or NULL. Persisting replays it, looking nothing up */
+	zend_string **found; /* the caller's buffer of cap, until it grows into request memory (heap) */
+	uint32_t nfound, cap;
+	bool heap;
 } sizing;
+
+void nocopy_found_grow(sizing *z);
+static zend_always_inline void sizing_free(sizing *z)
+{
+	if (z->heap) {
+		efree(z->found);
+		z->heap = false;
+	}
+}
 
 size_status nocopy_size_zval(sizing *z, zval *v, int depth);
 
-/* A string inside an array or object: counted once per value if short (persist_vstr decides alike). */
-static zend_always_inline void size_vstr(sizing *z, zend_string *s)
+/* A key, or a short string inside an array or object: counted once per value, and not at all if it is an atom (persist_key decides alike).
+ * The value's table first: the shared one is probed once per distinct string. */
+static zend_always_inline void size_str(sizing *z, zend_string *s, zend_ulong h)
 {
 	nocopy_kslot *k;
-	if (ZSTR_LEN(s) > NOCOPY_VSTR_MAX || !key_seen(&z->keys, s, zend_string_hash_val(s), &k)) {
+	if (key_seen(&z->keys, s, h, &k)) {
+		return;
+	}
+	if (z->av && ZSTR_LEN(s) <= NOCOPY_VSTR_MAX) {
+		zend_string *a = nocopy_atom_find(z->av, h, ZSTR_VAL(s), (uint32_t) ZSTR_LEN(s));
+		if (!a && z->sight) {
+			a = nocopy_atom_sight(z->av, s, h);
+		}
+		if (UNEXPECTED(z->nfound == z->cap)) {
+			nocopy_found_grow(z);
+		}
+		z->found[z->nfound++] = a;
+		if (a) {
+			z->atoms = true;
+			return;
+		}
+	}
+	z->n += str_size(ZSTR_LEN(s));
+}
+
+/* A string inside an array or object (persist_vstr decides alike). */
+static zend_always_inline void size_vstr(sizing *z, zend_string *s)
+{
+	if (ZSTR_LEN(s) > NOCOPY_VSTR_MAX) {
 		z->n += str_size(ZSTR_LEN(s));
+	} else {
+		size_str(z, s, zend_string_hash_val(s));
 	}
 }
 
@@ -136,6 +183,8 @@ static zend_always_inline void size_vstr(sizing *z, zend_string *s)
 typedef struct {
 	char *cursor;    /* next free byte of the block */
 	nocopy_keys keys;
+	zend_string *const *found; /* sizing's (NULL: no atoms), replayed in the same order */
+	uint32_t fi;
 	graph_b *g;      /* NULL: no objects or shared references */
 	nc_graph *graph;
 	uint32_t nref;   /* shared references persisted so far */
@@ -158,11 +207,17 @@ typedef struct {
 	uintptr_t from;
 	size_t size;
 	ptrdiff_t by;
+	uint8_t atoms; /* atom halves the block references */
 } rebase;
 
-static zend_always_inline void *moved(const rebase *r, void *p)
+/* p repointed into the moved block; ARENA_EMPTY and atoms stay (atoms are noted). */
+static zend_always_inline void *moved(rebase *r, void *p)
 {
-	return (uintptr_t) p - r->from < r->size ? (char *) p + r->by : p; /* ARENA_EMPTY stays */
+	if ((uintptr_t) p - r->from < r->size) {
+		return (char *) p + r->by;
+	}
+	r->atoms |= nocopy_atom_bits(p);
+	return p;
 }
 
 void nocopy_rebase_zval(void *r, zval *z); /* r: rebase */

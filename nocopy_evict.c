@@ -71,7 +71,7 @@ static bool relocate(nocopy_shard *sh, nocopy_entry *old)
 	n->flags = old->flags;
 	n->user = old->user;
 	n->hot = __atomic_load_n(&old->hot, __ATOMIC_RELAXED) >> 1; /* aging: must be read again to stay on top */
-	nocopy_rebase(n, old);
+	nocopy_segs[nocopy_seg_of(n)].atoms |= nocopy_rebase(n, old);
 	sh->evacuated += n->size;
 	nocopy_slot *sp = nocopy_slot_of(sh, old);
 	if (sp) {

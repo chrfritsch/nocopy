@@ -379,6 +379,10 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "expunges", s.expunges);
 	add_assoc_long(return_value, "lock_steals", s.lock_steals);
 	add_assoc_long(return_value, "leases", s.leases);
+	add_assoc_long(return_value, "shared_strings", s.atoms);
+	add_assoc_long(return_value, "shared_strings_used", s.atoms_used);
+	add_assoc_long(return_value, "shared_strings_size", s.atoms_size);
+	add_assoc_long(return_value, "shared_strings_rotations", s.atom_rotations);
 	if (shm_attached[0]) {
 		add_assoc_string(return_value, "shm_name", shm_attached);
 	} else {

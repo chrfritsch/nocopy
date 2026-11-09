@@ -2,6 +2,8 @@
 # Inside nocopy-drupal: Drupal 11 on nginx + php-fpm + MariaDB (production PHP as for ./dev sfbench: OPcache sized up, realpath cache, optimized autoloader), nine cache configs, anonymous / logged-in (front page, node, term, JSON:API list of 20 articles) / editor / cold start.
 #   docker run --rm --shm-size=1g --cap-add=SYS_PTRACE -v "$PWD":/src:ro -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh
 # MEM_ONLY=1: per-worker memory after warm-up and a fixed load only (mem.tsv), no throughput runs.
+# ROWS_ONLY=1: the database cache rows after warm-up and an anonymous crawl (front, RSS, JSON:API, 300 nodes, 50 terms; use CONFIGS=stock), put one by one into a fresh arena: rows.tsv.
+#   REPLAY="16M 24M": then those rows as a read-through workload (bench/drupal/replay.php) per arena size, also for an old tree mounted at /old: replay.tsv.
 # PERF_ONLY=1 (needs --privileged): after warm-up, perf over the whole container while ab loads a node page, anonymous and logged in:
 #   perf-<cfg>-<anon|auth>.dso (samples by process, library) and .sym (php-fpm's top symbols). PERF_N=4000 requests each.
 # TRACE_ONLY=1: after warm-up, strace on every php-fpm worker over 200 node page requests, anonymous and logged in:
@@ -65,6 +67,7 @@ echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' 
 # with Valkey the listener drops the writer's own fresh copy: refetch until it stays local
 echo '<?php $o = new ArrayObject(array_fill(0, 1000, str_repeat("x", 100))); if (function_exists("nocopy_put")) { $k = "probe" . mt_rand(); $u = nocopy_stats()["used"]; nocopy_put($k, $o, 0); $d = nocopy_stats()["used"] - $u; for ($i = 0; !$d && $i < 200; $i++, usleep(1000)) { $u = nocopy_stats()["used"]; nocopy_get($k); $d = nocopy_stats()["used"] - $u; } echo $d; exit; } apcu_store("probe", $o); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
+DRUSH="runuser -u www-data -- env HOME=/tmp $DRUSH"   # as php-fpm's user: with nocopy loaded, root would create the cache its workers refuse
 NIDS=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 25" | tr '\n' ' ')
 NODE=$($DRUSH sqlq "select nid from node_field_data where type='article' order by nid limit 1 offset 40")
 TERM=$($DRUSH sqlq "select tid from taxonomy_term_field_data order by tid limit 1 offset 2")
@@ -137,6 +140,20 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   fpm_start; login
   for u in $URLS; do for i in 1 2 3; do curl -s -o /dev/null "$B$u"; curl -s -o /dev/null -b /tmp/ck "$B$u"; done; done
   ab -q -n 500 -c "$C" -C "$SID" "$B/node/$NODE" >/dev/null 2>&1; ab -q -n 2000 -c "$C" "$B/" >/dev/null 2>&1
+  if [ -n "$ROWS_ONLY" ]; then   # the database bins after an anonymous crawl, every row put one by one into a fresh arena
+    for u in / /rss.xml "/jsonapi/node/article?page%5Blimit%5D=20" $(seq -f /node/%g 1 300) $(seq -f /taxonomy/term/%g 1 50); do curl -s -o /dev/null "$B$u"; done
+    rm -f /dev/shm/nocopy-rows.*
+    runuser -u www-data -- env HOME=/tmp php -d memory_limit=2G -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-rows -d nocopy.shm_size=512M \
+      $D/vendor/drush/drush/drush.php -r $D/web php:script /src/bench/drupal/rows.php | tee /out/rows.tsv.$cfg
+    [ -d /old ] && { rm -rf /build-old && mkdir /build-old && cp -R /old/*.c /old/*.h /old/config.m4 /old/third_party /build-old/ \
+      && (cd /build-old && phpize >/dev/null 2>&1 && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>&1) || exit 1; }
+    for size in $REPLAY; do for wl in zipf loop; do for so in /build-old /build; do [ -d $so/modules ] || continue
+      rm -f /dev/shm/nocopy-replay.*
+      printf '%s\t' "${so#/}"; runuser -u www-data -- env HOME=/tmp php -d memory_limit=4G -d extension=$so/modules/nocopy.so -d nocopy.shm_name=/nocopy-replay -d nocopy.shm_size=$size \
+        $D/vendor/drush/drush/drush.php -r $D/web php:script /src/bench/drupal/replay.php $wl
+    done; done; done | tee /out/replay.tsv.$cfg
+    continue
+  fi
 
   # per worker, MB: RSS, PSS (shared pages split among their users), private (USS); PHP peak of its last request; Valkey's RSS
   for u in $URLS; do ab -q -n 400 -c "$C" "$B$u" >/dev/null 2>&1; ab -q -n 400 -c "$C" -C "$SID" "$B$u" >/dev/null 2>&1; done

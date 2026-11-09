@@ -7,7 +7,7 @@ Start with [How nocopy works](how-it-works.md) for the overview; this page is fo
 
 Layers, each using only the one below it:
 - Arena (no PHP): entries are a header plus the caller's bytes. `nocopy_arena.h` is its public API; the read path (`nocopy_find`, pins) is inline there. Every public call that writes takes its shard lock itself: the lock (fast path inline), `nocopy_lookup` and `nocopy_remove` are in `nocopy_arena_int.h`, which is shared by its units only:
-  `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time).
+  `nocopy_arena.c` (setup, locks and `shard_repair`, worker slots and pins, segments, slot tables, writes, stats), `nocopy_evict.c` (expiry, merge, ghost), `nocopy_lease.c` (single-flight leases), `nocopy_owner.c` (owner ids: pid + start time), `nocopy_atom.c` (atoms: strings stored once for the whole arena, below).
 - Values, interface `nocopy_value.h` (the block layout, entry flags, the key table, `nocopy_build`, copy-out, graphs out, serialize): `nocopy_value.c` puts PHP values in and out of an arena block (size, persist, rebase, copy-out, serialize, `nocopy_build`: size, `nocopy_put_begin`, persist, `nocopy_put_commit`); objects and shared references it hands to
   `nocopy_graph.c` (class fingerprints, the graph builder, persisting and rebuilding graphs, copy mode's templates). `nocopy_value_int.h` is shared by these two only: the walk states (`sizing`, `persist`, `rebase`), the graph builder, the graph markers and the calls each makes into the other.
 - `nocopy_php.h`: what the PHP layers share: the module globals, the layout of the arena header's `user` area (`nocopy_shared`: the empty array every entry points to, the Valkey listener's state), the store API and the detour (`nocopy_detour_ops`).
@@ -19,7 +19,7 @@ Layers, each using only the one below it:
 - Detour: each store-API function tests `nocopy_detour` once (NULL: the local fast path) and otherwise calls that table: Valkey or no arena. Positional initializers, so `-Wextra` flags a table missing a slot.
 - No arena (`nocopy.shm_name` not set or not attached, `nocopy_a` NULL, the `nocopy_no_arena` table): every store-API function returns its miss or failure (stores still size and validate the value, so the caller's errors throw), `nocopy_remember` computes without keeping, `nocopy_tracked()` does not throw, RINIT claims no worker slot. `nocopy_shared_with()`: `none`.
 
-`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`), shared counters bumped through `nocopy_update` among them (exact sum when none was evicted); `tests/c/repair.c` uses the internal header. Both supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
+`tests/c/stress.c` drives the arena directly from threads (plain and ThreadSanitizer, `./dev c`), shared counters bumped through `nocopy_update` among them (exact sum when none was evicted), values pointing at atoms while generations rotate; `tests/c/repair.c` and `tests/c/atoms.c` use the internal header. All supply `nocopy_rebase()`, the one callback the arena needs from its user (see Merge).
 
 Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), mapped in MINIT (php-fpm's master as root: in each worker's first RINIT, after it dropped to the pool's user, so root never maps memory workers write) at the same address in every process that attaches, forks included (pointers are valid everywhere); threads (ZTS) share it anyway (`nocopy_arena_open`, `nocopy_arena.c`):
 - Name `base.<8 hex>`: the layout id, a hash of the loaded `nocopy.so` (plus nocopy version and `ZEND_EXTENSION_BUILD_ID`), so processes share only when they run the same code. Mode 0600.
@@ -34,17 +34,30 @@ Everything lives in one POSIX shm object named by `nocopy.shm_name` (required), 
 
 ## Layout
 
-`[ header | workers | slot tables | segment table | segment owners | pin bitmaps ][ segment 0 ][ segment 1 ] ...`
+`[ header | workers | slot tables | segment table | segment owners | pin bitmaps | atom tables | doorkeeper | atom halves ][ segment 0 ][ segment 1 ] ...`
 - Segment size = power of two, at least 64 KB, growing until there are at most 256 segments but not past 4 MB (`NOCOPY_SEG_MAX_SHIFT`): above 1G the count grows instead (8,192 at 32G), since an eviction round moves up to a segment's worth under the shard lock. Entries larger than half a segment take a run of contiguous segments.
 - Segment table, owners and the workers' pin bitmaps (`pin_stride` words each, on their own cache lines) sit behind the slot tables, sized for `size >> shift` segments (`segs_off`, `owner_off`, `pins_off`); bitmap loops stop at `nocopy_seg_words`. Arenas up to 1G keep 4-word bitmaps.
 - Entry = `nocopy_entry` header (hash, size, expiry, seq, 32-bit created, key length/offset, live/hot/flags, the user's 32-bit `user`: 48 bytes, `_Static_assert`ed) + the user's block. The PHP block is `zval` + key `zend_string` + value, written as opcache-style immutable structures
   (refcount 2, `IS_ARRAY_IMMUTABLE` / interned strings, hash precomputed), so a reader can hand the pointer straight to userland.
   Equal array keys, and equal strings of up to 64 bytes inside arrays and objects (`NOCOPY_VSTR_MAX`), are stored once per entry (rows of a result set share their column names and repeated values): a 256-slot table by hash (`NOCOPY_G(keys)`, `key_seen`) remembers this value's strings, keys and values alike; a miss overwrites the slot.
-  Its decisions depend only on the sequence of string contents, so sizing (`nocopy_size_zval`, `size_vstr`) and persisting (`nocopy_persist_zval`, `persist_vstr`) dedupe exactly alike and agree on the size. A string stored alone (the whole value) bypasses the table: it is reset for arrays and objects only.
-  A deduped string longer than one byte gets refcount 3 (PHP never reads an interned string's refcount): copy-out (`copy_shared_str`) gives its uses one private copy, found in the same table by arena pointer.
+  Its decisions depend only on the sequence of string contents, so sizing (`nocopy_size_zval`, `size_str`) and persisting (`nocopy_persist_zval`, `persist_key`/`persist_vstr`) dedupe exactly alike and agree on the size. A string stored alone (the whole value) bypasses the table: it is reset for arrays and objects only.
+  A table miss of a string up to 64 bytes then asks the atoms (below): sizing records each answer (the atom, or none) in walk order (`sizing.found`), and persisting replays that list instead of looking again, so both agree by construction.
+  A deduped string longer than one byte gets refcount 3 (PHP never reads an interned string's refcount): copy-out (`copy_shared_str`) gives its uses one private copy, found in the same table by arena pointer. Atoms are stored that way (and with their hash), so they are never written after admission.
   A map's hash gets 2 slots per bucket, rounded up to a power of two (`map_mask`), not the table's 16-slot minimum: rechained on persist, as opcache compacts its arrays. Readers and `zend_array_dup` take the mask as they find it.
 - Slot: 64 bits = `{ offset/8 (32 bit), nocopy_slot_tag(hash) }`; 0 empty. The tag is the hash times an odd constant, top 32 bits; its low bits are the home slot, all 32 the probe filter: a probe compares them first and only dereferences on a match.
   Not the raw hash: PHP's DJBX33A gives keys like `prefix.N` regular low bits, and as home slots they formed probe runs of hundreds at 3/4 fill (simulated: hit 215 / miss 1247 probes vs 2 / 8).
+
+## Atoms: strings shared across entries
+
+Short strings recur across entries (Drupal's cache tags and render keys: `languages:language_interface` in three quarters of its rows), so strings up to 64 bytes are also stored once for the whole arena, as atoms (`nocopy_atom.c`; the arena stores byte strings, the value layer makes them zend_strings). Entries point at them; hits stay zero-copy.
+- Area: two halves of `shm_size / 128` (the last part of the header), each with its own open-addressing table (a slot per 32 bytes, at most 3/4 full; slot = tag + offset/8, as the key slots) and one shared doorkeeper of tags. A record is `uint32 len, uint32 offset of the bytes, the blob` (for PHP: a zend_string header, the bytes, a NUL).
+- Generations: each half holds one (`atom[h].state`); new atoms go to the current one, `atom_gen` (half `atom_gen & 1`). Lookups search the current generation only.
+- Admission: a string sizing meets that is no atom (first in its value) writes its tag to the doorkeeper (direct-mapped, racy); the second sighting adds it (`nocopy_atom_add`) under the atom lock, a trylock: an admission can be skipped. Order: record bytes, `used`, then the slot (release): any state a dead holder leaves is one the next can build on, so a dead holder's lock is taken over (checked at most once a second) without repair. The put that admits does not use the atom yet (it was sized without it).
+- Views: a writer announces its generation in its worker slot (`agen`, `nocopy_atom_begin`: store, full fence, check the half still holds that generation) from before sizing until after the commit (`nocopy_atom_end`); a nested write (a hook storing) shares the outer view. `put_begin` sets the entry's segment's bit for that half (`nocopy_seg.atoms`), under the shard lock, before the view ends; a merge move ORs `nocopy_rebase`'s answer (the halves the block points into) into the new segment. A segment's bits go only when it is freed (zeroed), which waits for every reader's pin, so a zero-copy value holding atoms keeps its half.
+- Rotation: the current half full, `atom_rotate` (atom lock held) marks the other half `WIPING` (seq_cst, fence), looks for its generation in any worker's `agen` (a dead owner's is cleared), then, holding every shard lock (index order), in any segment's bits. Referenced: the mark is undone and no rotation is tried for a second (`atom_tried`). Else its table is zeroed and it becomes generation `atom_gen + 1`, the current one. A writer whose check sees `WIPING` retries with the new `atom_gen` (Dekker: either the rotation sees its announcement or it sees the mark).
+  Bits change only under shard locks and a view ends only after its `put_begin` set its bit, so a view gone by the first look has its bit seen by the second; a rotation that dies anywhere leaves `WIPING` or a half-zeroed table that the next one repeats from the start.
+- `nocopy_clear` leaves the atoms alone; it seals the shards' open segments, so with no pins every segment goes back to the pool and its bits with it.
+- Ceiling: a generation stays while any segment that held an entry using it is not freed (a moved entry carries its bits along); while old entries live on, a full current half stores new strings per entry again. Tests: 086 (a zero-copy reader keeps its half past a clear; unpinned, the next fill rotates), `tests/c/atoms.c` (every blocking and dead-holder case), `tests/c/stress.c`.
 
 ## Shards and the segment pool
 
@@ -77,7 +90,7 @@ and `nocopy_find` reads `mseq` before probing and treats a miss as real only if 
 
 ## Writes
 
-A write is a `nocopy_put`: `nocopy_put_begin` locks the key's shard, `nocopy_alloc`s (bump-allocate in the shard's open segment for the entry's TTL bucket, or take a fresh one / a run) and sets the header;
+A write is a `nocopy_put`: `nocopy_put_begin` locks the key's shard, `nocopy_alloc`s (bump-allocate in the shard's open segment for the entry's TTL bucket, or take a fresh one / a run), sets the header and the segment's atom bits;
 the caller (`nocopy_build()` in nocopy_value.c: size the value, `persist_entry`) fills key and payload; `nocopy_put_commit` locates the slot, publishes with a release store, marks the old entry dead and unlocks. `nocopy_build` frees what sizing kept only after the commit (it may run destructors).
 Blocks up to `NOCOPY_INLINE_PUT` (2 KB) are filled under the lock (one critical section); larger ones are filled with the lock dropped and recorded as the worker's `wip` meanwhile (see Locks). The caller never sees the lock.
 Per segment: `used` (bytes appended), `live`, `pending` (allocated, unpublished). A sealed segment with `live==0 && pending==0` becomes DEAD (`seg_check`); `reclaim()` frees DEAD segments no worker pins, under the shard lock.
@@ -95,8 +108,8 @@ Ghost (S3-FIFO): per shard, one 32-bit tag per slot (in the header after the slo
 a new key whose tag is there starts at `hot = 2` (survives two merges unread; `ghost_hits`). Keys used once never come back, so only recurring keys whose reuse distance exceeds the cache get the extension.
 `hot` is a byte in the entry header, a Morris-style read counter (0-15): the first read sets 1, later reads add 1 with probability 1/2^hot (per-worker xorshift), so a hot key writes its cache line ~log2(reads) times between merges and it stays shared otherwise (exact per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.
-Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy_value.c walks the value (nocopy_graph.c a graph's classes and nodes) and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` stays.
-Value strings get `h = 0` (a reader may have been hashing the old copy during the memcpy). Nothing is re-persisted, so the moved block has the old size by construction.
+Moving an entry is a `memcpy` of its block plus the user's `nocopy_rebase(e, from)`: nocopy_value.c walks the value (nocopy_graph.c a graph's classes and nodes) and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` and atoms stay, and the halves of the atoms met are returned for the new segment's bits.
+Moved value strings get `h = 0` (a reader may have been hashing the old copy during the memcpy). Nothing is re-persisted, so the moved block has the old size by construction.
 
 ## Reads (lock-free) and pins
 
@@ -176,8 +189,9 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 - Only keys carry a hash. Value strings are stored with `h == 0`; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `nocopy_hold` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `relocate()` relies on it.
-- String dedupe must stay a function of string contents and walk order only: sizing and persisting must agree on `e->size` (`ZEND_ASSERT` at the end of `persist_entry`).
-- Every pointer inside a block points into the same block or to the arena's empty array (`ARENA_EMPTY`, in the header's `user` area): `nocopy_rebase` relies on it. Never to anything of the process (`zend_empty_array`, interned strings, function pointers: `pDestructor` is NULL): another process maps the arena at the same address but its own binary elsewhere (test 057 segfaults with `zend_empty_array`).
+- String dedupe must stay a function of string contents and walk order only: sizing and persisting must agree on `e->size` (`ZEND_ASSERT` at the end of `persist_entry`). Atoms are looked up only while sizing; persisting replays the answers in the same order (asserted too).
+- Every pointer inside a block points into the same block, to the arena's empty array (`ARENA_EMPTY`, in the header's `user` area) or to an atom: `nocopy_rebase` relies on it.
+- An entry may point at atoms only of the generation its writer's view announced, and only with its segment's bit set before the view ends (`put_begin`'s `atoms`). Never write to an atom after admission. Never to anything of the process (`zend_empty_array`, interned strings, function pointers: `pDestructor` is NULL): another process maps the arena at the same address but its own binary elsewhere (test 057 segfaults with `zend_empty_array`).
 - Only the owner shard, under its lock, changes a segment's state; DEAD ends only in its `reclaim()`. So a walk over a segment (`expire_step`, `merge`) may run past the point where its last unlink made it DEAD: the memory stays until this lock is dropped.
 - `seg_check()` is what moves SEALED -> DEAD; call it after any change of `live`/`pending`.
 - `seg_carve()` sets an entry's size before `used` covers it, so `shard_repair` can always walk a segment. Entry sizes are multiples of 8 (slots hold offset/8).

@@ -46,6 +46,7 @@ enum { SEG_FREE, SEG_OPEN, SEG_SEALED, SEG_DEAD, SEG_CONT };
 typedef struct {
 	uint8_t state;
 	uint8_t bucket;   /* TTL bucket of an open or sealed single segment */
+	uint8_t atoms;    /* atom halves its entries reference (nocopy_atom_bit), until it is freed */
 	uint32_t run;     /* head of a run: number of segments */
 	uint32_t pending; /* allocated, not yet published */
 	uint32_t gen;     /* bumped on every free: lets an expiry cursor notice reuse */
@@ -88,7 +89,14 @@ typedef struct {
 	uint64_t owner;   /* owner id of the process (thread) holding the slot, 0 free */
 	uint64_t hits, misses;
 	uint32_t wip;     /* offset/8 of the entry it fills outside the shard lock; 0 none. Changes only under that shard's lock */
+	uint32_t agen;    /* atom generation its write in progress may reference; 0 none */
 } __attribute__((aligned(64))) nocopy_worker;
+
+/* One half of the atom area: one generation of atoms, append-only until a rotation wipes it for a later one. */
+typedef struct {
+	uint32_t state;   /* the generation it holds, | NOCOPY_ATOM_WIPING while a rotation checks or wipes it */
+	uint32_t used, n; /* bytes appended, slots taken (atom lock) */
+} nocopy_atom_half;
 
 typedef struct {
 	uint64_t magic, abi; /* named arenas: magic is stored last, once the rest is set up */
@@ -103,6 +111,13 @@ typedef struct {
 	uint64_t expunges;
 	uint32_t lock_steals;
 	uint32_t unpin_gen __attribute__((aligned(64))); /* bumped when a dead segment is still pinned: readers drop their idle pins */
+	uint64_t atom_lock __attribute__((aligned(64))); /* holder's owner id: admissions and rotations */
+	uint32_t atom_gen;   /* the generation admissions go to; it lives in half atom_gen & 1 */
+	time_t atom_tried;   /* last second a rotation found the other half still referenced */
+	uint64_t atom_rotations;
+	nocopy_atom_half atom[2];
+	uint32_t atom_half, atom_slots; /* bytes per half, slots per half's table (a power of two) */
+	size_t atom_off, atom_tab_off, atom_dk_off; /* behind the pin bitmaps: both halves, their tables, the doorkeeper */
 	nocopy_shard shards[NOCOPY_MAX_SHARDS];
 	nocopy_worker workers[NOCOPY_MAX_WORKERS];
 	char user[256] __attribute__((aligned(64))); /* the user's shared state, zeroed at creation (nocopy_php.h: nocopy_shared) */
@@ -120,6 +135,7 @@ typedef struct {
 	uint32_t nkeep;      /* segments in keep */
 	uint64_t mine[NOCOPY_SEG_WORDS]; /* published as pinned */
 	uint64_t keep[NOCOPY_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
+	uint32_t agen, anest; /* announced atom generation, and the nocopy_atom_begin calls not yet ended */
 } nocopy_ctx;
 
 typedef enum { PUT_OK, PUT_EXISTS, PUT_FULL } nocopy_put_result;
@@ -146,10 +162,16 @@ static inline uint64_t *nocopy_wbits(int slot) { return nocopy_pins + (size_t) s
 extern uint32_t nocopy_shard_mask, nocopy_tab_mask;
 extern nocopy_slot *nocopy_tabs[NOCOPY_MAX_SHARDS];
 extern uint64_t nocopy_self; /* this process's owner id */
+extern char *nocopy_atoms;         /* both halves of the atom area */
+extern nocopy_slot *nocopy_atom_tab; /* both halves' tables, atom_slots each */
+extern uint32_t *nocopy_atom_dk;   /* doorkeeper: 2 * atom_slots tags */
+extern uint32_t nocopy_atom_mask;  /* atom_slots - 1 */
+extern uint32_t nocopy_atom_bytes; /* atom_half: off the header line admissions write */
 #pragma GCC visibility pop
 
-/* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block. Shard locked, must not allocate. */
-void nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
+/* Supplied by the user: e is a byte copy of `from`'s block (merge moved it); repoint e's pointers into its own block.
+ * Returns the atom halves the block references (nocopy_atom_bits of each pointer out of it). Shard locked, must not allocate. */
+uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
 
 extern const char NOCOPY_TOO_SMALL[]; /* size cannot hold the slot tables (*need bytes) plus a few segments */
 
@@ -175,8 +197,9 @@ void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailo
 
 /* Locks h's shard and allocates a size-byte block; NULL (unlocked) if it does not fit. The header is set (flags and user 0):
  * the caller writes the key's klen bytes at koff and its payload, then commits. Blocks over NOCOPY_INLINE_PUT are filled
- * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires; < 0: -ttl is the expiry itself. */
-nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl);
+ * with the lock dropped; a writer that dies meanwhile has its block rolled back. ttl 0: never expires; < 0: -ttl is the expiry itself.
+ * atoms: the atom halves the payload will reference (nocopy_atom_bit of the writer's view, or 0). */
+nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, uint64_t h, uint32_t klen, uint8_t koff, size_t size, time_t ttl, uint8_t atoms);
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 
@@ -195,6 +218,7 @@ void nocopy_lease_drop(uint64_t h, int32_t slot); /* only if this slot still hol
 
 typedef struct {
 	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases, inserts;
+	uint64_t atoms, atoms_used, atoms_size, atom_rotations;
 	uint64_t segment_size;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
 	time_t start_time;
@@ -405,6 +429,65 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen)
 {
 	return nocopy_find_ex(c, h, k, klen, false);
+}
+
+/* ---- atoms: byte strings stored once for the whole arena ----
+ * The area has two halves, each holding one generation. Admissions (second sighting, nocopy_atom_admit) append to the
+ * current generation; when its half is full, a rotation wipes the other half for the next generation, once no segment's
+ * entries reference it and no writer's view holds it. A record: uint32 len, uint32 offset of the bytes in the blob, the blob. */
+#define NOCOPY_ATOM_WIPING 0x80000000u
+
+/* A writer's view: the generation its lookups search, which no rotation wipes until the view ends. */
+typedef struct {
+	uint32_t gen;
+} nocopy_atom_view;
+
+/* Announces the current generation in c's worker slot (nested calls share the outer view); false: no worker slot, no atoms. */
+bool nocopy_atom_begin(nocopy_ctx *c, nocopy_atom_view *v);
+void nocopy_atom_end(nocopy_ctx *c); /* after the commit: the block's segment carries the bit by then */
+/* Stores s as an atom of the current generation (the blob: hlen bytes of hdr, s, a NUL; 8-aligned), rotating if its half is full;
+ * a no-op if s is in already. Returns its blob if that is in v's generation (the writer may use it), else NULL; also NULL while another process admits. */
+void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, uint32_t hlen, const char *s, uint32_t len);
+
+static inline uint8_t nocopy_atom_bit(const nocopy_atom_view *v) { return (uint8_t) (1u << (v->gen & 1)); }
+
+/* The half bit of an atom, 0 for anything outside the area. */
+static inline uint8_t nocopy_atom_bits(const void *p)
+{
+	uintptr_t o = (uintptr_t) p - (uintptr_t) nocopy_atoms;
+	return o < 2 * (uintptr_t) nocopy_atom_bytes ? (uint8_t) (1u << (o >= nocopy_atom_bytes)) : 0;
+}
+
+/* The blob of the atom equal to s in v's generation, or NULL. Lock-free: a slot is published after its record. */
+static inline __attribute__((always_inline)) void *nocopy_atom_find(const nocopy_atom_view *v, uint64_t h, const char *s, uint32_t len)
+{
+	uint32_t half = v->gen & 1, m = nocopy_atom_mask, tag = nocopy_slot_tag(h);
+	const nocopy_slot *t = nocopy_atom_tab + (size_t) half * (m + 1);
+	char *area = nocopy_atoms + (size_t) half * nocopy_atom_bytes;
+	for (uint32_t i = tag & m;; i = (i + 1) & m) {
+		nocopy_slot sl = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
+		if (!sl) {
+			return NULL;
+		}
+		if ((uint32_t) (sl >> 32) == tag) {
+			char *rec = area + ((uint32_t) sl << 3);
+			const uint32_t *r = (const uint32_t *) rec;
+			if (r[0] == len && nocopy_key_eq(rec + 8 + r[1], s, len)) {
+				return rec + 8;
+			}
+		}
+	}
+}
+
+/* Doorkeeper (TinyLFU): true on the second sighting of h, so strings met once take no room. Direct-mapped, racy. */
+static inline bool nocopy_atom_admit(uint64_t h)
+{
+	uint32_t *c = &nocopy_atom_dk[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 32) & (2 * nocopy_atom_mask + 1)], t = (uint32_t) h | 1;
+	if (__atomic_load_n(c, __ATOMIC_RELAXED) == t) {
+		return true;
+	}
+	__atomic_store_n(c, t, __ATOMIC_RELAXED);
+	return false;
 }
 
 #endif

@@ -68,6 +68,9 @@ nocopy_put_result nocopy_commit(nocopy_shard *sh, nocopy_entry *e, bool add_only
 nocopy_entry *nocopy_lookup(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen); /* may be expired */
 bool nocopy_remove(nocopy_shard *sh, uint64_t h, const char *k, uint32_t klen);       /* true if it was live */
 
+/* ---- atoms (nocopy_atom.c) ---- */
+void nocopy_atom_init(nocopy_arena *p); /* at creation */
+
 /* ---- expiry and merge (nocopy_evict.c) ---- */
 bool nocopy_expire_step(nocopy_shard *sh, time_t now, int budget); /* true if it unlinked anything */
 bool nocopy_merge(nocopy_shard *sh, bool evict_only);              /* false if there was nothing to merge */
