@@ -8,13 +8,19 @@
 
 nocopy_value_shared *nc_shared;
 
-/* Idempotent: every process writes the same bytes. */
+/* Built aside and written only where it is missing: zend_empty_array carries this process's addresses, and readers of
+ * other processes look at the shared copy at any time. Racing first attaches write the same bytes. */
 void nocopy_value_attach(nocopy_value_shared *s)
 {
-	memcpy(&s->empty, &zend_empty_array, sizeof(zend_array));
-	s->empty.pDestructor = NULL;
-	s->empty_hash[0] = s->empty_hash[1] = HT_INVALID_IDX;
-	HT_SET_DATA_ADDR(&s->empty, s->empty_hash);
+	nocopy_value_shared v;
+	memset(&v, 0, sizeof v);
+	memcpy(&v.empty, &zend_empty_array, sizeof(zend_array));
+	v.empty.pDestructor = NULL;
+	v.empty_hash[0] = v.empty_hash[1] = HT_INVALID_IDX;
+	HT_SET_DATA_ADDR(&v.empty, s->empty_hash);
+	if (memcmp(s, &v, sizeof v) != 0) {
+		memcpy(s, &v, sizeof v);
+	}
 	nc_shared = s;
 }
 
