@@ -6,7 +6,7 @@
 
 #include "php.h"
 #include "php_nocopy.h"
-#include "nocopy_arena.h"
+#include "arena/nocopy_arena.h"
 #include "nocopy_value.h"
 
 /* ---- the arena header's user area: the same address in every process that maps it ---- */
@@ -19,8 +19,8 @@ typedef struct {
 	uint32_t vk_pid;  /* its pid */
 	uint32_t vk_live; /* it is connected and tracking: local copies may be served */
 } nocopy_shared;
-_Static_assert(sizeof(nocopy_shared) <= sizeof(((nocopy_arena *) 0)->user), "nocopy_shared outgrew the arena's user area");
-#define NOCOPY_SHARED ((nocopy_shared *) nocopy_a->user)
+_Static_assert(sizeof(nocopy_shared) <= NOCOPY_USER_BYTES, "nocopy_shared outgrew the arena's user area");
+#define NOCOPY_SHARED ((nocopy_shared *) nocopy_user_area())
 
 /* ---- per process (thread) ---- */
 

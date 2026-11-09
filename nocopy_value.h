@@ -4,7 +4,7 @@
 #define NOCOPY_VALUE_H
 
 #include "php.h"
-#include "nocopy_arena.h"
+#include "arena/nocopy_arena.h"
 
 /* ---- the key table: one value's equal strings stored once, their private copies shared ---- */
 
@@ -56,12 +56,15 @@ typedef enum {
 	NOCOPY_REFUSED, /* the value: warned, or an exception is pending */
 } nocopy_status;
 
+/* The arena's nocopy_rebase_fn: a merge moved e's block from `from`; repoints e's value into it. */
+uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from);
+
 /* ---- in ---- */
 
 void nocopy_value_minit(void); /* with an arena: its shared empty array */
 /* Sizes the value, then writes and publishes its entry (ttl 0: none; user: nocopy_entry.user).
  * p NULL (no arena): only the checks, so a value a store would refuse is refused alike; then NOCOPY_NO_ROOM. */
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only);
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, time_t expires, uint32_t user, bool add_only);
 
 /* ---- out ---- */
 

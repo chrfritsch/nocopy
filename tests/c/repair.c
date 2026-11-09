@@ -1,7 +1,8 @@
-/* shard_repair(): a lock taken from a dead holder rebuilds the shard. Builds the half-done states a kill can leave
+/* Shard repair: a lock taken from a dead holder rebuilds the shard. Builds the half-done states a kill can leave
  * (a delete's shift stopped midway, an unlinked entry still counted live, an abandoned allocation, a dead writer's
- * unfinished big entry) and checks the shard afterwards. Uses the arena's internal header. */
-#include "../../nocopy_arena_int.h"
+ * unfinished big entry, a segment claimed and never set up) and checks the shard afterwards. Inspects internals: layout.h. */
+#include "../../arena/layout.h"
+#include "../../arena/nocopy_arena.h"
 #include <assert.h>
 #include <stdio.h>
 #include <sys/mman.h>
@@ -11,7 +12,7 @@
 #define HDR NOCOPY_ALIGN(sizeof(nocopy_entry))
 #define N 400
 
-uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+static uint8_t rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	(void) e, (void) from;
 	return 0;
@@ -26,16 +27,13 @@ static uint64_t hash(const char *k)
 	return h | 1;
 }
 
-static nocopy_entry *build(nocopy_shard *sh, const char *k, size_t len) /* locked; allocated, not committed */
+/* Allocated with its key set; the caller commits or leaves it. Small blocks return with the shard locked. */
+static nocopy_entry *begin(nocopy_put *p, nocopy_ctx *c, const char *k, size_t len)
 {
 	size_t klen = strlen(k);
-	nocopy_entry *e = nocopy_alloc(sh, HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(len), 0, time(NULL)); /* slots hold offset/8 */
+	nocopy_put_req q = {.h = hash(k), .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(len)};
+	nocopy_entry *e = nocopy_put_begin(p, c, &q);
 	assert(e);
-	e->h = hash(k);
-	e->klen = (uint32_t) klen;
-	e->koff = HDR;
-	e->expires = 0;
-	memcpy((char *) e + HDR, k, klen + 1);
 	return e;
 }
 
@@ -49,15 +47,8 @@ static uint64_t dead_owner(void) /* the id of a process that has exited and been
 	return (uint64_t) (uint32_t) p | (uint64_t) 1 << 32;
 }
 
-static int bad_slots(nocopy_shard *sh) /* slots whose tag is not their entry's */
-{
-	nocopy_slot *t = tab_of(sh);
-	int n = 0;
-	for (uint32_t s = 0; s <= nocopy_tab_mask; s++) {
-		n += t[s] && nocopy_slot_tag(nocopy_slot_entry(t[s])->h) != (uint32_t) (t[s] >> 32);
-	}
-	return n;
-}
+static ar_slot slot_of(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
+static nocopy_entry *entry_of(ar_slot s) { return (nocopy_entry *) ar_at8(ar_slot_off8(s)); }
 
 static bool found(nocopy_ctx *c, const char *k)
 {
@@ -72,69 +63,69 @@ int main(void)
 	char base[32];
 	nocopy_named nm;
 	snprintf(base, sizeof base, "/nocopy-repair-%d", (int) getpid());
-	const char *err = nocopy_arena_open(base, 4 << 20, N, 1, &(size_t){0}, &nm);
+	nocopy_err err = nocopy_arena_open(&(nocopy_config) {.name = base, .size = 4 << 20, .hint = N, .abi = 1, .rebase = rebase}, &nm);
 	shm_unlink(nm.name); /* this run's only: the mapping stays */
-	assert(!err);
-	nocopy_ctx c = {.slot = -1};
-	assert(nocopy_claim(&c));
-	nocopy_shard *sh = &nocopy_a->shards[0];
+	assert(err.code == NOCOPY_ERR_NONE && ar_hdr->nshards == 1);
+	nocopy_ctx c, w;
+	nocopy_ctx_init(&c);
+	nocopy_ctx_init(&w);
+	assert(nocopy_claim(&c) && nocopy_claim(&w));
+	ar_shard *sh = &ar_shards[0];
+	ar_index *ix = &ar_ix[0];
 	char k[32];
+	nocopy_put p;
 
-	nocopy_lock(sh);
 	for (int i = 0; i < N; i++) {
 		snprintf(k, sizeof k, "k%d", i);
-		assert(nocopy_commit(sh, build(sh, k, 100), false) == PUT_OK);
+		begin(&p, &c, k, 100);
+		assert(nocopy_put_commit(&p, false) == NOCOPY_PUT_OK);
 	}
+	/* another writer's big entry, filled outside the lock; the writer dies */
+	nocopy_entry *big = begin(&p, &w, "big", ar_seg_size);
+	assert(!p.locked && ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->wip);
+	ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->owner = dead_owner();
+	/* an allocation the holder never publishes: from here on we hold the shard lock */
+	begin(&p, &c, "abandoned", 300);
+	assert(p.locked);
 	/* a delete whose backward shift dies after its first move: mseq odd, the moved key in two slots, the victim still live */
-	nocopy_slot *t = tab_of(sh);
-	uint32_t m = nocopy_tab_mask, i = 0, j = 0;
+	uint32_t m = ix->mask, i = 0, j = 0;
 	for (;; i++) {
 		assert(i < m); /* needs one displaced key */
 		j = (i + 1) & m;
-		if (t[i] && t[j] && (((j - ((uint32_t) (t[j] >> 32) & m)) & m) >= 1)) {
+		if (ix->t[i] && ix->t[j] && ((j - (ar_slot_tag(entry_of(ix->t[j])->h) & m)) & m) >= 1) {
 			break; /* t[j] is not at home: deleting t[i] moves it back */
 		}
 	}
-	nocopy_entry *victim = nocopy_slot_entry(t[i]), *moved = nocopy_slot_entry(t[j]);
+	nocopy_entry *victim = entry_of(ix->t[i]), *moved = entry_of(ix->t[j]);
 	char vk[32];
-	strcpy(vk, nocopy_key(victim));
-	sh->mseq++;
-	t[i] = t[j];
-	/* an allocation the holder never published */
-	build(sh, "abandoned", 300);
-	/* another dead writer's big entry, filled outside the lock */
-	uint64_t other = dead_owner();
-	nocopy_entry *big = build(sh, "big", nocopy_seg_size);
-	nocopy_a->workers[1].owner = other;
-	nocopy_a->workers[1].wip = (uint32_t) (((char *) big - (char *) nocopy_a) >> 3);
-	if (nocopy_a->nworkers < 2) {
-		nocopy_a->nworkers = 2;
-	}
+	snprintf(vk, sizeof vk, "%.*s", (int) victim->klen, nocopy_key(victim));
+	ix->hdr->mseq++;
+	ix->t[i] = ix->t[j];
 	/* a segment claimed from the pool, never set up */
 	uint32_t orphan = 0;
-	while (nocopy_seg_owner[orphan]) {
+	while (ar_seg_owner[orphan]) {
 		orphan++;
 	}
-	nocopy_seg_owner[orphan] = (uint8_t) (sh->idx + 1);
-	sh->lock = dead_owner(); /* the holder dies */
+	ar_seg_owner[orphan] = sh->log.tenant;
+	sh->lock.holder = dead_owner(); /* the holder dies */
 
-	nocopy_lock(sh); /* steals and repairs */
-	assert(nocopy_a->lock_steals == 1);
-	assert(!(sh->mseq & 1));
-	assert(nocopy_slot_of(sh, moved) && !victim->live);
+	assert(!nocopy_delete(hash("none"), "none", 4)); /* takes the lock: steals and repairs */
+	assert(ar_proc->lock_steals == 1);
+	assert(!(ix->hdr->mseq & 1));
+	assert(ar_index_find(ix, slot_of(moved)) && !victim->live);
 	uint32_t n = 0;
 	size_t live = 0;
 	for (uint32_t s = 0; s <= m; s++) {
-		if (t[s]) {
-			assert(nocopy_slot_of(sh, nocopy_slot_entry(t[s])) == &t[s]); /* no duplicates */
+		if (ix->t[s]) {
+			nocopy_entry *e = entry_of(ix->t[s]);
+			assert(ar_index_find(ix, slot_of(e)) == &ix->t[s]); /* no duplicates, every tag its entry's */
 			n++;
-			live += nocopy_slot_entry(t[s])->size;
+			live += e->size;
 		}
 	}
-	assert(n == N - 1 && sh->nlive == n && sh->live_bytes == live && !bad_slots(sh));
-	assert(!nocopy_seg_owner[orphan] && !owns(sh, orphan) && sh->nown == (uint32_t) __builtin_popcountll(sh->own[0]));
-	assert(nocopy_segs[nocopy_seg_of(big)].pending == 1); /* its writer is not the dead holder: left for the reaper */
-	nocopy_unlock(sh);
+	assert(n == N - 1 && ar_index_nlive(ix) == n && sh->log.live_bytes == live);
+	assert(!ar_seg_owner[orphan] && !ar_log_owns(&sh->log, orphan) && sh->log.nown == (uint32_t) __builtin_popcountll(sh->log.own[0]));
+	assert(ar_segs[ar_seg_of(big)].pending == 1); /* its writer is not the dead holder: left for the reaper */
 	for (int x = 0; x < N; x++) {
 		snprintf(k, sizeof k, "k%d", x);
 		assert(found(&c, k) == (strcmp(k, vk) != 0)); /* the victim's miss returns instead of retrying forever */
@@ -142,12 +133,12 @@ int main(void)
 
 	nocopy_drop_idle(&c);
 	nocopy_clear(); /* reaps the dead writer's entry, seals the open segments: with nothing pinned, all go back to the pool */
-	for (uint32_t s = 0; s < nocopy_a->nsegs; s++) {
-		assert(!nocopy_seg_owner[s] && nocopy_segs[s].state == SEG_FREE && !owns(sh, s) && !nocopy_segs[s].pending);
+	for (uint32_t s = 0; s < ar_nsegs; s++) {
+		assert(!ar_seg_owner[s] && ar_segs[s].state == SEG_FREE && !ar_log_owns(&sh->log, s) && !ar_segs[s].pending);
 	}
-	assert(!nocopy_a->workers[1].wip && sh->live_bytes == 0 && sh->nown == 0);
+	assert(!ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->wip && sh->log.live_bytes == 0 && sh->log.nown == 0);
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-		assert(sh->cur[b] == -1);
+		assert(sh->log.cur[b] == -1);
 	}
 	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;

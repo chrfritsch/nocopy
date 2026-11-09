@@ -288,7 +288,7 @@ static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, no
 {
 	keys_reset_for(keys, val);
 	persist p = {.cursor = (char *) e + SALIGN(sizeof(php_entry)), .keys = *keys, .found = z->av ? z->found : NULL, .g = g};
-	memcpy(take(&p, ZSTR_LEN(key)), ZSTR_VAL(key), ZSTR_LEN(key));
+	take(&p, ZSTR_LEN(key)); /* the key's bytes: nocopy_put_begin copied them */
 	if (g) {
 		ZVAL_PTR(entry_val(e), nocopy_persist_graph(&p, val));
 	} else if (Z_TYPE_P(val) == IS_STRING) { /* as size_root: not through the table */
@@ -298,7 +298,7 @@ static void persist_entry(nocopy_entry *e, const zend_string *key, zval *val, no
 		ZVAL_COPY_VALUE(entry_val(e), val);
 		nocopy_persist_zval(&p, entry_val(e));
 	}
-	ZEND_ASSERT(p.cursor == (char *) e + e->size && (!p.found || p.fi == z->nfound));
+	ZEND_ASSERT(p.cursor == (char *) e + nocopy_entry_size(e) && (!p.found || p.fi == z->nfound));
 }
 
 /* ---- moving ---- */
@@ -344,7 +344,7 @@ void nocopy_rebase_zval(void *ctx, zval *z)
 uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	rebase r = {.from = (uintptr_t) from, .size = from->size, .by = (char *) e - (const char *) from};
-	if (e->flags & ENTRY_GRAPH) {
+	if (nocopy_entry_flags(e) & ENTRY_GRAPH) {
 		nocopy_graph_rebase(entry_val(e), &r);
 	} else {
 		nocopy_rebase_zval(&r, entry_val(e));
@@ -409,7 +409,7 @@ void nocopy_unshare_key(nocopy_keys *keys, zend_array *a, Bucket *b)
 
 void nocopy_unshare_zval(void *keys, zval *z)
 {
-	if ((Z_TYPE_P(z) == IS_STRING || Z_TYPE_P(z) == IS_ARRAY) && in_arena(Z_COUNTED_P(z))) {
+	if ((Z_TYPE_P(z) == IS_STRING || Z_TYPE_P(z) == IS_ARRAY) && nocopy_in_arena(Z_COUNTED_P(z))) {
 		zval t;
 		nocopy_copy_into(keys, &t, z);
 		ZVAL_COPY_VALUE(z, &t);
@@ -509,7 +509,7 @@ static size_status size_value(sizing *z, zval *val, nocopy_keys *keys)
 	return st;
 }
 
-static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only, const nocopy_atom_view *av)
+static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, time_t expires, uint32_t user, bool add_only, const nocopy_atom_view *av)
 {
 	nocopy_keys *keys = &NOCOPY_G(keys);
 	keys_reset_for(keys, val);
@@ -544,15 +544,15 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, zend_long
 	}
 
 	size_t size = SALIGN(sizeof(php_entry)) + SALIGN(ZSTR_LEN(key)) + z.n;
-	uint8_t atoms = z.atoms && av ? nocopy_atom_bit(av) : 0;
-	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), zend_string_hash_val(key), (uint32_t) ZSTR_LEN(key), KEY_OFF, size, ttl, atoms);
+	const nocopy_put_req q = {.h = zend_string_hash_val(key), .key = ZSTR_VAL(key), .klen = (uint32_t) ZSTR_LEN(key), .koff = KEY_OFF,
+		.size = size, .ttl = (time_t) ttl, .expires = expires, .user = user, .deps = z.atoms && av ? nocopy_atom_bit(av) : 0,
+		.flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : graph ? ENTRY_GRAPH : 0};
+	nocopy_entry *e = !p ? NULL : nocopy_put_begin(p, &NOCOPY_G(ctx), &q);
 	nocopy_status r = NOCOPY_NO_ROOM;
 	if (e) {
-		e->flags = serialized ? ENTRY_SERIALIZED | (igb ? ENTRY_IGBINARY : 0) : graph ? ENTRY_GRAPH : 0;
-		e->user = user;
 		persist_entry(e, key, val, keys, &z, graph ? &g : NULL);
 		nocopy_put_result c = nocopy_put_commit(p, add_only);
-		r = c == PUT_OK ? NOCOPY_OK : c == PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+		r = c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
 	if (graph) { /* after the commit: freeing the hooks' results may run destructors */
 		nocopy_graph_b_free(&g);
@@ -565,13 +565,13 @@ static nocopy_status build(nocopy_put *p, zend_string *key, zval *val, zend_long
 }
 
 /* Arrays and objects see the atoms: a view announced from sizing until the commit (nocopy_atom_begin). Anything else: a tail call. */
-nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, uint32_t user, bool add_only)
+nocopy_status nocopy_build(nocopy_put *p, zend_string *key, zval *val, zend_long ttl, time_t expires, uint32_t user, bool add_only)
 {
 	nocopy_atom_view av;
 	if ((Z_TYPE_P(val) != IS_ARRAY && Z_TYPE_P(val) != IS_OBJECT) || !p || !nocopy_atom_begin(&NOCOPY_G(ctx), &av)) {
-		return build(p, key, val, ttl, user, add_only, NULL);
+		return build(p, key, val, ttl, expires, user, add_only, NULL);
 	}
-	nocopy_status r = build(p, key, val, ttl, user, add_only, &av);
+	nocopy_status r = build(p, key, val, ttl, expires, user, add_only, &av);
 	nocopy_atom_end(&NOCOPY_G(ctx));
 	return r;
 }

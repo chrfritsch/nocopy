@@ -3,7 +3,7 @@
  * and holds some values pinned across later operations: a value read must always be intact.
  * All threads also bump shared counters in place (nocopy_update) and read them lock-free: none may lose an increment.
  * Many values point at an atom (a word from a pool too large for one half, so generations rotate): it must still hold its word. */
-#include "../../nocopy_arena.h"
+#include "../../arena/nocopy_arena.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -39,10 +39,10 @@ static void word(char *w, uint32_t i) /* WLEN bytes and a NUL */
 
 static payload *pl(nocopy_entry *e);
 
-uint8_t nocopy_rebase(nocopy_entry *e, const nocopy_entry *from)
+static uint8_t rebase(nocopy_entry *e, const nocopy_entry *from)
 {
 	(void) from; /* moved bytes: the atom pointer still holds */
-	return e->flags ? nocopy_atom_bits(pl(e)->atom) : 0;
+	return nocopy_entry_flags(e) ? nocopy_atom_bits(pl(e)->atom) : 0;
 }
 
 static uint64_t hash(const char *k, size_t n)
@@ -56,17 +56,17 @@ static uint64_t hash(const char *k, size_t n)
 
 static uint8_t pat(uint64_t h, uint32_t ver, uint32_t i) { return (uint8_t) (h ^ ver * 31 ^ i * 7); }
 
-static payload *pl(nocopy_entry *e) { return (payload *) ((char *) e + HDR + NOCOPY_ALIGN(e->klen + 1)); }
+static payload *pl(nocopy_entry *e) { return (payload *) ((char *) e + HDR + NOCOPY_ALIGN(nocopy_entry_klen(e) + 1)); }
 
 /* Checks a found entry; returns its ver or -1 if corrupt. */
 static long check(nocopy_entry *e, uint64_t h, const char *k, size_t klen)
 {
 	payload *p = pl(e);
 	const uint8_t *d = (const uint8_t *) (p + 1);
-	if (e->h != h || e->klen != klen || memcmp(nocopy_key(e), k, klen)) {
+	if (nocopy_entry_klen(e) != klen || memcmp(nocopy_key(e), k, klen)) {
 		return -1;
 	}
-	if ((char *) (d + p->len) > (char *) e + e->size) {
+	if ((char *) (d + p->len) > (char *) e + nocopy_entry_size(e)) {
 		return -1;
 	}
 	for (uint32_t i = 0; i < p->len; i++) {
@@ -74,7 +74,7 @@ static long check(nocopy_entry *e, uint64_t h, const char *k, size_t klen)
 			return -1;
 		}
 	}
-	if (e->flags && p->atom) {
+	if (nocopy_entry_flags(e) && p->atom) {
 		char w[WLEN + 1];
 		word(w, p->word);
 		if (memcmp(p->atom, w, WLEN + 1)) {
@@ -107,11 +107,10 @@ static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t
 		}
 	}
 	nocopy_put p;
-	nocopy_entry *e = nocopy_put_begin(&p, c, h, (uint32_t) klen, HDR, total, ttl, atom ? nocopy_atom_bit(&v) : 0);
+	nocopy_put_req q = {.h = h, .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = total, .ttl = ttl, .flags = 1, .deps = atom ? nocopy_atom_bit(&v) : 0};
+	nocopy_entry *e = nocopy_put_begin(&p, c, &q); /* flags 1: a payload with an atom field */
 	bool ok = false;
 	if (e) {
-		memcpy((char *) e + HDR, k, klen + 1);
-		e->flags = 1; /* a payload with an atom field */
 		payload *pp = pl(e);
 		pp->ver = ver;
 		pp->len = len;
@@ -120,7 +119,7 @@ static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t
 		for (uint32_t i = 0; i < len; i++) {
 			((uint8_t *) (pp + 1))[i] = pat(h, ver, i);
 		}
-		ok = nocopy_put_commit(&p, false) == PUT_OK;
+		ok = nocopy_put_commit(&p, false) == NOCOPY_PUT_OK;
 	}
 	if (viewed) {
 		nocopy_atom_end(c);
@@ -139,13 +138,13 @@ static bool put_ctr(nocopy_ctx *c, int j)
 	snprintf(k, sizeof k, "c%d", j);
 	size_t klen = strlen(k);
 	nocopy_put p;
-	nocopy_entry *e = nocopy_put_begin(&p, c, hash(k, klen), (uint32_t) klen, HDR, HDR + NOCOPY_ALIGN(klen + 1) + sizeof(uint64_t), 0, 0);
+	nocopy_put_req q = {.h = hash(k, klen), .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + sizeof(uint64_t)};
+	nocopy_entry *e = nocopy_put_begin(&p, c, &q);
 	if (!e) {
 		return false;
 	}
-	memcpy((char *) e + HDR, k, klen + 1);
 	*ctr(e) = 0;
-	return nocopy_put_commit(&p, false) == PUT_OK;
+	return nocopy_put_commit(&p, false) == NOCOPY_PUT_OK;
 }
 
 /* Bumps or reads (lock-free) a shared counter. */
@@ -163,7 +162,7 @@ static void ctr_op(nocopy_ctx *c, unsigned *seed)
 	}
 	nocopy_borrow_begin(c);
 	nocopy_entry *e = nocopy_find(c, h, k, klen);
-	if (e && (e->klen != klen || memcmp(nocopy_key(e), k, klen))) {
+	if (e && (nocopy_entry_klen(e) != klen || memcmp(nocopy_key(e), k, klen))) {
 		fail("corrupt counter", k);
 	} else if (e) {
 		(void) __atomic_load_n(ctr(e), __ATOMIC_RELAXED);
@@ -177,7 +176,8 @@ static void *worker(void *arg)
 {
 	int me = (int) (intptr_t) arg;
 	unsigned seed = (unsigned) me * 7919 + 1;
-	nocopy_ctx c = {.slot = -1};
+	nocopy_ctx c;
+	nocopy_ctx_init(&c);
 	if (!nocopy_claim(&c)) {
 		fail("claim", "");
 		return NULL;
@@ -200,7 +200,7 @@ static void *worker(void *arg)
 		int i = rand_r(&seed) % KEYS, r = rand_r(&seed) % 100;
 		snprintf(k, sizeof k, "t%d_%d", me, i);
 		if (r < 35) {
-			uint64_t ex = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
+			uint64_t ex = nocopy_expunges();
 			uint32_t len = sizes[rand_r(&seed) % (r < 2 ? 6 : 5)];
 			bool ttl = rand_r(&seed) % 8 == 0;
 			uint32_t wi = rand_r(&seed) % 4 ? (uint32_t) (rand_r(&seed) % WORDS) : WORDS;
@@ -228,7 +228,7 @@ static void *worker(void *arg)
 				fail("corrupt read", k);
 			}
 			if (!other && model[i] != -2) {
-				uint64_t ex = __atomic_load_n(&nocopy_a->expunges, __ATOMIC_RELAXED);
+				uint64_t ex = nocopy_expunges();
 				if (e ? got != model[i] : model[i] >= 0 && ex == at[i]) {
 					fail(e ? "wrong version" : "lost key", k);
 				}
@@ -274,22 +274,22 @@ int main(int argc, char **argv)
 	char base[32];
 	nocopy_named nm;
 	snprintf(base, sizeof base, "/nocopy-stress-%d", (int) getpid());
-	const char *err = nocopy_arena_open(base, mb << 20, 0, 1, &(size_t){0}, &nm);
+	nocopy_err err = nocopy_arena_open(&(nocopy_config) {.name = base, .size = mb << 20, .abi = 1, .rebase = rebase}, &nm);
 	shm_unlink(nm.name); /* this run's only: the mapping stays */
-	if (err) {
-		fprintf(stderr, "%s\n", err);
+	if (err.code != NOCOPY_ERR_NONE) {
+		fprintf(stderr, "%s\n", err.msg);
 		return 2;
 	}
-	nocopy_ctx mc = {.slot = -1};
+	nocopy_ctx mc;
+	nocopy_ctx_init(&mc);
 	if (!nocopy_claim(&mc)) {
 		fprintf(stderr, "claim\n");
 		return 2;
 	}
-	nocopy_put xp; /* ttl < 0: an absolute expiry, kept as is */
-	nocopy_entry *xe = nocopy_put_begin(&xp, &mc, hash("x", 1), 1, HDR, HDR + NOCOPY_ALIGN(2), -12345, 0);
-	assert(xe && xe->expires == 12345);
-	memcpy((char *) xe + HDR, "x", 2);
-	assert(nocopy_put_commit(&xp, false) == PUT_OK);
+	nocopy_put xp; /* an absolute expiry, kept as is */
+	nocopy_entry *xe = nocopy_put_begin(&xp, &mc, &(nocopy_put_req) {.h = hash("x", 1), .key = "x", .klen = 1, .koff = HDR, .size = HDR + NOCOPY_ALIGN(2), .expires = 12345});
+	assert(xe && nocopy_entry_expires(xe) == 12345 && !memcmp(nocopy_key(xe), "x", 1));
+	assert(nocopy_put_commit(&xp, false) == NOCOPY_PUT_OK);
 	del("x");
 	for (int j = 0; j < CTRS; j++) {
 		assert(put_ctr(&mc, j));

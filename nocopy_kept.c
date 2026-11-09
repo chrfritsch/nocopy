@@ -31,7 +31,7 @@ void nocopy_kept_put(nocopy_kept *l, const nocopy_entry *e, const zval *copy)
 	if (l->e) {
 		drop(l);
 	}
-	for (uint32_t n = 0; NOCOPY_G(kept_bytes) + e->size > nocopy_kept_size && n < 2 * NOCOPY_KEPT; n++) {
+	for (uint32_t n = 0; NOCOPY_G(kept_bytes) + nocopy_entry_size(e) > nocopy_kept_size && n < 2 * NOCOPY_KEPT; n++) {
 		nocopy_kept *h = &NOCOPY_G(kept)[NOCOPY_G(kept_hand)++ % NOCOPY_KEPT];
 		if (h->visited) {
 			h->visited = false;
@@ -40,11 +40,11 @@ void nocopy_kept_put(nocopy_kept *l, const nocopy_entry *e, const zval *copy)
 		}
 	}
 	l->e = e;
-	l->seq = e->seq;
-	l->size = e->size;
+	l->seq = nocopy_entry_version(e);
+	l->size = nocopy_entry_size(e);
 	l->visited = false;
 	ZVAL_COPY(&l->v, copy);
-	NOCOPY_G(kept_bytes) += e->size;
+	NOCOPY_G(kept_bytes) += nocopy_entry_size(e);
 }
 
 void nocopy_kept_rinit(void) { NOCOPY_G(kept_ok) = nocopy_kept_size > 0; }

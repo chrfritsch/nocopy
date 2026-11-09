@@ -22,7 +22,6 @@ static zend_always_inline size_t str_size(size_t len) { return SALIGN(_ZSTR_STRU
 
 #define ARENA_EMPTY (&NOCOPY_SHARED->empty)
 
-static zend_always_inline bool in_arena(const void *p) { return (uintptr_t) p - (uintptr_t) nocopy_a < nocopy_a->size; }
 
 /* ---- the key table: equal strings stored once per value ---- */
 
@@ -243,7 +242,7 @@ static zend_always_inline void array_each(zend_array *a, nocopy_keys *keys, zval
 	} else {
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
-			if (keys && b->key && in_arena(b->key)) {
+			if (keys && b->key && nocopy_in_arena(b->key)) {
 				nocopy_unshare_key(keys, a, b);
 			}
 			f(ctx, &b->val);

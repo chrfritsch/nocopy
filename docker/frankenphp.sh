@@ -4,7 +4,7 @@
 set -e
 command -v gcc >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl >/dev/null 2>&1; }
 rm -rf /build && mkdir /build && cd /src
-cp -R *.c *.h config.m4 third_party /build/
+cp -R *.c *.h config.m4 arena third_party /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 mkdir -p /app && cp /src/docker/frankenphp/app.php /app/
 ini=/usr/local/etc/php/conf.d/nocopy.ini

@@ -1153,7 +1153,7 @@ static void tpl_free_zval(void *ctx, zval *z)
 void *nocopy_graph_tpl(const nocopy_entry *e)
 {
 	const nc_graph *g = Z_PTR_P(entry_val((nocopy_entry *) e));
-	size_t n = e->size - (size_t) ((const char *) g - (const char *) e);
+	size_t n = nocopy_entry_size(e) - (size_t) ((const char *) g - (const char *) e);
 	nc_tpl *t = emalloc(offsetof(nc_tpl, g) + n + g->ncls * sizeof(zend_class_entry *));
 	memcpy(&t->g, g, n);
 	t->ces = (zend_class_entry **) ((char *) &t->g + n);

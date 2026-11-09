@@ -66,7 +66,7 @@ Lines with `-` are what the test expected, `+` what it got. The key does not exi
 
 ## 3. Make it pass
 
-The arena already records its creation time (`start_time` in `nocopy_stats_t`, `nocopy_arena.h`); `nocopy_stats()` in
+The arena already records its creation time (`start_time` in `nocopy_stats_t`, `arena/nocopy_arena.h`); `nocopy_stats()` in
 `nocopy.c` just does not return it. Find this line in `PHP_FUNCTION(nocopy_stats)`:
 
 ```c

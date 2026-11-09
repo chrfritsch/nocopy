@@ -25,7 +25,8 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
   dnl shm_open: libc from glibc 2.34, librt before
   PHP_CHECK_FUNC(shm_open, rt)
 
-  nocopy_sources="nocopy.c nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c nocopy_atom.c"
+  dnl the arena (arena/, plain C): the same list as tests/c/run.sh
+  nocopy_sources="nocopy.c arena/arena.c arena/atoms.c arena/index.c arena/layout.c arena/leases.c arena/log.c arena/policy.c arena/pool.c arena/proc.c arena/region.c arena/shard.c"
   AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
     AC_DEFINE([HAVE_NOCOPY_VALKEY], [1], [Define to 1 if nocopy has the Valkey tier.])
     nocopy_sources="$nocopy_sources nocopy_valkey.c"

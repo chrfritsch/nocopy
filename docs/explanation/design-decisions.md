@@ -313,6 +313,12 @@ Splitting objects out of `nocopy_value.c` (shared through `nocopy_value_int.h`, 
 `ab.sh write`, best of 7, copy / zero: all within ±2.5% (store object -1.9 / -2.5%, store+delete int, untouched, -2.0 / -2.2%); `bench/objects.php`, best of 5: 100 objects +2.9 / +5.9%, one object -2.2 / 0%.
 Built as three, `nocopy_*` stopped inlining the store: fetch miss -5%, failing add -6%; as one, `ab.sh` read/write within noise.
 
+**The arena as modules (`arena/`).** One header per concern (`proc`, `region`, `pool`, `index`, `log`, `policy`, `atoms`, `leases`, `shard`, `layout`),
+headers ordered in layers and checked by `./dev layers`; the layers above see only `arena/nocopy_arena.h` and `nocopy_*` names (entry fields through accessors, writes through `nocopy_put_req`).
+Kept from before, for speed: process-local globals rather than a handle passed to every call, the read path inline in the public header, the clock read inside the lock
+(an injectable clock, not an explicit `now`, which would cost every fetch a clock read). `./dev ab main 7`, best of 7, copy / zero: fetches and stores within ±5%;
+ttl churn's `evacuated` read 8-14% higher at best-of, but per run old copy 4959-5600 MB and new 5275-5687 MB (medians 5390 / 5362): noise, the merge code is unchanged.
+
 **LTO in shared builds** (`--disable-nocopy-lto` turns it off), which inlines the arena into the fetch and store paths. `ab.sh` best of 5,
 copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
 inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.

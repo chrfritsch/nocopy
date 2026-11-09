@@ -694,7 +694,7 @@ static bool listener_live(int wait_ms)
 
 uint32_t nocopy_vk_listener(void)
 {
-	nocopy_shared *a = nocopy_a ? NOCOPY_SHARED : NULL;
+	nocopy_shared *a = nocopy_attached() ? NOCOPY_SHARED : NULL;
 	int64_t beat = a ? __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE) : 0;
 	return beat && nocopy_mono_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
 }

@@ -4,7 +4,7 @@
 set -e
 command -v ab >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS apache2-utils >/dev/null 2>&1; }
 [ -f "$(php-config --extension-dir)/apcu.so" ] || { pecl install apcu >/dev/null 2>&1 || { echo "apcu build failed"; exit 1; }; }
-rm -rf /build && mkdir /build && cp -R /src/*.c /src/*.h /src/config.m4 /src/third_party /build/
+rm -rf /build && mkdir /build && cp -R /src/*.c /src/*.h /src/config.m4 /src/arena /src/third_party /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
 rm -rf /app && cp -r /appsrc /app && cp -r /src/bench/sfapp/src /src/bench/sfapp/public /app/ && mkdir -p /app/nocopy-bundle && cp -r /src/symfony/src /app/nocopy-bundle/

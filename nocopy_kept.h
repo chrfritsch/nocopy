@@ -53,7 +53,7 @@ static zend_always_inline nocopy_kept *nocopy_kept_admit(nocopy_kept *l, const n
 	if (!l) {
 		return NULL;
 	}
-	if (l->e == e && l->seq == e->seq) {
+	if (l->e == e && l->seq == nocopy_entry_version(e)) {
 		l->visited = true;
 		*hit = &l->v; /* share it: COW keeps it intact */
 		return NULL;
@@ -69,8 +69,8 @@ static zend_always_inline nocopy_kept *nocopy_kept_admit(nocopy_kept *l, const n
 static zend_always_inline nocopy_kept *nocopy_kept_get(const nocopy_entry *e, const zval *v, const zval **hit)
 {
 	/* short strings copy faster than a cold slot line loads (100k distinct 100 B strings: 37 -> 45 ns kept) */
-	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(kept_ok) || e->size > nocopy_kept_size
-	 || (Z_TYPE_P(v) == IS_STRING ? e->size < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
+	if ((uint32_t) (Z_TYPE_P(v) - IS_STRING) > 1 || !NOCOPY_G(kept_ok) || nocopy_entry_size(e) > nocopy_kept_size
+	 || (Z_TYPE_P(v) == IS_STRING ? nocopy_entry_size(e) < 512 : !zend_hash_num_elements(Z_ARR_P(v)))) {
 		*hit = NULL;
 		return NULL;
 	}
@@ -80,7 +80,7 @@ static zend_always_inline nocopy_kept *nocopy_kept_get(const nocopy_entry *e, co
 /* A graph entry: the same for its template (design-decisions: one shared check made other fetches 2% slower). */
 static zend_always_inline nocopy_kept *nocopy_kept_get_graph(const nocopy_entry *e, const zval **hit)
 {
-	return nocopy_kept_admit(NOCOPY_G(kept_ok) && e->size <= nocopy_kept_size ? nocopy_kept_way(e) : NULL, e, hit);
+	return nocopy_kept_admit(NOCOPY_G(kept_ok) && nocopy_entry_size(e) <= nocopy_kept_size ? nocopy_kept_way(e) : NULL, e, hit);
 }
 
 #endif

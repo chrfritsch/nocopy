@@ -13,7 +13,7 @@ const nocopy_detour_ops *nocopy_detour;
 
 bool nocopy_tracked(void)
 {
-	if (NOCOPY_G(ctx).slot < 0 && nocopy_a) { /* no arena (unavailable): the store API fails softly instead */
+	if (nocopy_ctx_slot(&NOCOPY_G(ctx)) < 0 && nocopy_attached()) { /* no arena (unavailable): the store API fails softly instead */
 		zend_throw_error(NULL, "nocopy: no free worker slot");
 		return false;
 	}
@@ -45,7 +45,7 @@ static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	nocopy_put p;
-	return nocopy_build(&p, key, val, o->expires ? -(zend_long) o->expires : o->ttl, user, o->add_only);
+	return nocopy_build(&p, key, val, o->ttl, o->expires, user, o->add_only);
 }
 
 /* user: the compute time (ms). */
@@ -101,7 +101,7 @@ void nocopy_clear_all(void)
 static zval *entry_long(nocopy_entry *e)
 {
 	zval *v = entry_val(e);
-	return Z_TYPE_P(v) == IS_LONG && !(e->flags & ENTRY_SERIALIZED) ? v : NULL;
+	return Z_TYPE_P(v) == IS_LONG && !(nocopy_entry_flags(e) & ENTRY_SERIALIZED) ? v : NULL;
 }
 
 typedef struct { zend_long a, b; } long_op; /* add: delta, result; cas: old, new */
@@ -176,12 +176,12 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	if (e) {
 		zval *v = entry_val(e);
 		if (exp) {
-			*exp = e->expires;
-			*delta = e->user;
+			*exp = nocopy_entry_expires(e);
+			*delta = nocopy_entry_user(e);
 		}
-		if (UNEXPECTED(e->flags & (ENTRY_SERIALIZED | ENTRY_GRAPH))) {
-			if (e->flags & ENTRY_SERIALIZED) {
-				hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), e->flags);
+		if (UNEXPECTED(nocopy_entry_flags(e) & (ENTRY_SERIALIZED | ENTRY_GRAPH))) {
+			if (nocopy_entry_flags(e) & ENTRY_SERIALIZED) {
+				hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), nocopy_entry_flags(e));
 			} else if (copy) {
 				hit = graph_copy_fetch(e, v, rv);
 			} else {
@@ -279,7 +279,7 @@ static int lease_take(zend_ulong h)
 	if (NOCOPY_G(nleases) == (int) (sizeof NOCOPY_G(leases) / sizeof NOCOPY_G(leases)[0])) {
 		return NOCOPY_LEASE_FULL; /* nested too deep: compute without one */
 	}
-	int r = nocopy_lease_take(h, NOCOPY_G(ctx).slot, nocopy_now(), LEASE_TTL);
+	int r = nocopy_lease_take(h, nocopy_ctx_slot(&NOCOPY_G(ctx)), nocopy_now(), LEASE_TTL);
 	if (r == NOCOPY_LEASE_TAKEN) {
 		NOCOPY_G(leases)[NOCOPY_G(nleases)++] = h;
 	}
@@ -288,7 +288,7 @@ static int lease_take(zend_ulong h)
 
 static void lease_drop(void)
 {
-	nocopy_lease_drop(NOCOPY_G(leases)[--NOCOPY_G(nleases)], NOCOPY_G(ctx).slot);
+	nocopy_lease_drop(NOCOPY_G(leases)[--NOCOPY_G(nleases)], nocopy_ctx_slot(&NOCOPY_G(ctx)));
 }
 
 /* Runs the callback (resolved only now: hits never call it), measures it, stores the result with its compute time. */
@@ -334,7 +334,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		double r = ((nocopy_rand(&NOCOPY_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
 		struct timespec ts;
 		nocopy_clock(&ts); /* exp's clock */
-		if ((double) ts.tv_sec + ts.tv_nsec / 1e9 - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
+		if ((double) nocopy_now_of(&ts) + ts.tv_nsec / 1e9 - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
 		if (lease_take(zend_string_hash_val(key)) != NOCOPY_LEASE_TAKEN) {
@@ -383,7 +383,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 static nocopy_status na_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	(void) user;
-	return nocopy_build(NULL, key, val, o->ttl, 0, false); /* the checks only: the caller's errors still throw */
+	return nocopy_build(NULL, key, val, o->ttl, 0, 0, false); /* the checks only: the caller's errors still throw */
 }
 static bool na_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { (void) key, (void) exp, (void) delta; ZVAL_NULL(rv); return false; }
 static void na_fetch_multi(HashTable *keys, HashTable *out) { (void) keys, (void) out; }

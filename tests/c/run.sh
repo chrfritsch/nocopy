@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")/../.."
 out=${TMPDIR:-/tmp}/nocopy-c; mkdir -p "$out"
 CC=${CC:-cc}
-ARENA="nocopy_arena.c nocopy_evict.c nocopy_lease.c nocopy_owner.c nocopy_atom.c"
+ARENA=$(ls arena/*.c)
 $CC -O2 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/stress" tests/c/stress.c $ARENA -lpthread
 $CC -O1 -g -fsanitize=thread -Wno-tsan -DNOCOPY_POISON -o "$out/stress-tsan" tests/c/stress.c $ARENA -lpthread
 s=${1:-3}
