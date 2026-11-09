@@ -1,5 +1,6 @@
 /* nocopy's Valkey tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
- * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; nocopy_store.c only calls nocopy_vk_*.
+ * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; the store reaches it only through
+ * nocopy_detour, the module through nocopy_valkey.h.
  * The connections are libvalkey's (third_party/libvalkey), blocking with nocopy.valkey_timeout; pushes come back as replies and are applied here. */
 
 #ifdef HAVE_CONFIG_H
@@ -33,14 +34,14 @@
 # include <openssl/x509v3.h>
 #endif
 
-bool nocopy_vk_on;
+static bool vk_on;
 static char *vk_host, *vk_path, *vk_user, *vk_pass, *vk_prefix;
 static int vk_port;
 static size_t vk_plen;
 static int vk_timeout_ms = 500;
 static bool vk_tls; /* tls:// or rediss:// */
-char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
-static bool nocopy_vk_tls_verify = true;
+static char *vk_tls_ca, *vk_tls_cert, *vk_tls_key;
+static bool vk_tls_verify = true;
 
 static char *pdup(const char *s, size_t n)
 {
@@ -59,13 +60,13 @@ static void pfree(char **p)
 }
 
 /* tcp://[user:pass@]host:port, tls://.. or rediss://.. (TLS), host:port, [::1]:port, unix:///path */
-ZEND_INI_MH(nocopy_vk_on_url)
+static ZEND_INI_MH(on_url)
 {
 	pfree(&vk_host), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass);
 	const char *s = ZSTR_VAL(new_value);
-	nocopy_vk_on = *s != 0;
+	vk_on = *s != 0;
 	vk_tls = false;
-	if (!nocopy_vk_on) {
+	if (!vk_on) {
 		return SUCCESS;
 	}
 	if (strncmp(s, "unix://", 7) == 0) {
@@ -98,7 +99,7 @@ ZEND_INI_MH(nocopy_vk_on_url)
 }
 
 /* phpinfo(): the URL without its credentials */
-ZEND_INI_DISP(nocopy_vk_display)
+static ZEND_INI_DISP(display_url)
 {
 	zend_string *z = type == ZEND_INI_DISPLAY_ORIG && ini_entry->modified ? ini_entry->orig_value : ini_entry->value;
 	const char *v = z ? ZSTR_VAL(z) : "", *at = strrchr(v, '@'), *start = strstr(v, "://");
@@ -112,7 +113,7 @@ ZEND_INI_DISP(nocopy_vk_display)
 	PHPWRITE(at, strlen(at));
 }
 
-ZEND_INI_MH(nocopy_vk_on_prefix)
+static ZEND_INI_MH(on_prefix)
 {
 	pfree(&vk_prefix);
 	vk_plen = ZSTR_LEN(new_value);
@@ -121,7 +122,7 @@ ZEND_INI_MH(nocopy_vk_on_prefix)
 }
 
 /* nocopy.valkey_tls_*: a path, or empty */
-ZEND_INI_MH(nocopy_vk_on_path)
+static ZEND_INI_MH(on_path)
 {
 	char **p = (char **) mh_arg1;
 	pfree(p);
@@ -131,13 +132,13 @@ ZEND_INI_MH(nocopy_vk_on_path)
 	return SUCCESS;
 }
 
-ZEND_INI_MH(nocopy_vk_on_verify)
+static ZEND_INI_MH(on_verify)
 {
-	nocopy_vk_tls_verify = zend_ini_parse_bool(new_value);
+	vk_tls_verify = zend_ini_parse_bool(new_value);
 	return SUCCESS;
 }
 
-ZEND_INI_MH(nocopy_vk_on_timeout)
+static ZEND_INI_MH(on_timeout)
 {
 	double t = zend_strtod(ZSTR_VAL(new_value), NULL);
 	vk_timeout_ms = t > 0 ? (int) (t * 1000) : 500;
@@ -195,13 +196,13 @@ static void tls_init(void)
 		return;
 	}
 	SSL_CTX_set_min_proto_version(c, TLS1_2_VERSION);
-	SSL_CTX_set_verify(c, nocopy_vk_tls_verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
+	SSL_CTX_set_verify(c, vk_tls_verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
 	const char *what = NULL;
-	if (nocopy_vk_tls_ca ? !SSL_CTX_load_verify_locations(c, nocopy_vk_tls_ca, NULL) : !SSL_CTX_set_default_verify_paths(c)) {
+	if (vk_tls_ca ? !SSL_CTX_load_verify_locations(c, vk_tls_ca, NULL) : !SSL_CTX_set_default_verify_paths(c)) {
 		what = "nocopy.valkey_tls_ca_file";
-	} else if (nocopy_vk_tls_cert && !SSL_CTX_use_certificate_chain_file(c, nocopy_vk_tls_cert)) {
+	} else if (vk_tls_cert && !SSL_CTX_use_certificate_chain_file(c, vk_tls_cert)) {
 		what = "nocopy.valkey_tls_cert_file";
-	} else if ((nocopy_vk_tls_key || nocopy_vk_tls_cert) && !SSL_CTX_use_PrivateKey_file(c, nocopy_vk_tls_key ? nocopy_vk_tls_key : nocopy_vk_tls_cert, SSL_FILETYPE_PEM)) {
+	} else if ((vk_tls_key || vk_tls_cert) && !SSL_CTX_use_PrivateKey_file(c, vk_tls_key ? vk_tls_key : vk_tls_cert, SSL_FILETYPE_PEM)) {
 		what = "nocopy.valkey_tls_key_file";
 	}
 	if (what) {
@@ -232,7 +233,7 @@ static bool tls_connect(nocopy_vk *v, const char **msg)
 	if (!is_ip) {
 		SSL_set_tlsext_host_name(s, vk_host);
 	}
-	if (nocopy_vk_tls_verify) {
+	if (vk_tls_verify) {
 		X509_VERIFY_PARAM *p = SSL_get0_param(s);
 		if (is_ip ? !X509_VERIFY_PARAM_set1_ip_asc(p, vk_host) : !X509_VERIFY_PARAM_set1_host(p, vk_host, 0)) {
 			*msg = tls_error();
@@ -255,7 +256,7 @@ static bool tls_connect(nocopy_vk *v, const char **msg)
 void nocopy_vk_mshutdown(void)
 {
 	pfree(&vk_host), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass), pfree(&vk_prefix);
-	pfree(&nocopy_vk_tls_ca), pfree(&nocopy_vk_tls_cert), pfree(&nocopy_vk_tls_key);
+	pfree(&vk_tls_ca), pfree(&vk_tls_cert), pfree(&vk_tls_key);
 #ifdef HAVE_NOCOPY_TLS
 	if (tls_ctx) {
 		SSL_CTX_free(tls_ctx);
@@ -321,8 +322,8 @@ static bool is_str(const valkeyReply *r)
 static bool push_is(const valkeyReply *r, const char *name, size_t n) { return r->type == VALKEY_REPLY_PUSH && r->elements && is_str(r->element[0]) && r->element[0]->len == n && memcmp(r->element[0]->str, name, n) == 0; }
 
 /* The fill guard: a fill that read Valkey before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
-static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->inval_gen, __ATOMIC_SEQ_CST); }
-static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->inval_gen, 1, __ATOMIC_SEQ_CST); }
+static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->vk.inval_gen, __ATOMIC_SEQ_CST); }
+static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->vk.inval_gen, 1, __ATOMIC_SEQ_CST); }
 
 static void vk_apply(const valkeyReply *push)
 {
@@ -529,10 +530,22 @@ static bool vk_connect(nocopy_vk *v)
 #define BEAT_MS 100   /* the listener's heartbeat */
 #define STALE_MS 1000 /* no heartbeat for this long: the listener is gone, the next worker starts one */
 
-void nocopy_vk_minit(void)
+static const zend_ini_entry_def vk_ini[] = {
+	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, on_url, display_url)
+	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, on_prefix)
+	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, on_timeout)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_ca_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_ca)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_cert_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_cert)
+	PHP_INI_ENTRY1("nocopy.valkey_tls_key_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_key)
+	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, on_verify)
+	{0}
+};
+
+void nocopy_vk_minit(int module_number)
 {
+	zend_register_ini_entries(vk_ini, module_number);
 #ifdef HAVE_NOCOPY_TLS
-	if (nocopy_vk_on && vk_tls) {
+	if (vk_on && vk_tls) {
 		tls_init();
 	}
 #endif
@@ -552,7 +565,7 @@ static bool vk_flush(valkeyContext *c)
 
 static ZEND_NORETURN void vk_listen(void)
 {
-	nocopy_shared *a = NOCOPY_SHARED;
+	nocopy_vk_shared *a = &NOCOPY_SHARED->vk;
 	uint32_t me = (uint32_t) getpid();
 	nocopy_vk v = {0};
 	struct pollfd p = {.fd = -1, .events = POLLIN};
@@ -663,18 +676,21 @@ static void vk_spawn(void)
 #endif
 	nocopy_arena_unhold();
 	close_inherited();
-	__atomic_store_n(&NOCOPY_SHARED->vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
+	__atomic_store_n(&NOCOPY_SHARED->vk.vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
 	vk_listen();
 }
+
+/* A heartbeat under STALE_MS old: the listener runs. */
+static bool beat_fresh(int64_t beat, int64_t now) { return beat && now - beat < STALE_MS; }
 
 /* The listener is connected; started (and waited for, up to the timeout) when it is not running. */
 static bool listener_live(int wait_ms)
 {
-	nocopy_shared *a = NOCOPY_SHARED;
+	nocopy_vk_shared *a = &NOCOPY_SHARED->vk;
 	int64_t until = nocopy_mono_ms() + wait_ms;
 	for (;;) {
 		int64_t now = nocopy_mono_ms(), beat = __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE);
-		bool fresh = beat && now - beat < STALE_MS;
+		bool fresh = beat_fresh(beat, now);
 		if (fresh && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE)) {
 			return true;
 		}
@@ -694,9 +710,9 @@ static bool listener_live(int wait_ms)
 
 uint32_t nocopy_vk_listener(void)
 {
-	nocopy_shared *a = nocopy_attached() ? NOCOPY_SHARED : NULL;
+	nocopy_vk_shared *a = nocopy_attached() ? &NOCOPY_SHARED->vk : NULL;
 	int64_t beat = a ? __atomic_load_n(&a->vk_beat, __ATOMIC_ACQUIRE) : 0;
-	return beat && nocopy_mono_ms() - beat < STALE_MS && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
+	return beat_fresh(beat, nocopy_mono_ms()) && __atomic_load_n(&a->vk_live, __ATOMIC_ACQUIRE) ? __atomic_load_n(&a->vk_pid, __ATOMIC_ACQUIRE) : 0;
 }
 
 static bool vk_ready(void)
@@ -1188,7 +1204,9 @@ static void nocopy_vk_clear(void)
 	nocopy_clear();
 }
 
-const nocopy_detour_ops nocopy_vk_detour = {
+static const nocopy_detour_ops vk_detour = {
 	nocopy_vk_store, nocopy_vk_fetch, nocopy_vk_fetch_multi, nocopy_vk_store_multi, nocopy_vk_drop, nocopy_vk_drop_multi,
 	nocopy_vk_add_long, nocopy_vk_cas_long, nocopy_vk_clear, true, "valkey",
 };
+
+const nocopy_detour_ops *nocopy_vk_route(void) { return vk_on ? &vk_detour : NULL; }

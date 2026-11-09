@@ -1,4 +1,4 @@
-/* The PHP store on top of the arena: module state, the store API (nocopy_store.c) and the Valkey tier's seam (nocopy_valkey.c).
+/* The PHP store on top of the arena: module state, the store API (nocopy_store.c) and the detour (the Valkey tier's seam, nocopy_valkey.h).
  * Values in and out of blocks: nocopy_value.h. nocopy_* and the module: nocopy.c. */
 
 #ifndef NOCOPY_PHP_H
@@ -9,29 +9,18 @@
 #include "arena/nocopy_arena.h"
 #include "nocopy_value.h"
 #include "nocopy_kept.h"
+#include "nocopy_valkey.h"
 
 /* ---- the arena header's user area: the same address in every process that maps it ---- */
 
 typedef struct {
 	nocopy_value_shared value; /* the value layer's: every entry's empty array */
-	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
-	int64_t vk_beat;  /* Valkey listener: CLOCK_MONOTONIC ms of its last sign of life, 0 never started */
-	uint32_t vk_pid;  /* its pid */
-	uint32_t vk_live; /* it is connected and tracking: local copies may be served */
+	nocopy_vk_shared vk; /* the Valkey tier's */
 } nocopy_shared;
 _Static_assert(sizeof(nocopy_shared) <= NOCOPY_USER_BYTES, "nocopy_shared outgrew the arena's user area");
 #define NOCOPY_SHARED ((nocopy_shared *) nocopy_user_area())
 
 /* ---- per process (thread) ---- */
-
-/* Valkey connection of this worker (nocopy_valkey.c; unused without HAVE_NOCOPY_VALKEY). */
-typedef struct {
-	void *c;		 /* valkeyContext *, NULL: not connected */
-	void *ssl;	   /* SSL *, with TLS */
-	char err[160];   /* why the connection failed last */
-	int64_t retry_at; /* ms, monotonic: after a failure, no new attempt before */
-	bool synced;	 /* connected and the listener live, checked in this request */
-} nocopy_vk;
 
 ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_ctx ctx;
@@ -40,7 +29,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	int nleases;
 	nocopy_env env; /* the value layer's */
 	nocopy_kept_cache kept; /* copy mode's kept copies */
-	nocopy_vk vk;
+	nocopy_vk vk; /* the Valkey tier's connection */
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
@@ -81,7 +70,7 @@ bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as
 static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
 
 /* ---- the detour: where the store ops go off the local fast path. Positional initializers: -Wextra flags a missing slot. ---- */
-typedef struct {
+struct nocopy_detour_ops {
 	nocopy_status (*store)(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
 	bool (*fetch)(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
 	void (*fetch_multi)(HashTable *keys, HashTable *out);
@@ -93,35 +82,9 @@ typedef struct {
 	void (*clear)(void);
 	bool leases;	  /* nocopy_remember single-flights through the arena's leases */
 	const char *name; /* nocopy_shared_with() */
-} nocopy_detour_ops;
+};
 
 extern const nocopy_detour_ops *nocopy_detour; /* NULL: the local store */
 extern const nocopy_detour_ops nocopy_no_arena; /* every op misses or fails; stores still check the value */
-
-/* ---- Valkey tier (nocopy_valkey.c): with nocopy.valkey set, the cache of record behind the arena (needs one). ---- */
-#ifdef HAVE_NOCOPY_VALKEY
-extern bool nocopy_vk_on;
-ZEND_INI_MH(nocopy_vk_on_url);
-ZEND_INI_DISP(nocopy_vk_display);
-ZEND_INI_MH(nocopy_vk_on_path);
-ZEND_INI_MH(nocopy_vk_on_verify);
-extern char *nocopy_vk_tls_ca, *nocopy_vk_tls_cert, *nocopy_vk_tls_key;
-ZEND_INI_MH(nocopy_vk_on_prefix);
-ZEND_INI_MH(nocopy_vk_on_timeout);
-void nocopy_vk_minit(void);
-void nocopy_vk_mshutdown(void);
-void nocopy_vk_new_request(void);
-void nocopy_vk_close(nocopy_vk *v);
-uint32_t nocopy_vk_listener(void); /* the live listener's pid, 0 none */
-extern const nocopy_detour_ops nocopy_vk_detour;
-#else
-/* --disable-nocopy-valkey: never on */
-#define nocopy_vk_on false
-static inline void nocopy_vk_minit(void) {}
-static inline void nocopy_vk_mshutdown(void) {}
-static inline void nocopy_vk_new_request(void) {}
-static inline void nocopy_vk_close(nocopy_vk *v) { (void) v; }
-static inline uint32_t nocopy_vk_listener(void) { return 0; }
-#endif
 
 #endif

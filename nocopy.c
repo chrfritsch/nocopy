@@ -426,15 +426,6 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	PHP_INI_ENTRY1("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnSize, &nocopy_kept_size)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
-#ifdef HAVE_NOCOPY_VALKEY
-	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, nocopy_vk_on_url, nocopy_vk_display)
-	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, nocopy_vk_on_prefix)
-	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, nocopy_vk_on_timeout)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_ca_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_ca)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_cert_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_cert)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_key_file", "", PHP_INI_SYSTEM, nocopy_vk_on_path, &nocopy_vk_tls_key)
-	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, nocopy_vk_on_verify)
-#endif
 PHP_INI_END()
 
 /* Read by apcu_* callers (Symfony's ApcuAdapter, Composer) before they use the apcu polyfill; nocopy itself ignores them. */
@@ -536,12 +527,7 @@ static void arena_open(bool late)
 /* Where the store ops go: the local store (NULL), else no arena, else Valkey. */
 static void route(void)
 {
-	nocopy_detour = nocopy_attached() ? NULL : &nocopy_no_arena;
-#ifdef HAVE_NOCOPY_VALKEY
-	if (nocopy_attached() && nocopy_vk_on) {
-		nocopy_detour = &nocopy_vk_detour;
-	}
-#endif
+	nocopy_detour = nocopy_attached() ? nocopy_vk_route() : &nocopy_no_arena;
 }
 
 PHP_MINIT_FUNCTION(nocopy)
@@ -558,7 +544,7 @@ PHP_MINIT_FUNCTION(nocopy)
 	if (!open_deferred) {
 		arena_open(false);
 	}
-	nocopy_vk_minit();
+	nocopy_vk_minit(module_number);
 	route();
 	pthread_atfork(NULL, NULL, atfork_child);
 
