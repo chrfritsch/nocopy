@@ -332,6 +332,12 @@ string -10.2 / -7.3%; the root planned inline (scalars and a lone string in the 
 A zero-copy scalar fetch through the mode dispatch was -5% (`ab` best of 9: fetch int, `exists`, parallel fetch int x1-x8 -4.5 to -5.7%):
 `nocopy_value_scalar` first, as the old read path did, brings them to within ±2% (parallel +0.4 to +2.6%).
 
+**The PHP layers' boundaries checked, not agreed.** Kept copies take their state as a parameter (`nocopy_kept_cache`, the value layer's env) and include `nocopy_value.h` only; the Valkey tier
+has its own header for the module (`nocopy_valkey.h`: state and six calls; its INI lives in `nocopy_valkey.c`); `nocopy_keys`' walk is the store's. `./dev layers` enforces each, and that no
+`nocopy_value_int.h` name reaches past the value units through `nocopy.c`'s one translation unit (`GROW` did). Each step `./dev ab main 7`, copy / zero: fetch and store rows within ±3%;
+reruns of the rows outside (ab main 9-11) flipped sign: fetch string 100B copy -4.8% then +1.2%, parallel arr1k zero x2 -6.3% then +6.5%, 4 readers + 4 writers zero +5.2 / -7.2 / +4.5%
+in three runs, and the "4 readers + 1 writer" copy row ranges 74-1415 k ops/s on unchanged code. A ±3% bar on those rows needs more rounds than `ab` takes.
+
 **One translation unit for the PHP layers.** `nocopy.c` includes the value units (phases first, entry points last), `nocopy_kept.c` and `nocopy_store.c`, which still compile alone (tidy).
 Splitting objects out of `nocopy_value.c` (shared through `nocopy_value_int.h`, the object and reference walkers kept `noinline`) cost nothing:
 `ab.sh write`, best of 7, copy / zero: all within ±2.5% (store object -1.9 / -2.5%, store+delete int, untouched, -2.0 / -2.2%); `bench/objects.php`, best of 5: 100 objects +2.9 / +5.9%, one object -2.2 / 0%.

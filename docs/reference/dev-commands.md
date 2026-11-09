@@ -25,7 +25,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev apcu` | APCu's own test suite against the polyfill; fails on any failure beyond the 13 known ones | `nocopy-linux:$PHP` |
 | `./dev drupal` | Drupal module PHPUnit tests in 3 modes: shared (CLI: copy mode), Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
 | `./dev tidy` | clang-tidy over the extension's C sources, checks in `.clang-tidy`; any finding fails | `nocopy-linux:$PHP` |
-| `./dev layers` | the layers' boundaries (`scripts/check-layers.sh`). Arena: include order, `layout.h` only in `arena.c`/`layout.c`, outside `arena/` only `arena/nocopy_arena.h` and no `ar_` name. Values: no module state (`nocopy_php.h`, `NOCOPY_G`) in the value units, `nocopy_value_int.h` only in them, no allocator or user-code call in `nocopy_write.c` | host |
+| `./dev layers` | the layers' boundaries (`scripts/check-layers.sh`). Arena: include order, `layout.h` only in `arena.c`/`layout.c`, outside `arena/` only `arena/nocopy_arena.h` and no `ar_` name. Values: no module state (`nocopy_php.h`, `NOCOPY_G`) in the value units, `nocopy_value_int.h` only in them, no allocator or user-code call in `nocopy_write.c`. Above: no module state in `nocopy_kept.c|h`, no `nocopy_value_int.h` name outside the value units, no arena data operation in `nocopy.c` (in `nocopy_valkey.c` only `nocopy_clear`), Valkey only through `nocopy_valkey.h` (`nocopy.c`, `nocopy_php.h`), `*_local`/`nocopy_store_each` only in the store and the tier | host |
 | `./dev ci` | `layers tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony apcu`, stops at the first failure | |
 
 ## Benchmarks
