@@ -363,9 +363,15 @@ static bool graph_build(nocopy_env *env, zval *rv, const nc_graph *g, zend_class
 			}
 		}
 	} else {
+		const nc_class *c = graph_cls(g);
 		for (uint32_t i = 0; i < made; i++) { /* never constructed: no destructor */
 			if (!(objs[i]->ce->ce_flags & ZEND_ACC_ENUM)) {
 				GC_ADD_FLAGS(objs[i], IS_OBJ_DESTRUCTOR_CALLED);
+			}
+			if (kind_slots(fp_kind(c[graph_obj(g, i)->cls].fp))) { /* zend_objects_new left its slots unset: freeing reads them */
+				for (int k = 0; k < objs[i]->ce->default_properties_count; k++) {
+					ZVAL_UNDEF(&objs[i]->properties_table[k]);
+				}
 			}
 		}
 	}
