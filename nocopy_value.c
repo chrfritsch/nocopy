@@ -13,10 +13,10 @@ bool nocopy_use_igbinary;
 nocopy_igb_ser_fn nocopy_igb_ser;
 nocopy_igb_unser_fn nocopy_igb_unser;
 
-/* Values that start a value of their own in the key table: strings stored alone bypass it. */
+/* Values that start a value of their own in the key table (also a reference to one): scalars and strings stored alone bypass it. */
 static zend_always_inline void keys_reset_for(nocopy_keys *t, const zval *v)
 {
-	if (Z_TYPE_P(v) == IS_ARRAY || Z_TYPE_P(v) == IS_OBJECT) {
+	if (Z_TYPE_P(v) > IS_STRING) {
 		keys_reset(t);
 	}
 }

@@ -96,13 +96,17 @@ static uint64_t class_fp_compute(zend_class_entry *ce)
 	smart_str_append(&b, ce->name);
 	smart_str_append_long(&b, kind);
 	smart_str_append_long(&b, ce->default_properties_count);
+	if (kind_slots(kind) && ce->default_properties_count && !ce->properties_info_table) {
+		smart_str_free(&b);
+		return 0;
+	}
 	for (int i = 0; kind_slots(kind) && i < ce->default_properties_count; i++) {
-		zend_property_info *pi = ce->properties_info_table ? ce->properties_info_table[i] : NULL;
-		if (!pi) {
-			smart_str_free(&b);
-			return 0;
-		}
+		zend_property_info *pi = ce->properties_info_table[i];
 		smart_str_appendc(&b, 0);
+		if (!pi) { /* a hole: an inherited property redeclared moves to the parent's slot, its own stays UNDEF */
+			smart_str_appendc(&b, 1);
+			continue;
+		}
 		smart_str_append(&b, pi->name);
 		smart_str_append_long(&b, pi->flags & (ZEND_ACC_PPP_MASK | ZEND_ACC_PPP_SET_MASK | ZEND_ACC_READONLY));
 		if (ZEND_TYPE_IS_SET(pi->type)) {

@@ -259,6 +259,8 @@ stored as its value, like `serialize()` (except when that value is an object met
 store 125 -> 24 µs; 3 keys, one shared: fetch 125 / 116 -> 77 / 42 ns. Price: graphs without shared refs fetch 1-3% slower
 (`prof.php`, best of 16 interleaved: get_prods 3647 -> 3773 ns, get_obj 100 -> 103 ns, get_json, get_ords within noise),
 stores within noise; the type sources first sat in the slot loop (get_prods -6%), now a pass of their own.
+**Classes with slot holes are graph nodes** (were: the whole value serialized): a class that redeclares an inherited property gets the parent's slot for it, and PHP leaves its own slot UNDEF with no property info. The fingerprint records the hole; the slot persists as UNDEF (or, unnamed by `__sleep`, the class default, UNDEF too). Drupal 11's `FieldConfig` and `ConfigEntityType` have one, so 7 of the 6,477 database cache rows above (`cache_discovery`: `entity_type`, `entity_type_definitions.installed`, `entity_bundle_field_definitions:*`) were serialized; now none is, all read back identical (`bench/drupal/rows.php`). Copy-mode fetch, best of 5: `entity_type` 120 -> 11.5 µs, `entity_bundle_field_definitions:node:article:en` 10.1 -> 0.9 µs; the 7 rows take 60 KB more (38.37 -> 38.43 MB). Test 087.
+
 **`__sleep` classes are graph nodes** (were: the whole value serialized): `__sleep` runs before the last sizing pass, its names are found as `serialize()`
 finds them (as given, private to the class, protected) and kept as a slot mask plus the named dynamic properties; the other slots are
 `NC_DEFAULT` and get the class default on fetch, as `unserialize()` leaves them. Anything `serialize()` would warn about (not an array,
