@@ -83,7 +83,9 @@ then freed unused). Copy mode is what long-running workers use, so this is their
 key table finds the first copy by arena pointer, as for keys). Cold copies (`local_size=0`, scratch A/B, best of 7): 1k rows with
 4 repeated strings each 78.0 -> 69.7 µs (+12%), 10 such rows 764 -> 742 ns, 100 objects with 2 repeated strings 4.81 -> 4.29 µs
 (+12%); 1k rows of unique strings -0.6% (HEAD against itself ±0.6%). Asking the table for every string (no mark) cost unique rows
--5%, marking 1-char strings too -2.5%. `./dev ab HEAD 5 read write`: within noise (kept copies and zero-copy never copy out).
+-5%, marking 1-char strings too -2.5%. `./dev ab HEAD 5 read write`: within noise (kept copies and zero-copy never copy out). A merge move keeps
+their hash (other moved strings get 0, as a reader may be hashing the old copy): it was set before writing, so no reader writes it,
+and the table finds them by it; zeroed, every moved one landed in slot 0 and its uses got a copy each again.
 
 **Copy-out of `""` and 1-char strings uses PHP's interned ones** (`ZVAL_STRINGL_FAST`): no allocation. A cold copy of
 `bench/run.php`'s 1k rows (two 1-char strings each, `local_size=0`) 69 -> 59 µs.
@@ -112,6 +114,14 @@ as it stays cached.
 Hit ratio at equal `shm_size` (`ROWS_ONLY=1 CONFIGS=stock REPLAY="16M 24M 32M"`, `bench/drupal/replay.php`: those 6,477 rows read through, HEAD vs this; the half's reserve is part of it): Zipf 0.99 16M 79.7 -> 81.8%, 24M 86.3 -> 88.8%, 32M 91.9 -> 94.6% (a third fewer misses); rows in a loop 24M 2.0 -> 18.3%, 32M 40.1 -> 57.5%; failed puts at 16M 164 -> 40.
 Admitted on the second sighting (a doorkeeper of tags), so a string met once never takes room; the write that admits it already uses it. The area is two halves of `shm_size / 128` (0.29 MB covers the 46 MB above), each one generation; a full half's successor takes the other half only once no segment's entries and no writer in progress use it ([architecture](architecture.md#atoms-strings-shared-across-entries)).
 Built along the way, measured and dropped: an area that is never reset (fills with strings nobody uses and stays full for the arena's life); freeing it in `nocopy_clear`, as first planned (zero-copy readers keep atom pointers past a clear, as do writers between sizing and commit: test 086 reads overwritten strings without the reference check); a probe of the shared table per string occurrence (store array 10 rows -37%; the value's own table first: -16%); persisting probing again and agreeing with sizing through a published-bytes watermark (sizing now records its answers in walk order and persisting replays them: -10 -> -5%, and the admitting write can use its new atom: 785 rows 9.88 -> 9.72 MB); the record list's inline buffer in the zero-initialized `sizing` (store int -20%). Not built: class names as atoms, 152 KB per entry vs 60 KB once over the 785 rows (under 1% of the arena; persisting walks classes in another order than sizing, so it needs its own mechanism).
+
+**Planning decides, writing replays (the tape).** Sizing and persisting used to agree because both walks took the same decisions
+(the string table probed twice, the object and reference maps probed again while persisting; only atoms were recorded and replayed).
+Now planning records every decision in walk order (a deduped string's index and whether it comes first, an object's index, a shared
+reference's index or "held once") and writing looks nothing up: it cannot disagree with the size, and it allocates nothing (class
+lowercase names are made while planning; before, `zend_string_tolower` ran under the shard lock for graph blocks up to 2 KB).
+`./dev ab main 7`, copy / zero: store array 10 rows -1.9 / -2.2%, 1k rows -2.7 / -2.0%, 1k rows unserialized keys -2.3 / -3.2% (a tape
+entry per string); store object +10.8 / +8.7% and fetch object (zero) +5.5% (no map probes while writing); other stores and fetches within ±3%.
 
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
 round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
@@ -232,7 +242,7 @@ Symfony's own where the process does not share nocopy. `./dev sfbench`, `validat
 (Symfony's `ApcuAdapter::isSupported()` and Composer check them). `bench/run.php` measures `nocopy_*` directly by
 re-running itself with `apcu_*` rewritten (fetch int 11.7 ns zero-copy, without the polyfill's extra call).
 
-**Plain objects are stored as their property slots** (`ENTRY_GRAPH`), not serialized: a fetch resolves each class once,
+**Plain objects are stored as their property slots** (`NOCOPY_FMT_GRAPH`), not serialized: a fetch resolves each class once,
 checks a fingerprint of its slot layout (names, visibility, readonly, types), creates the objects without a constructor and
 copies the slots in. Strings and arrays in them stay zero-copy, and so do object-free arrays next to them (one object no longer
 serializes the whole value). `bench/objects.php` (8.5, `Product` objects with 6 properties and a shared `Category`), zero-copy /
@@ -253,6 +263,10 @@ extension writing a table in place would corrupt the cache. `bench/objects.php`,
 lazy, closures) serialize the whole value, as in APCu, with no `$serialize` flag on writes: with the flag, every caller
 in the repo (polyfill, Drupal, Symfony) passed `true`, and without it shared references were silently flattened into copies.
 A changed class (other fingerprint) or one that can't be loaded is a miss, not an incomplete object.
+**Fingerprints include parents and interfaces.** A slot is not type-checked when a graph is rebuilt (`unserialize()` checks it); the
+fingerprints stand for that. With only the class's own name and slots, a `Bar` that stopped extending `Foo` but kept its slots still
+matched and landed in a `?Foo` property (test 089). Cached per request, as before: no change in `ab`.
+
 **Shared references are graph nodes too** (were: the whole value serialized): a reference met more than once is `NC_RREF`, its value in
 the graph's `refs`, rebuilt as one `zend_reference` per fetch (typed slots holding it become its type sources); one met once is
 stored as its value, like `serialize()` (except when that value is an object met elsewhere: `serialize()` writes `R:`, so after `unserialize()` both slots are references; nocopy leaves them as they were). 1k rows + one shared ref, copy (`local_size=0`) / zero: fetch 124 / 113 µs -> 32 µs / 42 ns,
@@ -308,7 +322,17 @@ polyfill (strace, 2,000 nodes). Median of 3 interleaved runs, nocopy-all: logged
 
 ## Build
 
-**One translation unit for the PHP layers.** `nocopy.c` includes `nocopy_value.c`, `nocopy_graph.c` and `nocopy_store.c`, which still compile alone (tidy).
+**The value layer by phase, without module state.** `nocopy_plan.c` (may allocate, runs hooks), `nocopy_write.c` (under the shard lock: `./dev layers`
+rejects allocator and user-code calls there), `nocopy_read.c`, `nocopy_class.c`, `nocopy_serial.c`, entry points in `nocopy_value.c`; the store passes a
+`nocopy_env` instead of the value units reading `NOCOPY_G`. The value layer still calls `nocopy_put_begin`/`commit` itself: handing that to the store
+needs either a sink of callbacks (two indirect calls on a ~27 ns store) or the planning state in the public header. Not a directory like `arena/`:
+it needs PHP, so it cannot be built or tested alone. Measured on the way (`./dev ab main 7`, copy / zero): with the root's planning out of line
+(a call per store) the failing add was -8.1 / -6.9% in three runs; forcing `encode` inline while that call remained, store int -6.3 / -6.2% and
+string -10.2 / -7.3%; the root planned inline (scalars and a lone string in the header) and `encode` inline: store int +2.5 / +1.9%, failing add -1.2 / -4.7%.
+A zero-copy scalar fetch through the mode dispatch was -5% (`ab` best of 9: fetch int, `exists`, parallel fetch int x1-x8 -4.5 to -5.7%):
+`nocopy_value_scalar` first, as the old read path did, brings them to within ±2% (parallel +0.4 to +2.6%).
+
+**One translation unit for the PHP layers.** `nocopy.c` includes the value units (phases first, entry points last), `nocopy_kept.c` and `nocopy_store.c`, which still compile alone (tidy).
 Splitting objects out of `nocopy_value.c` (shared through `nocopy_value_int.h`, the object and reference walkers kept `noinline`) cost nothing:
 `ab.sh write`, best of 7, copy / zero: all within ±2.5% (store object -1.9 / -2.5%, store+delete int, untouched, -2.0 / -2.2%); `bench/objects.php`, best of 5: 100 objects +2.9 / +5.9%, one object -2.2 / 0%.
 Built as three, `nocopy_*` stopped inlining the store: fetch miss -5%, failing add -6%; as one, `ab.sh` read/write within noise.

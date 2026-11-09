@@ -1,4 +1,4 @@
-/* nocopy: the store API (nocopy_php.h) over the arena: copy mode's private copies, writes, reads, single-flight. */
+/* nocopy: the store API (nocopy_php.h) over the arena: writes, reads (copy mode's through nocopy_kept.h), single-flight. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -20,32 +20,13 @@ bool nocopy_tracked(void)
 	return true;
 }
 
-/* ---- copy mode ---- */
-
-/* Copy mode: from the kept template if this version has one; a second sighting keeps one. */
-static bool graph_copy_fetch(const nocopy_entry *e, const zval *v, zval *rv)
-{
-	const zval *k;
-	nocopy_kept *w = nocopy_kept_get_graph(e, &k);
-	if (k) {
-		return nocopy_graph_tpl_out(rv, Z_PTR_P(k));
-	}
-	void *t = w ? nocopy_graph_tpl(e) : NULL;
-	if (t) {
-		zval z;
-		ZVAL_PTR(&z, t);
-		nocopy_kept_put(w, e, &z);
-		return nocopy_graph_tpl_out(rv, t);
-	}
-	return nocopy_graph_out(rv, v, true);
-}
-
 /* ---- writes ---- */
 
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
-	nocopy_put p;
-	return nocopy_build(&p, key, val, o->ttl, o->expires, user, o->add_only);
+	nocopy_put_req q = {.h = zend_string_hash_val(key), .key = ZSTR_VAL(key), .klen = (uint32_t) ZSTR_LEN(key),
+		.ttl = (time_t) o->ttl, .expires = o->expires, .user = user};
+	return nocopy_value_put(&NOCOPY_G(env), &NOCOPY_G(ctx), &q, val, o->add_only);
 }
 
 /* user: the compute time (ms). */
@@ -97,19 +78,12 @@ void nocopy_clear_all(void)
 	nocopy_clear();
 }
 
-/* e's integer, changed in place under the shard lock (lock-free readers copy the word), or NULL: not an integer. */
-static zval *entry_long(nocopy_entry *e)
-{
-	zval *v = entry_val(e);
-	return Z_TYPE_P(v) == IS_LONG && !(nocopy_entry_flags(e) & ENTRY_SERIALIZED) ? v : NULL;
-}
-
 typedef struct { zend_long a, b; } long_op; /* add: delta, result; cas: old, new */
 
 static int add_fn(nocopy_entry *e, void *arg)
 {
 	long_op *o = arg;
-	zval *v = entry_long(e);
+	zval *v = nocopy_value_long(e); /* changed in place under the shard lock: lock-free readers copy the word */
 	if (!v) {
 		return 0;
 	}
@@ -120,7 +94,7 @@ static int add_fn(nocopy_entry *e, void *arg)
 static int cas_fn(nocopy_entry *e, void *arg)
 {
 	long_op *o = arg;
-	zval *v = entry_long(e);
+	zval *v = nocopy_value_long(e);
 	if (!v || Z_LVAL_P(v) != o->a) {
 		return 0;
 	}
@@ -174,38 +148,18 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	bool hit = e != NULL;
 	ZVAL_NULL(rv);
 	if (e) {
-		zval *v = entry_val(e);
 		if (exp) {
 			*exp = nocopy_entry_expires(e);
 			*delta = nocopy_entry_user(e);
 		}
-		if (UNEXPECTED(nocopy_entry_flags(e) & (ENTRY_SERIALIZED | ENTRY_GRAPH))) {
-			if (nocopy_entry_flags(e) & ENTRY_SERIALIZED) {
-				hit = nocopy_unserialize(rv, Z_STRVAL_P(v), Z_STRLEN_P(v), nocopy_entry_flags(e));
-			} else if (copy) {
-				hit = graph_copy_fetch(e, v, rv);
-			} else {
-				hit = nocopy_graph_out(rv, v, false);
-				if (UNEXPECTED(nocopy_keep(c, e))) {
-					NOCOPY_G(zero_copy) = false; /* until the request ends */
-				}
-			}
-		} else if (Z_TYPE_P(v) < IS_STRING) {
-			ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy out or pin */
+		if (nocopy_value_scalar(e, rv)) {
+			/* hit */
 		} else if (copy) {
-			const zval *k;
-			nocopy_kept *w = nocopy_kept_get(e, v, &k);
-			if (k) {
-				ZVAL_COPY(rv, k);
-			} else {
-				nocopy_copy_out(rv, v);
-				if (w) {
-					nocopy_kept_put(w, e, rv);
-				}
-			}
+			hit = nocopy_kept_read(e, rv);
 		} else {
-			ZVAL_COPY_VALUE(rv, v);
-			if (UNEXPECTED(nocopy_keep(c, e))) { /* a pointer into the arena escaped: stay pinned until the request ends */
+			int r = nocopy_value_read(&NOCOPY_G(env), e, false, rv);
+			hit = r & NOCOPY_HIT;
+			if ((r & NOCOPY_BORROWED) && UNEXPECTED(nocopy_keep(c, e))) { /* a pointer into the arena escaped: stay pinned until the request ends */
 				NOCOPY_G(zero_copy) = false; /* until the request ends */
 			}
 		}
@@ -382,8 +336,8 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 
 static nocopy_status na_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
-	(void) user;
-	return nocopy_build(NULL, key, val, o->ttl, 0, 0, false); /* the checks only: the caller's errors still throw */
+	(void) key, (void) o, (void) user;
+	return nocopy_value_check(&NOCOPY_G(env), val) ? NOCOPY_NO_ROOM : NOCOPY_REFUSED; /* the checks only: the caller's errors still throw */
 }
 static bool na_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { (void) key, (void) exp, (void) delta; ZVAL_NULL(rv); return false; }
 static void na_fetch_multi(HashTable *keys, HashTable *out) { (void) keys, (void) out; }

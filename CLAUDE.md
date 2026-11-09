@@ -17,7 +17,7 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 
 ## Layout
 
-- `nocopy_value.c` PHP values in/out of arena blocks, `nocopy_graph.c` objects in them (interface `nocopy_value.h`, internals shared in `nocopy_value_int.h`), `nocopy_store.c` the store API over the arena, `nocopy_kept.c|h` copy mode's kept copies (`nocopy_php.h`: module globals, store API, Valkey seam), `nocopy.c` `nocopy_*` + module; `arena/` the shared-memory arena (plain C, tested alone by `tests/c/`): public API `arena/nocopy_arena.h` only, `ar_*` modules inside, layers checked by `./dev layers`
+- Value layer (interface `nocopy_value.h`, internals `nocopy_value_int.h`, no module state): `nocopy_value.c` entry points, `nocopy_plan.c` sizing + hooks, `nocopy_write.c` persisting + rebase (under the shard lock: no allocation), `nocopy_read.c` copies + graphs out, `nocopy_class.c` fingerprints, `nocopy_serial.c`; `nocopy_store.c` the store API over the arena, `nocopy_kept.c|h` copy mode's reads and kept copies (`nocopy_php.h`: module globals, store API, Valkey seam), `nocopy.c` `nocopy_*` + module; `arena/` the shared-memory arena (plain C, tested alone by `tests/c/`): public API `arena/nocopy_arena.h` only, `ar_*` modules inside, layers checked by `./dev layers`
 - `nocopy_valkey.c` Valkey tier, reached only via the `nocopy_detour` table (`nocopy_php.h`) (connections: vendored libvalkey in `third_party/`, updated only with `scripts/vendor-libvalkey.sh <tag>`); compiled out with `--disable-nocopy-valkey`
 - `nocopy.stub.php` -> `nocopy_arginfo.h` (`./dev stub` after API changes)
 - `tests/*.phpt` suite (05x need Valkey, skip without); `docker/` images + in-container scripts; `bench/` benchmarks

@@ -916,7 +916,8 @@ static void vk_forget(zend_string *key)
 static time_t vk_expires(zend_long ttl) { return nocopy_expiry(nocopy_now(), ttl); }
 static int64_t vk_pxat(time_t expires) { return expires ? ((int64_t) expires + 1) * 1000 : 0; }
 
-#define VK_HDR 14 /* 0x00, flags (ENTRY_IGBINARY), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
+#define VK_HDR 14 /* 0x00, flags (VK_IGB), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
+#define VK_IGB 2  /* the value is igbinary's (a wire format: Valkey may hold values older builds wrote) */
 
 static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 {
@@ -924,15 +925,15 @@ static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 		return zend_long_to_str(Z_LVAL_P(val));
 	}
 	zval ser;
-	bool igb;
-	if (!nocopy_serialize(val, &ser, &igb)) {
+	nocopy_fmt fmt;
+	if (!nocopy_serialize(val, &ser, &fmt)) {
 		return NULL;
 	}
 	zend_string *s = zend_string_alloc(VK_HDR + Z_STRLEN(ser), 0);
 	char *b = ZSTR_VAL(s);
 	int64_t x = expires;
 	b[0] = 0;
-	b[1] = igb ? ENTRY_IGBINARY : 0;
+	b[1] = fmt == NOCOPY_FMT_IGB ? VK_IGB : 0;
 	memcpy(b + 2, &x, 8);
 	memcpy(b + 10, &user, 4);
 	memcpy(b + VK_HDR, Z_STRVAL(ser), Z_STRLEN(ser) + 1);
@@ -965,7 +966,7 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 	if (x && x < nocopy_now()) {
 		return false;
 	}
-	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, ENTRY_SERIALIZED | (uint8_t) b[1]);
+	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[1] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
 }
 
 /* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */

@@ -15,19 +15,19 @@
 #include "zend_closures.h"
 #include "nocopy_arginfo.h"
 #include <pthread.h>
-#include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
-#ifndef RTLD_DEFAULT
-# define RTLD_DEFAULT ((void *) 0)
-#endif
 
 /* One translation unit, so nocopy_* inlines the store and value layers (split: miss -5%, failing add -6%); each also compiles alone. */
-#include "nocopy_value.c" /* NOLINT(bugprone-suspicious-include) */
-#include "nocopy_graph.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_class.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_serial.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_plan.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_write.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_read.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_value.c" /* NOLINT(bugprone-suspicious-include) */ /* last: the phases defined before the entry points call them */
 #include "nocopy_kept.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_store.c" /* NOLINT(bugprone-suspicious-include) */
 
@@ -39,6 +39,7 @@ static char *shm_name; /* nocopy.shm_name: required, the arena every process att
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_attached() false: unavailable) */
 static bool sapi_zero_copy;
 static bool open_deferred; /* fpm master as root: each worker opens the arena on its first request */
+static bool want_igbinary; /* nocopy.serializer=igbinary: in effect if igbinary is loaded (MINIT) */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
 /* ---- nocopy_* ---- */
@@ -456,8 +457,8 @@ static ZEND_INI_MH(OnHint)
 
 static ZEND_INI_MH(OnSerializer)
 {
-	nocopy_use_igbinary = zend_string_equals_literal_ci(new_value, "igbinary");
-	if (!nocopy_use_igbinary && !zend_string_equals_literal_ci(new_value, "php") && !zend_string_equals_literal_ci(new_value, "default")) {
+	want_igbinary = zend_string_equals_literal_ci(new_value, "igbinary");
+	if (!want_igbinary && !zend_string_equals_literal_ci(new_value, "php") && !zend_string_equals_literal_ci(new_value, "default")) {
 		php_error_docref(NULL, E_CORE_WARNING, "nocopy: unknown nocopy.serializer \"%s\", using php", ZSTR_VAL(new_value));
 	}
 	return SUCCESS;
@@ -501,20 +502,14 @@ static void ini_put(const char *name, zend_string *value, bool apply)
 	}
 }
 
-/* igbinary's C API, found at runtime: no build dependency. ini_get() then shows the serializer in effect. */
+/* ini_get() then shows the serializer in effect. */
 static void resolve_serializer(void)
 {
-	if (nocopy_use_igbinary) {
-		zend_module_entry *m = zend_hash_str_find_ptr(&module_registry, ZEND_STRL("igbinary"));
-		void *h = m && m->handle ? m->handle : RTLD_DEFAULT;
-		nocopy_igb_ser = m ? (nocopy_igb_ser_fn) DL_FETCH_SYMBOL(h, "igbinary_serialize") : NULL;
-		nocopy_igb_unser = m ? (nocopy_igb_unser_fn) DL_FETCH_SYMBOL(h, "igbinary_unserialize") : NULL;
-		if (!nocopy_igb_ser || !nocopy_igb_unser) {
-			php_error_docref(NULL, E_CORE_WARNING, "nocopy: igbinary is not loaded, using nocopy.serializer=php");
-			nocopy_use_igbinary = false;
-		}
+	bool igb = nocopy_serial_setup(want_igbinary);
+	if (want_igbinary && !igb) {
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: igbinary is not loaded, using nocopy.serializer=php");
 	}
-	zend_string *v = zend_string_init(nocopy_use_igbinary ? "igbinary" : "php", nocopy_use_igbinary ? 8 : 3, 1);
+	zend_string *v = zend_string_init(igb ? "igbinary" : "php", igb ? 8 : 3, 1);
 	ini_put("nocopy.serializer", v, false);
 	zend_string_release_ex(v, 1);
 }
@@ -534,8 +529,7 @@ static PHP_GINIT_FUNCTION(nocopy)
 #endif
 	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
 	nocopy_ctx_init(&nocopy_globals->ctx);
-	nocopy_globals->keys.slot = pecalloc(NOCOPY_KEYS, sizeof(nocopy_kslot), 1);
-	nocopy_classes_init(&nocopy_globals->classes, &nocopy_globals->zones);
+	nocopy_env_init(&nocopy_globals->env);
 }
 
 /* A thread ending (ZTS) gives its worker slot back. */
@@ -544,7 +538,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 	if (nocopy_attached()) {
 		nocopy_release(&nocopy_globals->ctx);
 	}
-	pefree(nocopy_globals->keys.slot, 1);
+	nocopy_env_free(&nocopy_globals->env);
 	nocopy_vk_close(&nocopy_globals->vk);
 }
 
@@ -555,7 +549,7 @@ static void arena_open(bool late)
 	nocopy_named named;
 	char msg[512] = "";
 	if (shm_name) {
-		const nocopy_config cfg = {.name = shm_name, .size = arena_size, .hint = ini_hint > 0 ? (uint64_t) ini_hint : 0, .abi = layout_id(), .rebase = nocopy_rebase};
+		const nocopy_config cfg = {.name = shm_name, .size = arena_size, .hint = ini_hint > 0 ? (uint64_t) ini_hint : 0, .abi = layout_id(), .rebase = nocopy_value_rebase};
 		err = nocopy_arena_open(&cfg, &named);
 	}
 	if (!shm_name) {
@@ -579,7 +573,7 @@ static void arena_open(bool late)
 		}
 	}
 	if (nocopy_attached()) {
-		nocopy_value_minit();
+		nocopy_value_attach(&NOCOPY_SHARED->value);
 	}
 }
 
@@ -666,7 +660,7 @@ static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(nocopy)
 {
 	nocopy_leases_drop();
 	nocopy_request_end(&NOCOPY_G(ctx));
-	nocopy_classes_clear();
+	nocopy_env_request_end(&NOCOPY_G(env));
 	return SUCCESS;
 }
 

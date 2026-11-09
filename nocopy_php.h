@@ -12,8 +12,7 @@
 /* ---- the arena header's user area: the same address in every process that maps it ---- */
 
 typedef struct {
-	zend_array empty;	   /* every entry's empty array (unlike zend_empty_array, at one address everywhere) */
-	uint32_t empty_hash[2];
+	nocopy_value_shared value; /* the value layer's: every entry's empty array */
 	uint64_t inval_gen __attribute__((aligned(64))); /* Valkey: bumped before invalidations are applied (fill guard) */
 	int64_t vk_beat;  /* Valkey listener: CLOCK_MONOTONIC ms of its last sign of life, 0 never started */
 	uint32_t vk_pid;  /* its pid */
@@ -40,14 +39,12 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	bool zero_copy; /* this request may be handed pointers into the arena */
 	zend_ulong leases[8]; /* key hashes leased: dropped at request end if a callback bailed out */
 	int nleases;
-	nocopy_keys keys;
+	nocopy_env env; /* the value layer's */
 	nocopy_kept *kept; /* copy mode's kept copies (nocopy_kept.c): request memory, NULL until the first copy-mode fetch */
 	size_t kept_bytes;
 	uint32_t kept_hand; /* SIEVE hand over kept */
 	bool kept_ok; /* between RINIT and RSHUTDOWN */
 	nocopy_vk vk;
-	HashTable classes; /* class entry -> layout fingerprint (nocopy_graph.c), this request */
-	HashTable zones; /* time zone name -> timelib_tzinfo (ext/date's, freed with it), this request */
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)

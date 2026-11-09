@@ -1,4 +1,4 @@
-/* Copy mode's kept copies: private copies of arena values for the request, by entry version (address + seq). nocopy_kept.c. */
+/* Copy mode's reads and kept copies: private copies of arena values for the request, by entry version (address + seq). nocopy_kept.c. */
 
 #ifndef NOCOPY_KEPT_H
 #define NOCOPY_KEPT_H
@@ -81,6 +81,49 @@ static zend_always_inline nocopy_kept *nocopy_kept_get(const nocopy_entry *e, co
 static zend_always_inline nocopy_kept *nocopy_kept_get_graph(const nocopy_entry *e, const zval **hit)
 {
 	return nocopy_kept_admit(NOCOPY_G(kept_ok) && nocopy_entry_size(e) <= nocopy_kept_size ? nocopy_kept_way(e) : NULL, e, hit);
+}
+
+/* A graph: from the kept template if this version has one; a second sighting keeps one (IS_PTR). */
+static inline bool nocopy_kept_graph(const nocopy_entry *e, zval *rv)
+{
+	nocopy_env *env = &NOCOPY_G(env);
+	const zval *k;
+	nocopy_kept *w = nocopy_kept_get_graph(e, &k);
+	if (k) {
+		return nocopy_tpl_read(env, Z_PTR_P(k), rv);
+	}
+	nocopy_tpl *t = w ? nocopy_tpl_make(env, e) : NULL;
+	if (t) {
+		zval z;
+		ZVAL_PTR(&z, t);
+		nocopy_kept_put(w, e, &z);
+		return nocopy_tpl_read(env, t, rv);
+	}
+	return nocopy_value_read(env, e, true, rv) & NOCOPY_HIT;
+}
+
+/* Copy mode's read: e's kept copy, else a private copy (kept on its second sighting). */
+static zend_always_inline bool nocopy_kept_read(const nocopy_entry *e, zval *rv)
+{
+	const zval *v = nocopy_value_zval(e);
+	if (UNEXPECTED(nocopy_value_fmt(e) != NOCOPY_FMT_PLAIN)) {
+		return nocopy_value_fmt(e) == NOCOPY_FMT_GRAPH ? nocopy_kept_graph(e, rv) : nocopy_value_read(&NOCOPY_G(env), e, true, rv) & NOCOPY_HIT;
+	}
+	if (Z_TYPE_P(v) < IS_STRING) {
+		ZVAL_COPY_VALUE(rv, v); /* a scalar: nothing to copy */
+		return true;
+	}
+	const zval *k;
+	nocopy_kept *w = nocopy_kept_get(e, v, &k);
+	if (k) {
+		ZVAL_COPY(rv, k);
+		return true;
+	}
+	nocopy_value_copy(&NOCOPY_G(env), rv, v);
+	if (w) {
+		nocopy_kept_put(w, e, rv);
+	}
+	return true;
 }
 
 #endif

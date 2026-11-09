@@ -1,6 +1,6 @@
 #!/bin/sh
-# The arena's boundaries (docs/explanation/architecture.md, Layers): headers include only lower layers; only arena.c and layout.c
-# know the layout; outside arena/ only arena/nocopy_arena.h is included and no ar_/AR_ name is used.
+# The layers' boundaries (docs/explanation/architecture.md, Layers). Arena: headers include only lower layers; only arena.c and layout.c
+# know the layout; outside arena/ only arena/nocopy_arena.h is included and no ar_/AR_ name is used. Values: see below.
 cd "$(dirname "$0")/.." || exit 2
 rank() {
 	case $1 in
@@ -31,5 +31,16 @@ for f in arena/*.c; do
 done
 grep -nE '#include "arena/' -- *.c *.h | grep -v '"arena/nocopy_arena.h"' | while read -r l; do echo "check-layers: $l: include arena/nocopy_arena.h only"; done | grep . && bad=1
 grep -nE '\b(ar|AR)_[A-Za-z]' -- *.c *.h | sed 's/^/check-layers: internal name: /' | grep . && bad=1
+# The value layer (nocopy_value.h): no module state; nocopy_value_int.h is its own; writing runs under a shard lock.
+value="nocopy_value.c nocopy_plan.c nocopy_write.c nocopy_read.c nocopy_class.c nocopy_serial.c nocopy_value.h nocopy_value_int.h"
+for f in $value; do
+	grep -nE '#include "nocopy_(php|kept)\.h"|\bNOCOPY_(G|SHARED)\b' "$f" | sed "s|^|check-layers: $f: module state in the value layer: |" | grep . && bad=1
+done
+for f in *.c *.h; do
+	case " $value " in *" $f "*) continue ;; esac
+	grep -q '#include "nocopy_value_int.h"' "$f" && no "$f includes nocopy_value_int.h: use nocopy_value.h"
+done
+grep -nE '\b(e|pe|safe_e)(m|c|re)alloc|\b(p?efree|estrdup|zend_string_(init|alloc|tolower|concat|dup|release)|smart_str_[a-z]+|zend_new_array|array_init|zend_hash_(add|update|index_add|index_update|str_add|str_update|next_index_insert|init|copy|destroy|extend|rehash)[a-z_]*|zend_call_[a-z_]+|nc_call_magic|zend_throw_[a-z_]+|php_error_docref|zend_error|zval_ptr_dtor|OBJ_RELEASE|object_init_ex|zend_lookup_class|ZVAL_STRINGL?)\b' nocopy_write.c \
+	| sed 's/^/check-layers: nocopy_write.c runs under a shard lock (no allocation, no user code): /' | grep . && bad=1
 [ $bad = 0 ] && echo "check-layers: ok"
 exit $bad

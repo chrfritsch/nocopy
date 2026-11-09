@@ -38,7 +38,7 @@ function scalar(): mixed
         case 5: return '';
         case 6: return chr(r(256));
         case 7: return ['a', 'b', 'key', 'id', 'name', '0', '1', '-1', '01', '9223372036854775808'][r(10)];
-        case 8: return str_repeat('x', r(80)); // around NOCOPY_VSTR_MAX: deduped or not
+        case 8: return str_repeat('x', r(80)); // around NC_VSTR_MAX: deduped or not
         case 9: return implode(array_map(fn() => chr(r(256)), range(0, r(40))));
         case 10: return str_repeat('long', 50 + r(500));
         case 11: return 'v' . r(20);

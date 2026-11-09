@@ -12,7 +12,7 @@ size_t nocopy_kept_size = 8 * 1024 * 1024;
 static void val_free(zval *v)
 {
 	if (Z_TYPE_P(v) == IS_PTR) {
-		nocopy_graph_tpl_free(Z_PTR_P(v));
+		nocopy_tpl_free(Z_PTR_P(v));
 	} else {
 		zval_ptr_dtor(v);
 	}
