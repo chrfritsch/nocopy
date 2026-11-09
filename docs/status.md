@@ -49,10 +49,12 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 3. **Eviction tuning:** large arenas done: segments stop at 4 MB, so an eviction round stalls a shard's writers no longer at 4G than at 1G ([design decisions](explanation/design-decisions.md#eviction)). Also victim choice is done (oldest + 3 least read of the 32 oldest, GL-Cache-inspired; see
    [Design decisions](explanation/design-decisions.md#eviction)). Open: when truly full, merge still copies data about to
    expire; skipping it needs a TTL workload in `bench/hitratio.php` first. 20% overwrites lost 0.9 points at 4M.
-4. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).
+4. **Arena size: strings shared across entries.** Up to 64 bytes, in a fixed append-only area: ~20% of a warmed Drupal's arena for 0.3 MB, hits unchanged
+   ([design decisions](explanation/design-decisions.md#writes)). Compression came after it: LZ4/zstd on entries cost every hit, on Valkey payloads pay only when Valkey is short of memory or bandwidth.
+5. **Memory balance:** shards share a segment pool (done, see [Design decisions](explanation/design-decisions.md#memory-balance)).
    Open: a shard without writes expires only under memory pressure (soak: entries and `used` stay frozen, harmless since the memory is reserved up front); RSS drifts to `nocopy.shm_size`. Steering segments
    by `ghost_hits` (Cliffhanger, CacheLib's MarginalHits) instead of an even share: only with a workload that needs it.
-5. **Valkey:** Cluster (libvalkey's `cluster.c`, vendored next to the rest), Sentinel, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
+6. **Valkey:** Cluster (libvalkey's `cluster.c`, vendored next to the rest), Sentinel, TLS over unix sockets, CRL/OCSP, a `tls_server_name` override; an optional Valkey module
    to save round trips.
 
 Want to help with one of these? Start with [Your first change](tutorials/first-change.md).
