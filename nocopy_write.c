@@ -323,7 +323,7 @@ static void rebase_zval(void *ctx, zval *z)
 			zend_string *s = moved(r, Z_STR_P(z));
 			if (s != Z_STR_P(z)) {
 				Z_STR_P(z) = s;
-				if (GC_REFCOUNT(s) <= 2) { /* deduped ones were hashed before writing: no reader writes theirs, copy-out finds them by it */
+				if (ZSTR_LEN(s) > NC_VSTR_MAX) { /* shorter ones were hashed before writing: no reader writes theirs, and keys may share them */
 					ZSTR_H(s) = 0; /* readers may have been hashing the old copy while it was copied: rehash on use */
 				}
 			}
@@ -372,7 +372,11 @@ uint8_t nocopy_value_rebase(nocopy_entry *e, const nocopy_entry *from)
 	if (nocopy_value_fmt(e) == NOCOPY_FMT_GRAPH) {
 		rebase_graph(block_val(e), &r);
 	} else {
-		rebase_zval(&r, block_val(e));
+		zval *v = block_val(e);
+		rebase_zval(&r, v);
+		if (Z_TYPE_P(v) == IS_STRING && (uintptr_t) Z_STR_P(v) - (uintptr_t) e < e->size) {
+			ZSTR_H(Z_STR_P(v)) = 0; /* a string alone was stored as it came, maybe unhashed, at any length */
+		}
 	}
 	return r.atoms;
 }

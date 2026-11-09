@@ -118,7 +118,7 @@ a new key whose tag is there starts at `hot = 2` (survives two merges unread; `g
 `hot` is a byte in the entry header, a Morris-style read counter (0-15): the first read sets 1, later reads add 1 with probability 1/2^hot (per-worker xorshift), so a hot key writes its cache line ~log2(reads) times between merges and it stays shared otherwise (exact per-entry hit counters would write on every read).
 Victims that readers pin die but stay allocated until unpinned; the next round moves on.
 Moving an entry is a `memcpy` of its block plus the user's `nocopy_value_rebase(e, from)` (nocopy_write.c): it walks the value (a graph's classes and nodes too) and shifts every pointer that pointed into the old block (arrays' `arData`, bucket keys, strings, nested arrays) by the distance moved; `ARENA_EMPTY` and atoms stay, and the halves of the atoms met are returned for the new segment's bits.
-Moved value strings get `h = 0` (a reader may have been hashing the old copy during the memcpy), except deduped ones (refcount 3): hashed before writing, no reader writes theirs, and copy-out finds them by it. Nothing is re-persisted, so the moved block has the old size by construction.
+Moved value strings longer than 64 bytes, and a string stored alone, get `h = 0` (they are stored unhashed, so a reader may have been hashing the old copy during the memcpy). Shorter ones keep theirs: hashed before writing, no reader writes it, copy-out finds deduped ones by it, and a key may be the same string (zeroed, `extract()` and the other callers of `zend_hash_find_known_hash` missed that key: test 091). Nothing is re-persisted, so the moved block has the old size by construction.
 
 ## Reads (lock-free) and pins
 
@@ -198,7 +198,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 - Never take a second shard lock while holding one, except `nocopy_clear` (all, in index order). `rebalance` drops its own first: `alloc_relocking` may unlock and relock, so nothing before it in a write may rely on shard state.
 - A segment changes shard only through the pool: zeroed, `owner[s] = 0` (release), claimed by CAS. Walk a shard's segments by `own` (`AR_LOG_SEGS`), never by index range.
 - Arena strings are `IS_STR_INTERNED` but never `IS_STR_PERMANENT`: that flag promises process lifetime and PCRE then keeps the pointer as a cache key.
-- Keys and value strings up to 64 bytes inside arrays and objects carry a hash (planning hashes them for the string table). Others are stored with `h` as the source had it, often 0; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
+- Keys and value strings up to 64 bytes inside arrays and objects carry a hash (planning hashes them for the string table) for as long as the entry lives, moves included: PHP looks a key up by its string's hash without computing it (`zend_hash_find_known_hash`). Others are stored with `h` as the source had it, often 0; PHP hashes them on first use as a key and writes `h` into the arena, a benign idempotent race.
 - Never dereference an entry before `ar_pin` + re-check (`-DNOCOPY_POISON`, set by tests/c, fills freed segments with 0x5A to catch this).
 - A live entry is always reachable from exactly one slot; `relocate()` relies on it.
 - Writing decides nothing: every dedupe, atom, object and reference decision comes from the plan's tape, in walk order (`ZEND_ASSERT` at the end of `nc_write`: the block filled exactly, the tape consumed). A write must walk the value exactly as the last planning pass did.
