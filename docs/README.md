@@ -21,5 +21,6 @@ These docs follow [Diátaxis](https://diataxis.fr): pick the column that matches
 | [`./dev` commands](reference/dev-commands.md) | [Architecture and invariants](explanation/architecture.md) (for C changes) |
 | [APCu compatibility](reference/apcu-compatibility.md) | [Correctness audit 2026-11: findings and plan](explanation/audit-2026-11.md) |
 | [Benchmark results](reference/benchmarks.md) | [Design review 2026-11: premises attacked, findings ranked](explanation/design-review-2026-11.md) |
+| | [Rebuilt from the start 2026-11: what would change, what would stay](explanation/rebuild-2026-11.md) |
 
 Project state, what was verified last and what is planned: [Status and roadmap](status.md).
