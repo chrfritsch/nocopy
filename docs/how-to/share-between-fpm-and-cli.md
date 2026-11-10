@@ -59,6 +59,7 @@ must return `host`, and `nocopy_stats()['shm_name']` the same name.
 | `… the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache` | php-fpm still runs an older `nocopy.so`: restart it |
 | `not enough room in /dev/shm (Docker: --shm-size)` | `/dev/shm` smaller than `nocopy.shm_size` |
 | `not a name like /nocopy …` | the name needs one leading slash, at most 40 characters |
-| CLI and web disagree although names match | different containers: they cannot share |
+| `no file descriptor or no free process slot for its liveness lock` | the process is at its fd limit (`ulimit -n`), or 1024 processes have the cache open |
+| CLI and web disagree although names match | different containers: they share only through a common `/dev/shm`, with the same `nocopy.so` and uid |
 
 To share between servers, see [Valkey](valkey.md). Background: [Sharing: by name and through Valkey](../explanation/sharing.md).

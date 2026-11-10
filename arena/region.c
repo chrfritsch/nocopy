@@ -16,7 +16,7 @@
 static int named_fd = -1;
 static char named_name[64];
 static size_t mapped_size; /* not the header's: workers may write it */
-static struct stat named_st; /* the listener's, see ar_region_unhold */
+static struct stat named_st; /* the object's identity, also after ar_region_unhold */
 
 static bool same_file(const struct stat *a, const struct stat *b) { return a->st_dev == b->st_dev && a->st_ino == b->st_ino; }
 
@@ -251,6 +251,7 @@ nocopy_err ar_region_open(const char *base, uint64_t abi, size_t size, void (*in
 		}
 		if (r == OPEN_OK) {
 			memcpy(named_name, out->name, sizeof named_name);
+			(void) fstat(named_fd, &named_st);
 #ifdef __linux__
 			collect(base, out);
 #endif
@@ -263,7 +264,7 @@ nocopy_err ar_region_open(const char *base, uint64_t abi, size_t size, void (*in
 
 void ar_region_unhold(void)
 {
-	if (named_fd >= 0 && fstat(named_fd, &named_st) == 0) {
+	if (named_fd >= 0) {
 		close(named_fd); /* the flock stays with the other processes sharing the open file */
 		named_fd = -1;
 	}
@@ -286,6 +287,24 @@ bool ar_region_current(void)
 	}
 	return same;
 #endif
+}
+
+int ar_region_reopen(void)
+{
+	struct stat st;
+	int fd = shm_open(named_name, O_RDWR, 0);
+#ifdef __linux__
+	if (fd < 0 && named_fd >= 0) { /* its name was removed: through our descriptor */
+		char path[32];
+		snprintf(path, sizeof path, "/proc/self/fd/%d", named_fd);
+		fd = open(path, O_RDWR | O_CLOEXEC);
+	}
+#endif
+	if (fd >= 0 && (fstat(fd, &st) != 0 || !same_file(&st, &named_st))) {
+		close(fd);
+		fd = -1;
+	}
+	return fd;
 }
 
 void ar_region_close(void *mem)

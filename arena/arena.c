@@ -30,6 +30,10 @@ nocopy_err nocopy_arena_open(const nocopy_config *cfg, nocopy_named *out)
 		ar_region_close(mem);
 		return (nocopy_err) {.code = NOCOPY_ERR_FAILED, .msg = "its header is corrupt"};
 	}
+	if (!ar_proc_attach(ar_region_reopen())) {
+		nocopy_arena_close();
+		return (nocopy_err) {.code = NOCOPY_ERR_FAILED, .msg = "no file descriptor or no free process slot for its liveness lock"};
+	}
 	ar_user = ar_hdr->user;
 	return err;
 }
@@ -39,6 +43,7 @@ bool nocopy_arena_current(void) { return ar_region_current(); }
 
 void nocopy_arena_close(void)
 {
+	ar_proc_detach();
 	ar_region_close(ar_hdr);
 	ar_hdr = NULL;
 	ar_base = NULL;
@@ -76,7 +81,7 @@ void nocopy_release(nocopy_ctx *c)
 /* A forked child gets its own owner id and worker slot, and inherits the parent's pins. */
 void nocopy_after_fork(nocopy_ctx *c)
 {
-	ar_proc_after_fork();
+	ar_proc_attach(ar_region_reopen());
 	if (nocopy_claim(c)) {
 		ar_pins_publish(&c->pins);
 	}

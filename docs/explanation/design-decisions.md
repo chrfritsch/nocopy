@@ -27,6 +27,12 @@ p99 41, max 61; 193 (0.7%) reached the cap and copied the rest of their fetches.
 cache, never a private one: a private cache splits invalidation silently ([Sharing](sharing.md#all-or-nothing)).
 **No default name:** two sites of one user would share keys.
 
+**Liveness from kernel file locks** (was: pid + start time from `/proc/<pid>/stat`, where every failure to read meant dead): a live
+holder in another PID namespace or at its fd limit was taken for dead and its lock stolen ([design review, finding 1](design-review-2026-11.md#1-liveness-is-a-guess-that-fails-toward-dead)).
+Each process holds an OFD lock on its process slot's byte of the shm object; a holder is dead when nobody holds the byte or its slot's generation moved on, and a query that fails means alive.
+Price: one descriptor per process, a 1024-process limit at attach. The lock fast path is unchanged; the query runs only where `/proc` was read before.
+macOS keeps pid + start time (`sysctl`, no fd, no namespaces; no OFD locks there).
+
 **Valkey: one listener process per arena** holds the only tracking connection: 16 connections and 16 copies of every push
 per server became 1. The writer's own server refetches its write once, since the listener cannot tell own writes apart.
 
@@ -395,7 +401,7 @@ Code comments are one short line, or none.
 ## Ruled out by the 2026-11 audit
 
 What the correctness audit checked and found sound, with the reasoning, and what it left open: [findings and plan](audit-2026-11.md#ruled-out).
-**A dead worker's slot is ignored, not cleaned by others** (was: a reclaimer cleared its pins, a rotation its announced generation): the clear raced with the slot's next owner. The owner id found dead is remembered per process, so later reclaim passes cost no `/proc` read; `pinned_segments` counts the stale bits until the slot is claimed.
+**A dead worker's slot is ignored, not cleaned by others** (was: a reclaimer cleared its pins, a rotation its announced generation): the clear raced with the slot's next owner. The owner id found dead is remembered per process, so later reclaim passes cost no lock query; `pinned_segments` counts the stale bits until the slot is claimed.
 
 ## Adding to this page
 

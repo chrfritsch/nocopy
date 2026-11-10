@@ -472,14 +472,29 @@ static void open_arena(int mb, uint32_t keys, uint32_t div, int ops, nocopy_ctx 
 
 /* ---- a slot whose owner died, claimed by a new worker while another acts on the death ---- */
 
-static uint64_t dead_owner(void) /* the id of a process that has exited and been reaped */
+static uint64_t dead_owner(void) /* the id of a process that has exited and been reaped: alive until then */
 {
+	int up[2], down[2];
+	assert(pipe(up) == 0 && pipe(down) == 0);
 	pid_t p = fork();
 	if (!p) {
+		char c;
+		close(down[1]);
+		ar_proc_attach(ar_region_reopen());
+		if (write(up[1], &ar_self, sizeof ar_self) == sizeof ar_self) {
+			(void) !read(down[0], &c, 1);
+		}
 		_exit(0);
 	}
+	uint64_t id = 0;
+	assert(read(up[0], &id, sizeof id) == sizeof id && id && id != ar_self && !ar_owner_dead(id));
+	close(down[1]);
 	waitpid(p, NULL, 0);
-	return (uint64_t) (uint32_t) p | (uint64_t) 1 << 32;
+	assert(ar_owner_dead(id));
+	close(up[0]);
+	close(up[1]);
+	close(down[0]);
+	return id;
 }
 
 static nocopy_ctx newcomer;

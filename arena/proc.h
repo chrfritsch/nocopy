@@ -5,11 +5,11 @@
 
 #include "base.h"
 
-/* ---- owner ids: pid | process start time << 32, so a recycled pid does not look like its dead predecessor ---- */
+/* ---- owner ids. Linux: process slot + 1 | its generation << 32, alive while an OFD lock on the slot's byte of the object is
+ * held (the kernel drops it when the process dies, in any PID namespace). Elsewhere: pid | process start time << 32. ---- */
 
-AR_HIDDEN extern uint64_t ar_self; /* this process's; threads share it */
-uint64_t ar_owner_self(void);
-bool ar_owner_dead(uint64_t id); /* gone, a zombie, or its pid reused; reads /proc: call it with no lock held */
+AR_HIDDEN extern uint64_t ar_self; /* this process's, 0 before ar_proc_attach; threads share it */
+bool ar_owner_dead(uint64_t id); /* "cannot tell" is alive; a syscall: call it with no lock held */
 
 /* ---- locks: test-and-test-and-set holding the owner id; not reentrant ---- */
 
@@ -51,15 +51,19 @@ typedef struct {
 typedef struct {
 	uint32_t nworkers;    /* high-water mark of claimed slots */
 	uint32_t lock_steals; /* locks taken over from dead holders */
+	uint32_t pgen[NOCOPY_MAX_WORKERS]; /* Linux: each process slot's generation, bumped by its next holder */
 	ar_worker w[NOCOPY_MAX_WORKERS];
 } ar_procs;
 
 AR_HIDDEN extern ar_procs *ar_proc;
 
-void ar_proc_adopt(ar_procs *p); /* this process's view, and its owner id */
-void ar_proc_after_fork(void);   /* a child gets its own owner id */
+void ar_proc_adopt(ar_procs *p); /* this process's view */
+/* An owner id (ar_self) for this process, also in a forked child. fd: a descriptor of the object of its own (taken over;
+ * a parent's would keep the parent's lock), -1 none. false: no fd, no free process slot or no OFD locks: ar_self stays 0. */
+bool ar_proc_attach(int fd);
+void ar_proc_detach(void);
 
-/* A free slot, or one whose owner died: -1 if none. The caller resets what each module keeps per slot. */
+/* A free slot, or one whose owner died: -1 if none or no owner id. The caller resets what each module keeps per slot. */
 int ar_worker_claim(void);
 void ar_worker_release(int slot);
 static inline uint32_t ar_worker_high(void) { return __atomic_load_n(&ar_proc->nworkers, __ATOMIC_ACQUIRE); }
@@ -67,7 +71,7 @@ static inline ar_worker *ar_worker_at(uint32_t slot) { return &ar_proc->w[slot];
 /* Slot i is held by a process that died. Looked up at most once a second per slot (false meanwhile, and for our own process), then remembered.
  * What the dead owner left in the slot is ignored, never written: only a slot's owner writes it, and the next one resets it when it claims. */
 bool ar_worker_dead(uint32_t i, time_t now);
-/* Slot i is held by a live process (ours included). Reads /proc: call it with no lock held, or rarely. */
+/* Slot i is held by a live process (ours included). A syscall: call it with no lock held, or rarely. */
 bool ar_worker_live(uint32_t i);
 
 #endif

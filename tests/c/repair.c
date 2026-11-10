@@ -37,14 +37,29 @@ static nocopy_entry *begin(nocopy_put *p, nocopy_ctx *c, const char *k, size_t l
 	return e;
 }
 
-static uint64_t dead_owner(void) /* the id of a process that has exited and been reaped */
+static uint64_t dead_owner(void) /* the id of a process that has exited and been reaped: alive until then */
 {
+	int up[2], down[2];
+	assert(pipe(up) == 0 && pipe(down) == 0);
 	pid_t p = fork();
 	if (!p) {
+		char c;
+		close(down[1]);
+		ar_proc_attach(ar_region_reopen());
+		if (write(up[1], &ar_self, sizeof ar_self) == sizeof ar_self) {
+			(void) !read(down[0], &c, 1);
+		}
 		_exit(0);
 	}
+	uint64_t id = 0;
+	assert(read(up[0], &id, sizeof id) == sizeof id && id && id != ar_self && !ar_owner_dead(id));
+	close(down[1]);
 	waitpid(p, NULL, 0);
-	return (uint64_t) (uint32_t) p | (uint64_t) 1 << 32;
+	assert(ar_owner_dead(id));
+	close(up[0]);
+	close(up[1]);
+	close(down[0]);
+	return id;
 }
 
 static ar_slot slot_of(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }

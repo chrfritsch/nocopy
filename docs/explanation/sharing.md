@@ -31,8 +31,10 @@ Drupal module throws on `none` rather than serve stale data.
   memory a root process reads, and every pool would share the master's cache whatever its user or `nocopy.shm_name`.
 - **One build.** The build id hashes the loaded `nocopy.so`: different code may lay out memory differently, so processes
   share only when they run the same build. Objects of old builds are removed once no process uses them.
-- **One machine (one PID namespace).** A lock held by a crashed process is detected by its pid and start time, which only
-  works where pids mean the same thing. Separate containers do not share.
+- **One `/dev/shm`.** A lock held by a crashed process is detected by a kernel file lock the process held on the object,
+  which the kernel drops when it dies, whatever its PID namespace. Containers that see the same `/dev/shm`
+  (`--ipc=container:…`, a pod's shared memory volume, a sidecar) share the cache when they run the same build as the same
+  uid; containers with their own `/dev/shm` (Docker's default) do not.
 
 The creator reserves the whole `nocopy.shm_size` up front (`posix_fallocate`), so memory can never run out under a reader.
 On tmpfs, a lazily-allocated page past `/dev/shm`'s limit would crash the process on first touch instead.

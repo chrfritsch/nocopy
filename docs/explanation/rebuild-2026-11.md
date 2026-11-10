@@ -14,6 +14,11 @@ Ordered by how much of the design review each one removes.
 
 ### 1. Liveness from the kernel, not from `/proc`
 
+**Built 2026-11-10** ([design decisions](design-decisions.md#sharing)): owner ids are a process slot and its generation, the
+slot held by an OFD lock; test 095 passes. Departures from the plan below: a process slot table of its own, not the worker
+slots (ZTS threads each claim a worker slot, liveness is per process); macOS keeps pid + start time from `sysctl`, which
+needs neither a descriptor nor `/proc`.
+
 Today a holder is its pid and start time, and "dead" is whatever `/proc/<pid>/stat` fails to confirm (`arena/proc.c`):
 another PID namespace, a process at its fd limit or a missing `/proc` all read as dead, and dead lets the caller steal a
 lock, a worker slot, a lease ([finding 1](design-review-2026-11.md#1-liveness-is-a-guess-that-fails-toward-dead)).

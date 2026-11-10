@@ -1,13 +1,11 @@
 --TEST--
-nocopy: a process that cannot open /proc (at its fd limit) must not take a live lease holder for dead (design review 2026-11, finding 1)
+nocopy: a process at its fd limit must not take a live lease holder for dead (design review 2026-11, finding 1)
 --EXTENSIONS--
 nocopy
 pcntl
 posix
 --INI--
 nocopy.shm_name=/nocopy-t095
---XFAIL--
-Liveness fails open: ar_owner_dead() reads "cannot open /proc/<pid>/stat" as dead (arena/proc.c). The same answer steals shard locks and worker slots.
 --FILE--
 <?php
 nocopy_put('calls', 0);

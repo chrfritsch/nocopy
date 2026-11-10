@@ -83,8 +83,8 @@ services:
     shm_size: 256m
 ```
 
-php-fpm and CLI commands (`docker exec`) in the **same** container share the cache. Separate containers do not: shared
-memory and process ids are per container.
+php-fpm and CLI commands (`docker exec`) in the **same** container share the cache. Separate containers do not, unless they
+share `/dev/shm` (`--ipc=container:…`, compose `ipc: service:php`) and run the same `nocopy.so` as the same uid.
 
 ## Upgrade
 

@@ -50,7 +50,7 @@ int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
 		}
 		uint64_t o = r == NOCOPY_LEASE_HELD ? l->owner : 0;
 		ar_lock_release(&t->lock);
-		if (r != NOCOPY_LEASE_HELD || dead || !ar_owner_dead(o)) { /* reads /proc: not under the lock */
+		if (r != NOCOPY_LEASE_HELD || dead || !ar_owner_dead(o)) { /* a syscall: not under the lock */
 			return r;
 		}
 		dead = o;

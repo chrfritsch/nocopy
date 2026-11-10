@@ -1,5 +1,8 @@
 /* nocopy arena: owner ids, locks that survive a dead holder, the worker registry. */
 
+#ifndef _GNU_SOURCE
+# define _GNU_SOURCE /* F_OFD_* */
+#endif
 #include "proc.h"
 #include <errno.h>
 #include <sched.h>
@@ -7,10 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #ifdef __APPLE__
 # include <sys/sysctl.h>
-#else
-# include <fcntl.h>
 #endif
 
 uint64_t ar_self;
@@ -24,6 +26,56 @@ static uint64_t gone[NOCOPY_MAX_WORKERS];  /* the owner that lookup found dead: 
 
 /* ---- owner ids ---- */
 
+static int live_fd = -1; /* ours alone (not a parent's): its OFD lock on our process slot's byte is our liveness */
+
+#ifdef __linux__
+static bool slot_lock(int fd, uint32_t s, int cmd, struct flock *fl)
+{
+	*fl = (struct flock) {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = s, .l_len = 1};
+	return fcntl(fd, cmd, fl) == 0;
+}
+
+bool ar_proc_attach(int fd)
+{
+	if (live_fd >= 0) {
+		close(live_fd); /* a forked child's copy of its parent's: the parent's lock stays */
+	}
+	live_fd = fd;
+	ar_self = 0;
+	uint32_t start = (uint32_t) getpid() % NOCOPY_MAX_WORKERS;
+	for (uint32_t k = 0; fd >= 0 && k < NOCOPY_MAX_WORKERS; k++) {
+		uint32_t s = (start + k) % NOCOPY_MAX_WORKERS;
+		struct flock fl;
+		if (slot_lock(fd, s, F_OFD_SETLK, &fl)) {
+			uint32_t g = __atomic_add_fetch(&ar_proc->pgen[s], 1, __ATOMIC_SEQ_CST); /* after the lock: see ar_owner_dead */
+			ar_self = (uint64_t) (s + 1) | (uint64_t) g << 32;
+			return true;
+		}
+		if (errno != EAGAIN && errno != EACCES) {
+			break; /* no OFD locks here */
+		}
+	}
+	ar_proc_detach();
+	return false;
+}
+
+bool ar_owner_dead(uint64_t id)
+{
+	uint32_t s = (uint32_t) id - 1;
+	struct flock fl;
+	if (id == ar_self) {
+		return false; /* our own lock does not conflict with us */
+	}
+	if (s >= NOCOPY_MAX_WORKERS) {
+		return true;
+	}
+	if (!slot_lock(live_fd, s, F_OFD_GETLK, &fl)) {
+		return false; /* cannot tell: alive */
+	}
+	/* gen after the query: a newcomer holding the byte has bumped it, or is about to (alive until the next look) */
+	return fl.l_type == F_UNLCK || __atomic_load_n(&ar_proc->pgen[s], __ATOMIC_SEQ_CST) != (uint32_t) (id >> 32);
+}
+#else
 /* Start time of pid (any stable 32-bit stamp), 0 if it is gone or a zombie. */
 static uint32_t proc_start(int pid)
 {
@@ -36,33 +88,19 @@ static uint32_t proc_start(int pid)
 	}
 	return (uint32_t) (kp.kp_proc.p_starttime.tv_sec * 1000003 + kp.kp_proc.p_starttime.tv_usec) | 1;
 #else
-	char path[32], buf[1024];
-	snprintf(path, sizeof path, "/proc/%d/stat", pid);
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		return 0;
-	}
-	ssize_t n = read(fd, buf, sizeof buf - 1);
-	close(fd);
-	if (n <= 0) {
-		return 0;
-	}
-	buf[n] = 0;
-	char *p = strrchr(buf, ')'); /* "pid (comm) S ...": comm may hold anything; starttime is field 22 */
-	if (!p || p[1] != ' ' || p[2] == 'Z') {
-		return 0;
-	}
-	for (int f = 2; f < 22 && p; f++) {
-		p = strchr(p + 1, ' ');
-	}
-	return p ? (uint32_t) strtoull(p + 1, NULL, 10) | 1 : 0;
+	(void) pid;
+	return 0;
 #endif
 }
 
-uint64_t ar_owner_self(void)
+bool ar_proc_attach(int fd)
 {
+	if (fd >= 0) {
+		close(fd);
+	}
 	int pid = getpid();
-	return (uint64_t) (uint32_t) pid | (uint64_t) proc_start(pid) << 32;
+	ar_self = (uint64_t) (uint32_t) pid | (uint64_t) proc_start(pid) << 32;
+	return true;
 }
 
 bool ar_owner_dead(uint64_t id)
@@ -72,6 +110,16 @@ bool ar_owner_dead(uint64_t id)
 		return true;
 	}
 	return proc_start(pid) != (uint32_t) (id >> 32);
+}
+#endif
+
+void ar_proc_detach(void)
+{
+	if (live_fd >= 0) {
+		close(live_fd);
+		live_fd = -1;
+	}
+	ar_self = 0;
 }
 
 /* ---- locks ---- */
@@ -118,16 +166,13 @@ ar_try_result ar_lock_try(ar_lock *l, time_t *checked_at, time_t now)
 
 /* ---- workers ---- */
 
-void ar_proc_adopt(ar_procs *p)
-{
-	ar_proc = p;
-	ar_self = ar_owner_self();
-}
-
-void ar_proc_after_fork(void) { ar_self = ar_owner_self(); }
+void ar_proc_adopt(ar_procs *p) { ar_proc = p; }
 
 int ar_worker_claim(void)
 {
+	if (!ar_self) {
+		return -1;
+	}
 	for (int pass = 0; pass < 2; pass++) {
 		for (int i = 0; i < NOCOPY_MAX_WORKERS; i++) {
 			uint64_t o = __atomic_load_n(&ar_proc->w[i].owner, __ATOMIC_RELAXED);

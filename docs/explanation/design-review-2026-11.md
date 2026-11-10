@@ -14,7 +14,7 @@ Ranked by blast radius × likelihood in real deployments.
 
 | # | Finding | Verdict | What the user sees | Docs admit it | Cheapest mitigation |
 |---|---|---|---|---|---|
-| 1 | Liveness is a guess that fails toward "dead" | real flaw | segfaults and wrong values in every process | wrongly: "cannot share" | fail closed + refuse another PID namespace at attach |
+| 1 | Liveness is a guess that fails toward "dead" | real flaw | segfaults and wrong values in every process | wrongly: "cannot share" | fail closed + refuse another PID namespace at attach (fixed instead by kernel locks, 2026-11-10) |
 | 2 | The pin cap is per request, not per arena | real flaw | hit ratio 100% -> 27% while 4 requests run long | half | a global cap; a stat |
 | 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field |
 | 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end |
@@ -42,6 +42,9 @@ wanted and fails today. `docker/test.sh` now accepts an expected failure's `.dif
 ## Findings
 
 ### 1. Liveness is a guess that fails toward "dead"
+
+**Fixed 2026-11-10** by liveness from kernel file locks ([rebuild, item 1](rebuild-2026-11.md#1-liveness-from-the-kernel-not-from-proc)):
+neither another PID namespace nor the fd limit makes a live holder look dead; test 095 passes.
 
 **Premise attacked.** "A lock held by a crashed process is detected by its pid and start time" ([Sharing](sharing.md)),
 and so owner-id spinlocks plus `repair()` can replace robust mutexes.

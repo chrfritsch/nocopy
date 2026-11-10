@@ -24,6 +24,7 @@ typedef struct {
 nocopy_err ar_region_open(const char *base, uint64_t abi, size_t size, void (*init)(void *mem, void *arg), void *arg, nocopy_named *out, void **mem);
 void ar_region_unhold(void);  /* map without counting as a user (the Valkey listener) */
 bool ar_region_current(void); /* false: its name was removed or names another object now */
+int ar_region_reopen(void);   /* a new descriptor of the object (its own open file), -1 if none */
 void ar_region_close(void *mem);
 
 #endif
