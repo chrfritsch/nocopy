@@ -1,4 +1,4 @@
-# Cache tag checksums in nocopy. Add to settings.php:
+# Cache tag checksums, locks and flood control in nocopy. Add to settings.php:
 #   $settings['container_yamls'][] = $app_root . '/modules/contrib/nocopy/example.services.yml';
 services:
   cache_tags.invalidator.checksum:
@@ -6,3 +6,13 @@ services:
     arguments: ['%app.root%', '%site.path%']
     tags:
       - { name: cache_tags_invalidator }
+  # Locks and flood control in nocopy too (with nocopy.valkey: across servers).
+  lock:
+    class: Drupal\nocopy\Lock\NocopyLockBackend
+    arguments: ['%app.root%', '%site.path%']
+  lock.persistent:
+    class: Drupal\nocopy\Lock\NocopyLockBackend
+    arguments: ['%app.root%', '%site.path%', true]
+  flood:
+    class: Drupal\nocopy\Flood\NocopyFlood
+    arguments: ['@request_stack', '%app.root%', '%site.path%']

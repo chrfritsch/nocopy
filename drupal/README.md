@@ -2,7 +2,7 @@
 
 Cache backend and cache tag checksums on the [nocopy](https://github.com/chrfritsch/nocopy) PHP extension. Every PHP process of the site
 (php-fpm, Drush, cron) shares one cache: `nocopy.shm_name` on a single server, `nocopy.valkey` on several.
-All cache bins and tag checksums live in shared memory, so cache reads and tag checks no longer touch the database. Cached arrays
+All cache bins, tag checksums, locks and flood control live in shared memory, so cache reads, tag checks, locks and flood checks no longer touch the database. Cached arrays
 (config, the container definition, most bootstrap data) are read without a copy.
 
 ## Install
@@ -84,6 +84,11 @@ the database alone where the extension is not loaded or `nocopy.shm_name` is not
 - **Without `nocopy.valkey`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
 - **Long-running CLI processes** (queue workers, migrations) in copy mode see changes made elsewhere on their next cache read, like web requests.
 - **Deletes inside a database transaction wait for the commit** (none on rollback), so a concurrent request cannot refill the cache from uncommitted data.
+- **Locks** (`lock`, `lock.persistent`): their keys have no TTL and no deploy in the prefix, so Valkey's `volatile-*` eviction never
+  drops a held lock and old and new code share locks during a rolling deploy. Without Valkey a full arena can evict one, like any cache.
+  Expiry is wall time: run NTP.
+- **Flood control** counts in a fixed window from the first event (as Laravel's rate limiter): up to twice the threshold across its edge.
+  It does not implement `PrefixFloodInterface`, so a password change does not clear `user.failed_login_user` (as with `drupal/redis`).
 - **Memory:** `nocopy.shm_size` must hold the cache, render cache included. When it is full, nocopy evicts entries (cache misses, not errors).
   Check `nocopy_stats()['used']` after warm-up: the 2,000-node benchmark site used 11 MB, so the default `32M` fits; raise it once
   `used` passes about half.

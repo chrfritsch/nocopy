@@ -7,7 +7,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 - **Platforms:** Linux, amd64 and arm64. Builds on macOS, untested there. No Windows.
 - **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
-  [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins + cache tags), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
+  [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins, cache tags, locks, flood), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
 - **Distribution:** [github.com/chrfritsch/nocopy](https://github.com/chrfritsch/nocopy), tag 0.0.1, on [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
   `pie install chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). The integrations are not on Packagist yet. CI ([`ci.yml`](../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) is green on GitHub Actions.
@@ -16,6 +16,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 
 | Check | Result |
 |---|---|
+| Drupal locks and flood control (2026-11-10, local Docker, arm64): `NocopyLockBackend` (`lock`, `lock.persistent`; expiry and owner in one integer, changed only by `nocopy_add`/`nocopy_cas`) and `NocopyFlood` (`nocopy_inc`, fixed window) in `example.services.yml`; no C change | `./dev drupal` all 3 modes passed (35 tests shared and Valkey, 5 without). 8 processes x 300 acquire / file read-modify-write / release: counter 2400 of 2400, both arena and Valkey |
 | Arrays shared arena-wide (2026-11-10, local Docker, arm64; [decision](explanation/design-decisions.md)): arrays of 128+ bytes without objects, hashed in a walk of their own and decided top-down while planning; an equal one already admitted (compared in full) replaces them, the decision on the tape; admitted on the second sighting after the commit; atom area `shm_size / 16` (was `/ 64`); `shared_arrays`, `shared_arrays_used` stats; test 102, 029 and 086 recalibrated | `./dev ci` all passed (stress 30 loops clean, fuzz 20000 both modes, apcu 13 known failures). Drupal rows 38.4 -> 26.0 MB + 1.5 MB shared (-29%); replay 24M loop 18.6 -> 52.7%, 32M loop 53.9 -> 100% hits. `./dev ab HEAD 5 write`: fully shared array stores -4 to -11%, object -4/-5%, scalars -2 to -4%; fetches unchanged |
 | Debug PHP in CI (2026-11-10, local Docker, arm64; [rebuild, item 7](explanation/rebuild-2026-11.md#7-the-test-harness-before-the-features)): `./dev debug` and `./dev debug fuzz` are steps of `./dev ci` and of the workflow's lint job (timeout 60 min); hooks, `crash.c`, `block_check` and the mangling fuzzer were in since the audit | `./dev ci` all passed in one go (debug suite 90 passed, 3 skipped; debug fuzz 20000 both modes; apcu 13 known failures) |
 | Entry header 48 -> 40 bytes, ghost tags 32 -> 16 bits (2026-11-10, local Docker, arm64; [decision](explanation/design-decisions.md)) | `./dev ci` all passed. 8 bytes less per entry; a 32M arena's fixed header 7.8 -> 7.0%. `./dev ab HEAD` within noise but store string 100B 2-7% slower |
