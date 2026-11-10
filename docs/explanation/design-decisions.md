@@ -392,6 +392,11 @@ Code comments are one short line, or none.
 | Native cache tags (per-entry tag versions checked in C on fetch, `nocopy_invalidate_tags`) | bounded, not built: Drupal's checksum path (one `nocopy_get_multiple` of the request's tag tokens + the PHP sum) vs the bare lookup as native's floor, best of 5 x 20k: 10 tags 728 vs 125 ns, 50 tags 3.3 vs 0.67 us, 200 tags 13.1 vs 2.7 us. At most 3-10 us of a ~660 us anonymous page-cache hit per worker (0.5-1.5%), less logged in. Drupal already batches tags into one lookup; pool/bin clears are O(1) version keys in both integrations |
 | Copy mode's keep rule in one place (`graph_copy_fetch` asking `local_slot`, which then drops its type check, instead of repeating `local_ok && size <= local_size`) | `./dev ab HEAD 7 read`, rows that never reach it: fetch int -2.1 / -2.0%, fetch miss -2.9 / -2.6%, 1k rows -1.4 / -1.8% (twice; HEAD against itself: within ±0.8%). `graph_copy_fetch` kept out of line instead: string 100B -5.2 / -6.6%, 1k rows -6.3% copy. One line saved does not pay for either: the duplicate stays |
 
+## Ruled out by the 2026-11 audit
+
+What the correctness audit checked and found sound, with the reasoning, and what it left open: [findings and plan](audit-2026-11.md#ruled-out).
+**A dead worker's slot is ignored, not cleaned by others** (was: a reclaimer cleared its pins, a rotation its announced generation): the clear raced with the slot's next owner. The owner id found dead is remembered per process, so later reclaim passes cost no `/proc` read; `pinned_segments` counts the stale bits until the slot is claimed.
+
 ## Adding to this page
 
 A change that rests on performance gets a line here: what was decided, the numbers, and the price. A measured idea that

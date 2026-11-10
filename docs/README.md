@@ -19,7 +19,7 @@ These docs follow [Diátaxis](https://diataxis.fr): pick the column that matches
 | [Configuration (php.ini)](reference/configuration.md) | [Sharing: by name and through Valkey](explanation/sharing.md) |
 | [`nocopy_stats()`](reference/stats.md) | [Design decisions and rejected ideas](explanation/design-decisions.md) |
 | [`./dev` commands](reference/dev-commands.md) | [Architecture and invariants](explanation/architecture.md) (for C changes) |
-| [APCu compatibility](reference/apcu-compatibility.md) | |
+| [APCu compatibility](reference/apcu-compatibility.md) | [Correctness audit 2026-11: findings and plan](explanation/audit-2026-11.md) |
 | [Benchmark results](reference/benchmarks.md) | |
 
 Project state, what was verified last and what is planned: [Status and roadmap](status.md).
