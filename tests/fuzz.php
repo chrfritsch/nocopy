@@ -120,6 +120,32 @@ final class Gen
     }
 }
 
+// Writes all over a fetched value, in place and through references.
+function mangle(mixed &$v): void
+{
+    $level = error_reporting(0); // sorting objects among scalars
+    try {
+        if (is_array($v)) {
+            foreach ($v as $k => &$e) {
+                if (is_array($e)) { $e[] = $k; sort($e); } elseif (is_string($e)) { $e .= 'x'; } elseif (is_object($e) && !$e instanceof UnitEnum) { foreach ($e as &$p) { $p = 0; } unset($p); } else { $e = $k; }
+            }
+            unset($e);
+            $v['mangled'] = 1;
+            ksort($v);
+            array_walk($v, function (&$e) { $e = null; });
+        } elseif (is_object($v) && !$v instanceof UnitEnum) {
+            foreach ($v as &$p) {
+                if (is_array($p)) { $p[] = 1; rsort($p); } else { $p = null; }
+            }
+            unset($p);
+        } elseif (is_string($v) && $v !== '') {
+            $v[0] = '#';
+        }
+    } catch (Throwable) { // a typed or readonly property
+    }
+    error_reporting($level);
+}
+
 function ser(mixed $v): ?string
 {
     try {
@@ -153,7 +179,15 @@ for ($i = 0; $i < $iters && $bad < 5; $i++) {
         $v = $g->value(0);
         $s = canon(ser($v));
         try {
-            $ok = nocopy_put($key, $v);
+            if (r(8) === 0) { // as a foreach-by-reference element: the value arrives as a reference
+                $batch = [$key => $v];
+                foreach ($batch as &$elem) {
+                }
+                $ok = nocopy_put_multiple($batch);
+                unset($elem, $batch);
+            } else {
+                $ok = nocopy_put($key, $v);
+            }
         } catch (Throwable $e) {
             $ok = null;
         }
@@ -187,6 +221,7 @@ for ($i = 0; $i < $iters && $bad < 5; $i++) {
                 $bad++;
                 break;
             }
+            mangle($got); // whatever is done to a fetched value, the next fetch is the stored one again
             unset($got);
         }
     } else {
