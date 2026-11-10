@@ -208,11 +208,20 @@ default 32 MB, values 1-120 KB: footprint 0.8 64.8 -> 6.1 µs/op, moved 52.7x ->
 (hit 89.1 -> 83.1%: the old figure counted stale values); footprint 1.2 135 -> 7.7 µs/op, 119x -> 3.5x. Values up to 20 KB and 500 B
 unchanged (test 077).
 
+**Entry header 40 bytes, ghost tags 16 bits** (were 48 and 32): the header holds its size / 8 and its expiry in 32 bits
+(monotonic seconds, as `created`; an expiry past them is capped at 136 years of uptime). Per entry, 8 bytes: int 72 -> 64,
+8-byte string 112 -> 104, 100-byte string 207 -> 199, 3-key array 256 -> 248. The fixed header (slot tables, ghosts, atoms,
+workers) of a 32M arena 2,560 -> 2,304 KB (7.8 -> 7.0%, 236 -> 238 segments), 128M 9,216 -> 8,192 KB (7.0 -> 6.2%).
+`./dev ab HEAD` 5-9 reps, read and write: within noise but store string 100B, 2-7% slower in three runs (28-29 -> 30 ns;
+store int 1-2% faster, so not the put path's code: where that block's bytes land, not looked into).
+Looked at and left: the slot tables (a slot per 256 bytes, 3.1%: fewer evict small entries by count sooner), the atoms'
+reserve (2.1%, measured above), the 1,024 workers' lines and bitmaps (168 KB at any size: 4% of a 4M arena, 0.5% of 32M).
+
 **Keys stored as bytes, not `zend_string`s:** a block's key is only compared, so its 24-byte header and NUL went
 (500-byte value: 624 -> 600 bytes). 32M / 64M: Zipf 94.1 -> 94.6 / 93.6 -> 94.1, loop 1.1x 57 -> 76 / 72 -> 76,
 loop 1.5x 25 -> 35 / 41 -> 49 (on top of the compaction change).
 
-**Ghost list (S3-FIFO):** one 32-bit tag per slot. Measured with `bench/hitratio.php`: no ghost loses 2 points on mixed
+**Ghost list (S3-FIFO):** one 16-bit tag per slot (32-bit until 2026-11-10: a false match, 1 in 32,768 per occupied cell, only starts a new key hot). Measured with `bench/hitratio.php`: no ghost loses 2 points on mixed
 loads and all hits on scans.
 
 **No `nocopy.ttl` default:** it expired Drupal's cache tag tokens. Callers pass `$ttl`.

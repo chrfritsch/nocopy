@@ -155,7 +155,7 @@ bool ar_log_expire_step(ar_log *lg, time_t now, int budget, void (*unlink)(nocop
 					return did; /* resume here on the next write */
 				}
 				nocopy_entry *e = (nocopy_entry *) (ar_seg_start(s) + lg->exp_off);
-				lg->exp_off += e->size;
+				lg->exp_off += nocopy_entry_size(e);
 				if (e->live) {
 					unlink(e, arg);
 					AR_HOOK("expire.unlinked");
@@ -217,12 +217,12 @@ void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg)
 			g->live = 0;
 			for (char *p = ar_seg_start(s), *end = p + g->used; p < end;) {
 				nocopy_entry *e = (nocopy_entry *) p;
-				if (e->size < sizeof *e) {
+				if (nocopy_entry_size(e) < sizeof *e) {
 					break;
 				}
 				e->live = linked(e, arg);
-				g->live += e->live ? e->size : 0;
-				p += e->size;
+				g->live += e->live ? nocopy_entry_size(e) : 0;
+				p += nocopy_entry_size(e);
 			}
 			lg->live_bytes += g->live;
 		}

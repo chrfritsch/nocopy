@@ -21,12 +21,12 @@ void ar_policy_count_expunge(void) { __atomic_add_fetch(expunges, 1, __ATOMIC_RE
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
  * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */
-static uint32_t *ghost_cell(uint32_t *ghosts, uint64_t h) { return &ghosts[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & ghost_mask]; }
-static uint32_t ghost_tag(uint64_t h) { return (uint32_t) h | 1; }
+static uint16_t *ghost_cell(uint16_t *ghosts, uint64_t h) { return &ghosts[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & ghost_mask]; }
+static uint16_t ghost_tag(uint64_t h) { return (uint16_t) h | 1; }
 
-uint8_t ar_policy_admit(ar_policy *pol, uint32_t *ghosts, uint64_t h)
+uint8_t ar_policy_admit(ar_policy *pol, uint16_t *ghosts, uint64_t h)
 {
-	uint32_t *c = ghost_cell(ghosts, h);
+	uint16_t *c = ghost_cell(ghosts, h);
 	if (*c != ghost_tag(h)) {
 		return 0;
 	}
@@ -64,7 +64,7 @@ static bool mergeable(uint32_t s)
 }
 
 /* Holds one entry over half a segment (open segments take none): moving it takes a whole segment again, so compacting frees nothing. */
-static bool seg_big(uint32_t s) { return ((const nocopy_entry *) ar_seg_start(s))->size > ar_seg_size / 2; }
+static bool seg_big(uint32_t s) { return nocopy_entry_size((const nocopy_entry *) ar_seg_start(s)) > ar_seg_size / 2; }
 
 /* Compaction victims: the sparsest sealed segments, together <= one segment (*live), or the sparsest alone up to COMPACT_MAX. */
 static uint32_t pick_sparse(const ar_log *lg, uint32_t *v, size_t *live)
@@ -145,7 +145,7 @@ static uint8_t rank_cut(const uint32_t *v, uint32_t nv, size_t budget, size_t *s
 	for (uint32_t i = 0; i < nv; i++) {
 		AR_SEG_FOREACH(v[i], e) {
 			if (alive(e)) {
-				by[__atomic_load_n(&e->hot, __ATOMIC_RELAXED)] += e->size;
+				by[__atomic_load_n(&e->hot, __ATOMIC_RELAXED)] += nocopy_entry_size(e);
 			}
 		}
 	}
@@ -178,13 +178,13 @@ static void move_survivors(const ar_merge *m, const uint32_t *v, uint32_t nv, si
 					continue;
 				}
 				if (f < cut) {
-					if (e->size > spare) {
+					if (nocopy_entry_size(e) > spare) {
 						continue;
 					}
-					spare -= e->size;
+					spare -= nocopy_entry_size(e);
 				}
 			}
-			size_t size = e->size;
+			size_t size = nocopy_entry_size(e);
 			if (size > budget || !m->relocate(e, f >> 1, m->arg)) {
 				budget = 0;
 				break;

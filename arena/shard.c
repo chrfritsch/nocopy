@@ -8,7 +8,7 @@ ar_index ar_ix[NOCOPY_MAX_SHARDS];
 
 static uint32_t nshards;
 static uint32_t fair_segs; /* nsegs / nshards: what a shard may take back from others, and the largest entry (a division on every write cost store int ~3 ns) */
-static uint32_t *ghosts[NOCOPY_MAX_SHARDS];
+static uint16_t *ghosts[NOCOPY_MAX_SHARDS];
 static nocopy_rebase_fn rebase;
 
 static void repair(ar_shard *sh, uint64_t dead);
@@ -23,7 +23,7 @@ void ar_shards_init(ar_shard *shards, uint32_t n, uint32_t slots_per, uint32_t n
 	}
 }
 
-void ar_shards_adopt(ar_shard *shards, uint32_t n, ar_slot *tables, uint32_t *ghost_tabs, uint32_t slots_per, nocopy_rebase_fn fn)
+void ar_shards_adopt(ar_shard *shards, uint32_t n, ar_slot *tables, uint16_t *ghost_tabs, uint32_t slots_per, nocopy_rebase_fn fn)
 {
 	ar_shards = shards;
 	nshards = n;
@@ -172,12 +172,12 @@ static void repair(ar_shard *sh, uint64_t dead)
 static bool relocate(nocopy_entry *old, uint8_t hot, void *arg)
 {
 	ar_shard *sh = arg;
-	nocopy_entry *n = ar_log_alloc(&sh->log, old->size, ar_segs[ar_seg_of(old)].bucket, old->expires, sh->last_seq, true);
+	nocopy_entry *n = ar_log_alloc(&sh->log, nocopy_entry_size(old), ar_segs[ar_seg_of(old)].bucket, old->expires, sh->last_seq, true);
 	if (!n) {
 		return false;
 	}
 	AR_HOOK("move.alloc");
-	memcpy(n + 1, old + 1, old->size - sizeof *old);
+	memcpy(n + 1, old + 1, nocopy_entry_size(old) - sizeof *old);
 	n->h = old->h;
 	n->expires = old->expires;
 	n->created = old->created;
@@ -354,6 +354,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 	struct timespec ts;
 	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
 	time_t now = nocopy_now_of(&ts), exp = q->expires ? q->expires : nocopy_expiry(now, q->ttl);
+	exp = exp > UINT32_MAX ? UINT32_MAX : exp;
 	nocopy_entry *e = alloc_relocking(sh, q->size, exp, now); /* first: nothing above relies on shard state */
 	if (!e) {
 		shard_unlock(sh);
@@ -363,7 +364,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 	e->h = q->h;
 	e->klen = q->klen;
 	e->koff = q->koff;
-	e->expires = exp;
+	e->expires = (uint32_t) exp;
 	e->created = (uint32_t) now;
 	e->flags = q->flags;
 	e->user = q->user;

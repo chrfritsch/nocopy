@@ -255,9 +255,9 @@ static void structure(void)
 			CHECK(e->live && ar_shard_idx(e->h) == si);
 			CHECK(ar_seg_owner[seg] == lg->tenant && ar_log_owns(lg, seg));
 			CHECK(ar_segs[seg].state == SEG_OPEN || ar_segs[seg].state == SEG_SEALED);
-			CHECK((char *) e + e->size <= ar_seg_start(seg) + ar_segs[seg].used);
+			CHECK((char *) e + nocopy_entry_size(e) <= ar_seg_start(seg) + ar_segs[seg].used);
 			n++;
-			live += e->size;
+			live += nocopy_entry_size(e);
 		}
 		CHECK(n == ix->hdr->nlive && n <= ix->hdr->cap && live == lg->live_bytes);
 		for (uint32_t s = 0; s < ar_nsegs; s++) {
@@ -278,12 +278,12 @@ static void structure(void)
 			size_t seg_live = 0;
 			for (char *p = ar_seg_start(s), *end = p + g->used; p < end;) {
 				nocopy_entry *e = (nocopy_entry *) p;
-				CHECK(e->size >= sizeof *e && !(e->size & 7) && p + e->size <= end);
+				CHECK(nocopy_entry_size(e) >= sizeof *e && !(nocopy_entry_size(e) & 7) && p + nocopy_entry_size(e) <= end);
 				if (e->live) {
 					CHECK(ar_index_find(ix, slot_of(e)) != NULL); /* live: a slot reaches it */
-					seg_live += e->size;
+					seg_live += nocopy_entry_size(e);
 				}
-				p += e->size;
+				p += nocopy_entry_size(e);
 			}
 			CHECK(seg_live == g->live && g->pending == wips[s]);
 			bool open = false;

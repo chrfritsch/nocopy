@@ -29,7 +29,7 @@ nocopy_err ar_layout_plan(ar_layout *l, size_t size, uint64_t hint)
 	size_t maxsegs = size >> shift; /* an upper bound: the header takes some */
 	l->tables_off = up64(sizeof(ar_arena));
 	l->ghosts_off = l->tables_off + (size_t) nshards * per * sizeof(ar_slot);
-	l->segrec_off = up64(l->ghosts_off + (size_t) nshards * per * sizeof(uint32_t));
+	l->segrec_off = up64(l->ghosts_off + (size_t) nshards * per * sizeof(uint16_t));
 	size_t at = ar_pool_plan(&l->pool, l->segrec_off + maxsegs * sizeof(ar_seg), maxsegs);
 	l->header = ar_atoms_plan(&l->atoms, at, size);
 	size_t need = l->header + ((size_t) 4 << shift);
@@ -76,7 +76,7 @@ bool ar_layout_adopt(ar_arena *a, nocopy_rebase_fn rebase)
 	ar_pool_adopt(&a->pool);
 	ar_log_adopt((ar_seg *) (ar_base + a->segrec_off), n);
 	ar_policy_adopt(&a->expunges, a->slots_per);
-	ar_shards_adopt(a->shards, n, (ar_slot *) (ar_base + a->tables_off), (uint32_t *) (ar_base + a->ghosts_off), a->slots_per, rebase);
+	ar_shards_adopt(a->shards, n, (ar_slot *) (ar_base + a->tables_off), (uint16_t *) (ar_base + a->ghosts_off), a->slots_per, rebase);
 	ar_leases_adopt(a->leases, n);
 	ar_atoms_adopt(&a->atoms, ar_shards_deps);
 	return true;

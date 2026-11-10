@@ -69,7 +69,7 @@ static inline uint32_t ar_log_next(const ar_log *lg, uint32_t s)
 /* The entries of segment s. A walk may run past unlinks that make s DEAD: only ar_log_reclaim frees it, under this lock. */
 #define AR_SEG_FOREACH(s, e) \
 	for (nocopy_entry *e = (nocopy_entry *) ar_seg_start(s), *e##_end = (nocopy_entry *) (ar_seg_start(s) + ar_segs[s].used); \
-	     e < e##_end; e = (nocopy_entry *) ((char *) e + e->size))
+	     e < e##_end; e = (nocopy_entry *) ((char *) e + nocopy_entry_size(e)))
 
 static inline void ar_seg_set(uint32_t s, uint8_t st) { __atomic_store_n(&ar_segs[s].state, st, __ATOMIC_RELEASE); }
 
@@ -91,7 +91,7 @@ static inline __attribute__((always_inline)) nocopy_entry *ar_log_carve(uint32_t
 {
 	ar_seg *g = &ar_segs[s];
 	nocopy_entry *e = (nocopy_entry *) (ar_seg_start(s) + g->used);
-	e->size = total;
+	e->size8 = (uint32_t) (total >> 3);
 	e->live = false;
 	e->hot = 0;
 	g->used += total;
@@ -121,8 +121,8 @@ static inline __attribute__((always_inline)) void ar_log_born(ar_log *lg, nocopy
 	ar_seg *g = &ar_segs[ar_seg_of(e)];
 	e->live = true;
 	g->pending--;
-	g->live += e->size;
-	lg->live_bytes += e->size;
+	g->live += nocopy_entry_size(e);
+	lg->live_bytes += nocopy_entry_size(e);
 }
 
 /* live -> dead (its slot already gone or repointed) */
@@ -130,8 +130,8 @@ static inline __attribute__((always_inline)) void ar_log_died(ar_log *lg, nocopy
 {
 	uint32_t s = ar_seg_of(e);
 	e->live = false;
-	ar_segs[s].live -= e->size;
-	lg->live_bytes -= e->size;
+	ar_segs[s].live -= nocopy_entry_size(e);
+	lg->live_bytes -= nocopy_entry_size(e);
 	ar_log_check(lg, s);
 }
 

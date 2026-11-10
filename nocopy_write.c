@@ -287,7 +287,7 @@ typedef struct {
 
 static void check_ptr(const checker *c, const void *p, size_t n)
 {
-	NC_ASSERT((uintptr_t) p - (uintptr_t) c->e < c->e->size && n <= c->e->size - ((uintptr_t) p - (uintptr_t) c->e));
+	NC_ASSERT((uintptr_t) p - (uintptr_t) c->e < nocopy_entry_size(c->e) && n <= nocopy_entry_size(c->e) - ((uintptr_t) p - (uintptr_t) c->e));
 }
 
 static void check_str(const checker *c, const zend_string *s)
@@ -461,13 +461,13 @@ static void rebase_graph(zval *v, rebase *r)
 
 uint8_t nocopy_value_rebase(nocopy_entry *e, const nocopy_entry *from)
 {
-	rebase r = {.from = (uintptr_t) from, .size = from->size, .by = (char *) e - (const char *) from};
+	rebase r = {.from = (uintptr_t) from, .size = nocopy_entry_size(from), .by = (char *) e - (const char *) from};
 	if (nocopy_value_fmt(e) == NOCOPY_FMT_GRAPH) {
 		rebase_graph(block_val(e), &r);
 	} else {
 		zval *v = block_val(e);
 		rebase_zval(&r, v);
-		if (Z_TYPE_P(v) == IS_STRING && (uintptr_t) Z_STR_P(v) - (uintptr_t) e < e->size) {
+		if (Z_TYPE_P(v) == IS_STRING && (uintptr_t) Z_STR_P(v) - (uintptr_t) e < nocopy_entry_size(e)) {
 			ZSTR_H(Z_STR_P(v)) = 0; /* a string alone was stored as it came, maybe unhashed, at any length */
 		}
 	}

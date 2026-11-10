@@ -33,8 +33,8 @@ static inline uint32_t ar_shard_idx(uint64_t h) { return ar_part(h, ar_shard_mas
 
 /* nshards (a power of two) shards over nsegs segments; zero-filled memory. */
 void ar_shards_init(ar_shard *shards, uint32_t nshards, uint32_t slots_per, uint32_t nsegs);
-/* tables: nshards * slots_per slots; ghosts: as many uint32 tags. */
-void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint32_t *ghosts, uint32_t slots_per, nocopy_rebase_fn rebase);
+/* tables: nshards * slots_per slots; ghosts: as many uint16 tags. */
+void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint16_t *ghosts, uint32_t slots_per, nocopy_rebase_fn rebase);
 void ar_shard_wip_abort(int slot); /* a worker slot claimed from a dead owner: abort the entry it was filling. No lock held */
 bool ar_shards_deps(uint8_t bits); /* any segment depends on bits: every shard locked meanwhile (atoms' rotation) */
 

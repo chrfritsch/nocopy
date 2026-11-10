@@ -19,7 +19,7 @@ void ar_policy_adopt(uint64_t *expunges, uint32_t ghost_slots);
 void ar_policy_count_expunge(void); /* before the unlinks: a reader that misses then sees it */
 
 /* A new key: its starting hot (2 if it was evicted recently: survives two merges without a read). ghosts: its shard's table. */
-uint8_t ar_policy_admit(ar_policy *pol, uint32_t *ghosts, uint64_t h);
+uint8_t ar_policy_admit(ar_policy *pol, uint16_t *ghosts, uint64_t h);
 
 /* e's reads join (leave) its segment's count. */
 static inline __attribute__((always_inline)) void ar_policy_born(nocopy_entry *e)
@@ -41,7 +41,7 @@ static inline __attribute__((always_inline)) void ar_policy_died(nocopy_entry *e
 typedef struct {
 	ar_log *log;
 	ar_policy *pol;
-	uint32_t *ghosts;
+	uint16_t *ghosts;
 	uint64_t last_seq; /* merge order for a run sent to the back */
 	/* old copied forward into its bucket with `hot`, slot repointed, old died. False: no room left. */
 	bool (*relocate)(nocopy_entry *old, uint8_t hot, void *arg);

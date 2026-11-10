@@ -182,7 +182,7 @@ int main(void)
 			nocopy_entry *e = entry_of(ix->t[s]);
 			assert(ar_index_find(ix, slot_of(e)) == &ix->t[s]); /* no duplicates, every tag its entry's */
 			n++;
-			live += e->size;
+			live += nocopy_entry_size(e);
 		}
 	}
 	assert(n == N - 1 && ar_index_nlive(ix) == n && sh->log.live_bytes == live);
