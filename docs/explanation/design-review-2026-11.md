@@ -16,14 +16,14 @@ Ranked by blast radius × likelihood in real deployments.
 |---|---|---|---|---|---|
 | 1 | Liveness is a guess that fails toward "dead" | real flaw | segfaults and wrong values in every process | wrongly: "cannot share" | fail closed + refuse another PID namespace at attach (fixed instead by kernel locks, 2026-11-10) |
 | 2 | The pin cap is per request, not per arena | real flaw | hit ratio 100% -> 27% while 4 requests run long | half | a global cap; a stat (fixed: union budget + age, 2026-11-10) |
-| 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field |
+| 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field (done 2026-11-10, owner naming open) |
 | 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end |
 | 5 | Valkey: a process that starts no new request never re-checks | real flaw for workers | stale reads without bound | "by design" for a request | re-check the heartbeat by age |
 | 6 | Valkey TTLs use the writer's wall clock | real flaw with skew | short TTLs never cached, or outliving their TTL | no | `PX` instead of `PXAT` |
 | 7 | A named file full of pointers at a fixed address | trade-off, under-documented | a file write as the pool's user is code execution in every worker | half | docs; a random base |
 | 8 | A stopped lock holder is waited for forever | trade-off, undocumented | writers spin at 100% CPU | no | docs; a spin budget |
-| 9 | 1,024 worker slots, then every call throws | trade-off, undocumented | `Error: no free worker slot` | no | degrade to no cache; docs |
-| 10 | Fixed-at-creation settings are ignored silently on attach | trade-off, undocumented | a raised `shm_size` does nothing | no | a warning |
+| 9 | 1,024 worker slots, then every call throws | trade-off, undocumented | `Error: no free worker slot` | no | degrade to no cache; docs (done 2026-11-10) |
+| 10 | Fixed-at-creation settings are ignored silently on attach | trade-off, undocumented | a raised `shm_size` does nothing | no | a warning (done 2026-11-10) |
 | 11 | Engine internals without an upper version guard | trade-off | a new PHP minor compiles and may corrupt silently | no | `#error` above the tested minor |
 
 Ruled out, with reasons: [below](#ruled-out).
@@ -138,6 +138,10 @@ however long they run, and that the cap multiplies by the number of such request
    growth, not the tail.
 
 ### 3. "No cache" is silent exactly where it matters
+
+**Partly fixed 2026-11-10** ([rebuild, item 3](rebuild-2026-11.md#3-one-degraded-state-with-one-behaviour)): `nocopy_clear()`
+returns `false` when off, `nocopy_stats()['off']` says why, the console prints it, and the how-to has the deploy check.
+Open: an object another user created first still needs removing by hand, and the warning does not name its owner.
 
 **Premise attacked.** "A cache that is off is slow; a cache that is split is wrong", so a process that cannot attach gets
 no cache and that is the safe default.
@@ -317,6 +321,9 @@ write is new behaviour for callers; to be decided, not measured.
 
 ### 9. 1,024 worker slots, then every call throws
 
+**Fixed 2026-11-10** ([rebuild, item 3](rebuild-2026-11.md#3-one-degraded-state-with-one-behaviour)): no slot is off like no
+arena (misses, failed writes, one log line, retried each request); the limit is in the configuration reference. Test 098.
+
 **Evidence.** `NOCOPY_MAX_WORKERS` is 1,024 (`arena/base.h:24`), per arena, counting processes and ZTS threads. A process
 that gets no slot is attached but untracked, and every `nocopy_*` call throws `Error: nocopy: no free worker slot`
 (`nocopy_store.c:14-21`, `nocopy.c:584-586`). *By reading*; reaching it needs 1,025 live processes.
@@ -331,6 +338,9 @@ peak.
 visibility fixes. Document the limit in the configuration reference.
 
 ### 10. Fixed-at-creation settings are ignored silently on attach
+
+**Fixed 2026-11-10** ([rebuild, item 3](rebuild-2026-11.md#3-one-degraded-state-with-one-behaviour)): an attacher whose size or
+slot tables differ gets a warning naming the creator's size and how to resize. Test 098.
 
 **Evidence.** An attacher takes the creator's size and tables (`arena/nocopy_arena.h:21`, `arena/region.c:171-181`
 compare only the build id). Reproduced: with a 16 MB arena mapped by one process, a second process configured with

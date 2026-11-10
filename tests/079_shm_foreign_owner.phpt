@@ -40,15 +40,15 @@ run($probe);
 <?php array_map('unlink', glob('/dev/shm/nocopy-t079*')); ?>
 --EXPECTF--
 nobody's, mode 0600:
-%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 string(4) "none"
 NULL
 nobody's, mode 0666:
-%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 string(4) "none"
 NULL
 root's, mode 0666:
-%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t079: it is owned by another user or open to others. The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 string(4) "none"
 NULL
 root's, mode 0600:

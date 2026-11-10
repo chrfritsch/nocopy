@@ -1,7 +1,7 @@
 # `nocopy_stats()`
 
 Returns an array describing the whole arena (all processes), not just the calling process. Counters run since the arena
-was created. Without a shared cache, every number is `0` and `shm_name` is `null`.
+was created. Without a shared cache, every number is `0`, `shm_name` is `null` and `off` says why.
 With `nocopy.valkey`, these describe this server's local copies only.
 
 | Key | Meaning |
@@ -31,5 +31,6 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | `shared_strings_rotations` | Times a full generation's successor took over the older half (only once no entry or write in progress used that half) |
 | `shm_name` | Name of the attached shared-memory object (`nocopy.shm_name` + `.` + build id), or `null` |
 | `valkey_listener` | Pid of this arena's Valkey listener, `0` if none |
+| `off` | `null` while this process (thread) has the cache; else why not, e.g. `nocopy.shm_name is not set (e.g. /nocopy)` or `no worker slot: …`. Then fetches miss, writes and `nocopy_clear()` return `false` |
 
 Hit rate: `hits / (hits + misses)`. What to watch: [Size and monitor the cache](../how-to/size-and-monitor.md).

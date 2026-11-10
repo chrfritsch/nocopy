@@ -35,6 +35,8 @@ nocopy_err nocopy_arena_open(const nocopy_config *cfg, nocopy_named *out)
 		return (nocopy_err) {.code = NOCOPY_ERR_FAILED, .msg = "no file descriptor or no free process slot for its liveness lock"};
 	}
 	ar_user = ar_hdr->user;
+	out->size = ar_size;
+	out->slots_differ = ar_hdr->slots_per != l.slots_per || ar_hdr->nshards != l.nshards;
 	return err;
 }
 
@@ -79,12 +81,14 @@ void nocopy_release(nocopy_ctx *c)
 }
 
 /* A forked child gets its own owner id and worker slot, and inherits the parent's pins. */
-void nocopy_after_fork(nocopy_ctx *c)
+bool nocopy_after_fork(nocopy_ctx *c)
 {
 	ar_proc_attach(ar_region_reopen());
-	if (nocopy_claim(c)) {
-		ar_pins_publish(&c->pins);
+	if (!nocopy_claim(c)) {
+		return false;
 	}
+	ar_pins_publish(&c->pins);
+	return true;
 }
 
 void nocopy_request_end(nocopy_ctx *c)

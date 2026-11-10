@@ -21,7 +21,7 @@ $calls = 0;
 $f = function () use (&$calls) { return ++$calls; };
 var_dump(nocopy_remember('r', $f), nocopy_remember('r', $f));
 var_dump(nocopy_put('o', new stdClass));
-var_dump(nocopy_stats()['size'], nocopy_stats()['shm_name'], nocopy_clear());
+var_dump(nocopy_stats()['size'], nocopy_stats()['shm_name'], nocopy_clear()); // off: a clear that reaches nothing fails
 PHP;
 echo shell_exec('/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' . escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
     . ' -d nocopy.shm_name=/nocopy-t058 -r ' . escapeshellarg($code) . ' 2>&1');
@@ -30,7 +30,7 @@ var_dump(nocopy_get('mine'), nocopy_get('a'), nocopy_get('b'));
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t058*')); ?>
 --EXPECTF--
-%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t058: no permission to open it (another user created it). The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name /nocopy-t058: no permission to open it (another user created it). The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 string(4) "none"
 bool(false)
 NULL
@@ -50,7 +50,7 @@ int(2)
 bool(false)
 int(0)
 NULL
-bool(true)
+bool(false)
 string(4) "root"
 NULL
 NULL

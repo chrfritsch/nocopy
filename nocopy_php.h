@@ -30,6 +30,8 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	nocopy_env env; /* the value layer's */
 	nocopy_kept_cache kept; /* copy mode's kept copies */
 	nocopy_vk vk; /* the Valkey tier's connection */
+	const struct nocopy_detour_ops *detour; /* where the store ops go: NULL the local store */
+	const char *off; /* why this process (thread) has no cache, NULL: it has one */
 ZEND_END_MODULE_GLOBALS(nocopy)
 
 ZEND_EXTERN_MODULE_GLOBALS(nocopy)
@@ -45,7 +47,6 @@ typedef struct {
 
 void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
-bool nocopy_tracked(void); /* false (Error thrown): this process/thread has no worker slot */
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
 /* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value. */
@@ -58,7 +59,7 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
 /* Fetch, or run fn once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv); /* fn: a valid callable */
-void nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too */
+bool nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too; false: not everything was cleared */
 void nocopy_list_keys(zend_string *prefix, HashTable *out); /* this host's entries under prefix, oldest first: key => size, created, expires */
 
 /* The local store alone, for the Valkey tier. */
@@ -79,12 +80,11 @@ struct nocopy_detour_ops {
 	zend_long (*drop_multi)(HashTable *keys);
 	bool (*add_long)(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 	bool (*cas_long)(zend_string *key, zend_long old, zend_long nw);
-	void (*clear)(void);
+	bool (*clear)(void);
 	bool leases;	  /* nocopy_remember single-flights through the arena's leases */
 	const char *name; /* nocopy_shared_with() */
 };
 
-extern const nocopy_detour_ops *nocopy_detour; /* NULL: the local store */
-extern const nocopy_detour_ops nocopy_no_arena; /* every op misses or fails; stores still check the value */
+extern const nocopy_detour_ops nocopy_no_arena; /* off: every op misses or fails; stores still check the value */
 
 #endif

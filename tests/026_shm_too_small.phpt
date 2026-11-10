@@ -11,7 +11,7 @@ nocopy.entries_hint=1000000
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t026*')); ?>
 --EXPECTF--
-%AWarning: PHP Startup: nocopy: %d bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large. The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: %d bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large. The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 bool(false)
 NULL
 string(4) "none"

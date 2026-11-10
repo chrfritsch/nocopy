@@ -36,6 +36,6 @@ array(2) {
 }
 NULL
 1 1 host
-%AWarning: PHP Startup: nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
 string(4) "none"
 NULL

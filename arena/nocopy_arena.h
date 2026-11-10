@@ -43,7 +43,7 @@ void nocopy_set_clock(nocopy_clock_fn fn);
 
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
 void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
-void nocopy_after_fork(nocopy_ctx *c);
+bool nocopy_after_fork(nocopy_ctx *c); /* false: no worker slot (or no owner id) in the child */
 void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailout left open */
 
 /* Reads happen between borrow_begin and borrow_end; what they found stays pinned until then (or longer: nocopy_keep). */

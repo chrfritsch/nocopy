@@ -13,13 +13,17 @@ There is deliberately **no default name**: two sites of one user would silently 
 
 ## All or nothing
 
-A process without `nocopy.shm_name`, or one that cannot attach (another user's object, `/dev/shm` full), has **no cache**:
-fetches miss and writes return `false`, with a startup warning. It never falls back to a private cache.
+A process without `nocopy.shm_name`, one that cannot attach (another user's object, `/dev/shm` full), and one that
+attached but got no worker slot (1024 processes and threads, or no file descriptor left after a fork) is **off**, one state
+with one behaviour: fetches miss, writes and `nocopy_clear()` return `false`, `nocopy_remember()` computes without keeping,
+and nothing throws. It logs one warning, and `nocopy_stats()['off']` says why for as long as it lasts. It never falls back
+to a private cache.
 
 A private cache would look like it works, but its writes and deletes would not reach anyone else. Picture `drush cr` clearing
 a private cache while php-fpm keeps serving the old data, or a cron job invalidating cache tags nobody else sees. A cache that
-is off is slow; a cache that is split is wrong. `nocopy_shared_with()` lets code check (`host`, `valkey`, `none`), and the
-Drupal module throws on `none` rather than serve stale data.
+is off is slow; a cache that is split is wrong. A clear that reached nothing must not look like one that worked, so it
+returns `false`. `nocopy_shared_with()` lets code check (`host`, `valkey`, `none`), and the Drupal module throws on `none`
+rather than serve stale data.
 
 ## One user, one build, one machine
 

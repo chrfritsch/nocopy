@@ -54,7 +54,8 @@ if (!extension_loaded('nocopy')) {
     exit(2);
 }
 if (nocopy_shared_with() === 'none') {
-    fwrite(STDERR, "nocopy: no shared cache in this process: set nocopy.shm_name and run as the user that owns it, not root\n");
+    $why = nocopy_stats()['off'] ?? 'unknown';
+    fwrite(STDERR, "nocopy: no shared cache in this process ($why): set nocopy.shm_name and run as the user that owns it, not root\n");
     exit(2);
 }
 
@@ -108,7 +109,10 @@ switch ($cmd) {
         if (isset($args[0])) {
             echo nocopy_delete_multiple(array_map(strval(...), array_keys(nocopy_keys($args[0])))), " deleted\n";
         } else {
-            nocopy_clear();
+            if (!nocopy_clear()) {
+                fwrite(STDERR, "nocopy: not cleared everywhere (Valkey unreachable?)\n");
+                exit(1);
+            }
             echo "cleared\n";
         }
         exit(0);

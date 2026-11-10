@@ -16,6 +16,8 @@ typedef struct {
 typedef struct {
 	char name[64];  /* the POSIX shm object: base.<abi> */
 	char other[64]; /* another build's region under the same base, still in use by its processes; "" none */
+	size_t size;       /* the creator's: an attacher's own setting is ignored */
+	bool slots_differ; /* the creator's slot tables are not the ones this process's settings plan */
 } nocopy_named;
 
 /* Creates or attaches to base.<abi>, mapped at the same address in every process. A creator maps size bytes, zero-filled,

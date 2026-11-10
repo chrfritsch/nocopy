@@ -37,6 +37,14 @@ they run as one long `php -S` request. Tests 096, 097.
 
 **`nocopy.shm_name` is required; without it there is no cache.** Unset or not attachable means a startup warning and no
 cache, never a private one: a private cache splits invalidation silently ([Sharing](sharing.md#all-or-nothing)).
+
+**One off state** (was four behaviours: misses, `nocopy_clear()` answering `true`, an uncaught `Error` without a worker
+slot, silence on ignored settings; [design review](design-review-2026-11.md#3-no-cache-is-silent-exactly-where-it-matters)
+3, 9, 10): no name, no attach and no worker slot all route to the no-arena table, which misses and fails every write and
+the clear, with the reason in `nocopy_stats()['off']`. The route moved into the module globals (per thread: a ZTS thread
+can lack a slot while the others have one): `./dev ab HEAD 7 read write` within noise on NTS (rows ±6%, with signs
+flipping across groups); ZTS not measured. `nocopy_clear()` with Valkey unreachable is `false` too: the other servers
+keep their copies.
 **No default name:** two sites of one user would share keys.
 
 **Liveness from kernel file locks** (was: pid + start time from `/proc/<pid>/stat`, where every failure to read meant dead): a live

@@ -1,11 +1,14 @@
 /* Shard repair: a lock taken from a dead holder rebuilds the shard. Builds the half-done states a kill can leave
  * (a delete's shift stopped midway, an unlinked entry still counted live, an abandoned allocation, a dead writer's
  * unfinished big entry, a segment claimed and never set up) and checks the shard afterwards. Inspects internals: layout.h. */
+#define _GNU_SOURCE /* F_OFD_SETLK */
 #include "../../arena/layout.h"
 #include "../../arena/nocopy_arena.h"
 #include <assert.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -71,6 +74,32 @@ static bool found(nocopy_ctx *c, const char *k)
 	bool f = nocopy_find(c, hash(k), k, (uint32_t) strlen(k)) != NULL;
 	nocopy_borrow_end(c);
 	return f;
+}
+
+/* Owner ids that cannot be had: no descriptor (a forked child at its fd limit), or every process slot held. Both: no worker slot. */
+static void no_owner_id(void)
+{
+	pid_t p = fork();
+	if (!p) {
+		nocopy_ctx k;
+		nocopy_ctx_init(&k);
+		for (int fd; (fd = open("/dev/null", O_RDONLY)) >= 0;) {} /* every descriptor taken */
+		_exit(!nocopy_after_fork(&k) && !ar_self && nocopy_ctx_slot(&k) < 0 ? 0 : 1);
+	}
+	int st;
+	assert(waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	p = fork();
+	if (!p) {
+		int fd = ar_region_reopen();
+		for (uint32_t s = 0; s < NOCOPY_MAX_WORKERS; s++) { /* another open file holds them all (ours too: no conflict with itself) */
+			struct flock fl = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = s, .l_len = 1};
+			(void) fcntl(fd, F_OFD_SETLK, &fl);
+		}
+		nocopy_ctx k;
+		nocopy_ctx_init(&k);
+		_exit(fd >= 0 && !nocopy_after_fork(&k) && !ar_self ? 0 : 1);
+	}
+	assert(waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 }
 
 int main(void)
@@ -155,6 +184,7 @@ int main(void)
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		assert(sh->log.cur[b] == -1);
 	}
+	no_owner_id();
 	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;
 }

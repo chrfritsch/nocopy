@@ -1196,12 +1196,11 @@ static bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw)
 	return r == 1;
 }
 
-static void nocopy_vk_clear(void)
+static bool nocopy_vk_clear(void)
 {
-	if (vk_ready()) {
-		vk_clear();
-	}
+	bool ok = vk_ready() && vk_clear() >= 0; /* Valkey down: the other servers keep theirs */
 	nocopy_clear();
+	return ok;
 }
 
 static const nocopy_detour_ops vk_detour = {

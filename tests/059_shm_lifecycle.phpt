@@ -49,5 +49,5 @@ bool(true)
 bool(true)
 host
 bool(false)
-%AWarning: PHP Startup: nocopy: nocopy.shm_name nocopy-t059: not a name like /nocopy (one leading slash, at most 40 characters). The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
-%AWarning: PHP Startup: nocopy: nocopy.shm_name /a/b: not a name like /nocopy (one leading slash, at most 40 characters). The cache is unavailable in this process: fetches miss, writes fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name nocopy-t059: not a name like /nocopy (one leading slash, at most 40 characters). The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0
+%AWarning: PHP Startup: nocopy: nocopy.shm_name /a/b: not a name like /nocopy (one leading slash, at most 40 characters). The cache is off in this process: fetches miss, writes and clears fail in Unknown on line 0

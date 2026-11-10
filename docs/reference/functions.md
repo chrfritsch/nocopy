@@ -58,7 +58,8 @@ Removes `$keys`; returns how many existed. Keys that are not strings are skipped
 
 ### `nocopy_clear(): bool`
 
-Removes every entry. With `nocopy.valkey`, every key under `nocopy.valkey_prefix` in Valkey too.
+Removes every entry. With `nocopy.valkey`, every key under `nocopy.valkey_prefix` in Valkey too. `false` if not
+everything was cleared: the cache is off in this process (`nocopy_stats()['off']`), or Valkey could not be reached.
 
 ## Counters
 

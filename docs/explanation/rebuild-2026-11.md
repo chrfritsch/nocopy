@@ -52,6 +52,12 @@ SAPI name stays as the first guess; it stops being the only one.
 
 ### 3. One degraded state with one behaviour
 
+**Built 2026-11-10**: off covers no name, no attach and no worker slot (also a forked child without a liveness lock, which
+threw before); the route is per thread. `nocopy_clear()` is `false` when off, and also when Valkey cannot be reached.
+`nocopy_stats()['off']` carries the reason, and the console prints it and exits 2. Ignored size or slot settings warn at
+attach. Tests 058 (clear), 098, `tests/c/repair.c` (no descriptor, no free process slot). Not done: naming the owner of a
+foreign object (finding 3).
+
 No arena, no worker slot, an object owned by someone else and settings that differ from the creator's behave in four ways
 today: misses, `nocopy_clear()` answering `true`, an uncaught `Error`, silence (findings
 [3](design-review-2026-11.md#3-no-cache-is-silent-exactly-where-it-matters),

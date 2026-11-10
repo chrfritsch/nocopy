@@ -37,6 +37,9 @@ static size_t arena_size = 32 * 1024 * 1024;
 static zend_long ini_hint = 4096;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_attached() false: unavailable) */
+static char off_why[400] = "the module is not started"; /* why this process has no arena */
+static const nocopy_detour_ops *proc_route = &nocopy_no_arena; /* this process's: the local store (NULL), Valkey, or off */
+static const char no_slot[] = "no worker slot: 1024 processes and threads use this cache, or this process had no file descriptor left for its liveness lock";
 static bool sapi_zero_copy;
 static zend_long zero_copy_seconds = 3; /* a zero-copy request older than this copies: a slow backend must not pin the cache away */
 static bool open_deferred; /* fpm master as root: each worker opens the arena on its first request */
@@ -45,14 +48,14 @@ static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_reques
 
 /* ---- nocopy_* ---- */
 
-/* false (thrown): a negative ttl in argument arg, or no worker slot. */
+/* false (thrown): a negative ttl in argument arg. */
 static bool write_ok(uint32_t arg, zend_long ttl)
 {
 	if (ttl < 0) {
 		zend_argument_value_error(arg, "must be greater than or equal to 0");
 		return false;
 	}
-	return nocopy_tracked();
+	return true;
 }
 
 static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
@@ -120,17 +123,13 @@ PHP_FUNCTION(nocopy_cas)
 		Z_PARAM_LONG(nw)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!nocopy_tracked()) {
-		RETURN_THROWS();
-	}
 	RETURN_BOOL(nocopy_cas_long(key, old, nw));
 }
 
 PHP_FUNCTION(nocopy_clear)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	nocopy_clear_all();
-	RETURN_TRUE;
+	RETURN_BOOL(nocopy_clear_all());
 }
 
 PHP_FUNCTION(nocopy_get)
@@ -144,9 +143,6 @@ PHP_FUNCTION(nocopy_get)
 		Z_PARAM_ZVAL(hit)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!nocopy_tracked()) {
-		RETURN_THROWS();
-	}
 	bool found = nocopy_fetch(key, return_value);
 	if (hit) {
 		ZEND_TRY_ASSIGN_REF_BOOL(hit, found);
@@ -159,9 +155,7 @@ ZEND_FRAMELESS_FUNCTION(nocopy_get, 1)
 	zval tmp;
 	zend_string *key;
 	Z_FLF_PARAM_STR(1, key, tmp);
-	if (nocopy_tracked()) {
-		nocopy_fetch(key, return_value);
-	}
+	nocopy_fetch(key, return_value);
 flf_clean:
 	Z_FLF_PARAM_FREE_STR(1, tmp);
 }
@@ -218,9 +212,6 @@ PHP_FUNCTION(nocopy_get_multiple)
 		Z_PARAM_ARRAY_HT(keys)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!nocopy_tracked()) {
-		RETURN_THROWS();
-	}
 	array_init_size(return_value, zend_hash_num_elements(keys));
 	nocopy_fetch_multi(keys, Z_ARRVAL_P(return_value));
 }
@@ -294,9 +285,6 @@ PHP_FUNCTION(nocopy_keys)
 		Z_PARAM_STR(prefix)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!nocopy_tracked()) {
-		RETURN_THROWS();
-	}
 	array_init(return_value);
 	nocopy_list_keys(prefix, Z_ARRVAL_P(return_value));
 }
@@ -304,7 +292,7 @@ PHP_FUNCTION(nocopy_keys)
 PHP_FUNCTION(nocopy_shared_with)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
-	RETURN_STRING(nocopy_detour ? nocopy_detour->name : "host");
+	RETURN_STRING(NOCOPY_G(detour) ? NOCOPY_G(detour)->name : "host");
 }
 
 PHP_FUNCTION(nocopy_stats)
@@ -345,6 +333,11 @@ PHP_FUNCTION(nocopy_stats)
 		add_assoc_null(return_value, "shm_name");
 	}
 	add_assoc_long(return_value, "valkey_listener", nocopy_vk_listener());
+	if (NOCOPY_G(off)) {
+		add_assoc_string(return_value, "off", (char *) NOCOPY_G(off));
+	} else {
+		add_assoc_null(return_value, "off");
+	}
 }
 
 /* ---- FrankenPHP worker mode ---- */
@@ -470,20 +463,14 @@ static void resolve_serializer(void)
 	zend_string_release_ex(v, 1);
 }
 
-static void atfork_child(void)
-{
-	if (nocopy_attached()) {
-		nocopy_after_fork(&NOCOPY_G(ctx));
-	}
-	nocopy_vk_close(&NOCOPY_G(vk));
-}
-
 static PHP_GINIT_FUNCTION(nocopy)
 {
 #if defined(COMPILE_DL_NOCOPY) && defined(ZTS)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 	memset(nocopy_globals, 0, sizeof(*nocopy_globals));
+	nocopy_globals->detour = &nocopy_no_arena; /* off until a worker slot is claimed */
+	nocopy_globals->off = off_why;
 	nocopy_ctx_init(&nocopy_globals->ctx);
 	nocopy_env_init(&nocopy_globals->env);
 }
@@ -508,18 +495,24 @@ static void arena_open(bool late)
 		const nocopy_config cfg = {.name = shm_name, .size = arena_size, .hint = ini_hint > 0 ? (uint64_t) ini_hint : 0, .abi = layout_id(), .rebase = nocopy_value_rebase};
 		err = nocopy_arena_open(&cfg, &named);
 	}
+	off_why[0] = 0;
 	if (!shm_name) {
-		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name is not set (e.g. /nocopy). The cache is unavailable in this process: fetches miss, writes fail");
+		snprintf(off_why, sizeof off_why, "nocopy.shm_name is not set (e.g. /nocopy)");
 	} else if (err.code == NOCOPY_ERR_TOO_SMALL) {
-		snprintf(msg, sizeof msg, "nocopy: %zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large. The cache is unavailable in this process: fetches miss, writes fail", err.need);
+		snprintf(off_why, sizeof off_why, "%zu bytes needed for the slot tables and a few segments: nocopy.shm_size is too small or nocopy.entries_hint too large", err.need);
 	} else if (err.code != NOCOPY_ERR_NONE) {
 		/* not a private cache instead: its writes and deletes would never reach the processes sharing the named one */
-		snprintf(msg, sizeof msg, "nocopy: nocopy.shm_name %s: %s. The cache is unavailable in this process: fetches miss, writes fail", shm_name, err.msg);
+		snprintf(off_why, sizeof off_why, "nocopy.shm_name %s: %s", shm_name, err.msg);
 	} else {
 		memcpy(shm_attached, named.name, sizeof shm_attached);
 		if (named.other[0]) {
 			snprintf(msg, sizeof msg, "nocopy: %s, the nocopy.shm_name cache of another PHP or nocopy build, is in use: its processes do not share this cache", named.other);
+		} else if (named.size != arena_size || named.slots_differ) {
+			snprintf(msg, sizeof msg, "nocopy: nocopy.shm_size or nocopy.entries_hint ignored: %s was created with %zu bytes and other slot tables by a process still using it. Stop every process using it (CLI included) to apply them", named.name, named.size);
 		}
+	}
+	if (off_why[0]) {
+		snprintf(msg, sizeof msg, "nocopy: %s. The cache is off in this process: fetches miss, writes and clears fail", off_why);
 	}
 	if (msg[0]) {
 		if (late) {
@@ -533,10 +526,44 @@ static void arena_open(bool late)
 	}
 }
 
+/* This thread's route: the process's, or off without a worker slot. */
+static void route_thread(void)
+{
+	bool on = nocopy_attached() && nocopy_ctx_slot(&NOCOPY_G(ctx)) >= 0;
+	NOCOPY_G(detour) = on ? proc_route : &nocopy_no_arena;
+	NOCOPY_G(off) = on ? NULL : nocopy_attached() ? no_slot : off_why;
+}
+
 /* Where the store ops go: the local store (NULL), else no arena, else Valkey. */
 static void route(void)
 {
-	nocopy_detour = nocopy_attached() ? nocopy_vk_route() : &nocopy_no_arena;
+	proc_route = nocopy_attached() ? nocopy_vk_route() : &nocopy_no_arena;
+	route_thread();
+}
+
+static void log_no_slot(void)
+{
+	char msg[300];
+	snprintf(msg, sizeof msg, "nocopy: %s. The cache is off in this process: fetches miss, writes and clears fail", no_slot);
+	php_log_err_with_severity(msg, LOG_WARNING);
+}
+
+/* A worker slot for this thread, tried again each request; one log line when there is none. */
+static void claim(void)
+{
+	if (nocopy_attached() && !nocopy_claim(&NOCOPY_G(ctx)) && NOCOPY_G(off) != no_slot) {
+		log_no_slot();
+	}
+	route_thread();
+}
+
+static void atfork_child(void)
+{
+	if (nocopy_attached() && !nocopy_after_fork(&NOCOPY_G(ctx)) && NOCOPY_G(off) != no_slot) {
+		log_no_slot();
+	}
+	route_thread();
+	nocopy_vk_close(&NOCOPY_G(vk));
 }
 
 PHP_MINIT_FUNCTION(nocopy)
@@ -590,8 +617,8 @@ PHP_RINIT_FUNCTION(nocopy)
 		arena_open(true);
 		route();
 	}
-	if (nocopy_ctx_slot(&NOCOPY_G(ctx)) < 0 && nocopy_attached()) {
-		nocopy_claim(&NOCOPY_G(ctx));
+	if (nocopy_ctx_slot(&NOCOPY_G(ctx)) < 0) {
+		claim();
 	}
 	NOCOPY_G(zero_copy) = sapi_zero_copy;
 	nocopy_keep_until(&NOCOPY_G(ctx), sapi_zero_copy && zero_copy_seconds > 0 ? nocopy_mono_ms() + zero_copy_seconds * 1000 : 0);

@@ -49,6 +49,12 @@ php -r 'var_dump(nocopy_shared_with()); nocopy_put("probe", getmypid());'
 Then fetch `probe` in a web request (`var_dump(nocopy_get('probe'))`): it shows the CLI's pid. Both sides' `nocopy_shared_with()`
 must return `host`, and `nocopy_stats()['shm_name']` the same name.
 
+In deploy scripts, let a clear that reached nothing fail the deploy: run it as the pool's user with the pool's settings.
+
+```sh
+sudo -u www-data php -r 'exit(nocopy_clear() ? 0 : 1);'   # or: cli/nocopy clear (exits non-zero)
+```
+
 ## Troubleshooting
 
 | Symptom | Cause |
@@ -60,6 +66,8 @@ must return `host`, and `nocopy_stats()['shm_name']` the same name.
 | `not enough room in /dev/shm (Docker: --shm-size)` | `/dev/shm` smaller than `nocopy.shm_size` |
 | `not a name like /nocopy …` | the name needs one leading slash, at most 40 characters |
 | `no file descriptor or no free process slot for its liveness lock` | the process is at its fd limit (`ulimit -n`), or 1024 processes have the cache open |
+| `no worker slot: …` | 1024 processes and threads have the cache open, or a forked process had no file descriptor left |
+| `nocopy.shm_size or nocopy.entries_hint ignored: …` | a process still using the cache created it with other settings: stop every process using it (php-fpm, CLI workers, cron) to resize |
 | CLI and web disagree although names match | different containers: they share only through a common `/dev/shm`, with the same `nocopy.so` and uid |
 
 To share between servers, see [Valkey](valkey.md). Background: [Sharing: by name and through Valkey](../explanation/sharing.md).
