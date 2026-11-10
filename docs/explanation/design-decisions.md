@@ -127,7 +127,7 @@ its result up front**: no rehash, 10 keys 122 -> 109 ns.
 **`nc_same_array` walks both arrays in step when neither has holes** (same layout, `nNumUsed == count`): no per-element
 `next_elem` bookkeeping. `./dev cg put_arr`: 175 -> 113 Ir per element-op (-35%). `ab.sh write` best of 5, copy / zero: store array
 10 rows 713 -> 625 ns (+14%), 1k rows 67.9 -> 60.5 µs (+12%), 1k unserialized keys +4%; int, string, object within noise.
-Next in the cachegrind profile: `hash_array` (~200 Ir/op, ~60 per 3-element row).
+Next in the cachegrind profile: `hash_array` (~200 Ir/op, ~60 per 3-element row). Rejected: an `if` chain instead of the `switch` in `hash_zval` (perf put 15% of its samples on the dispatch): 199 -> 207 Ir/op, array stores -2 to -5% (`ab.sh write`, best of 7).
 
 **Short value strings are deduped and map hashes sized to their elements**, for the arena's size: Drupal's cache values took
 3.3x igbinary's bytes once objects became graph nodes (bench arena 11.1 -> 19.7 MB). Every row of Drupal's database bins after
