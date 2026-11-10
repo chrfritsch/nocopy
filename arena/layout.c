@@ -60,7 +60,7 @@ void ar_layout_init(ar_arena *a, const ar_layout *l)
 	a->atoms = l->atoms;
 	ar_atoms_init(&a->atoms);
 	ar_shards_init(a->shards, l->nshards, l->slots_per, nsegs);
-	a->start_time = nocopy_now();
+	a->start_time = time(NULL);
 }
 
 bool ar_layout_adopt(ar_arena *a, nocopy_rebase_fn rebase)

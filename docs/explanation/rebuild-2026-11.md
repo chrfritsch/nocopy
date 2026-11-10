@@ -84,6 +84,10 @@ Tests 099, `tests/c/repair.c`. Not done: removing other builds' leftover objects
 
 ### 5. A monotonic clock locally, relative TTLs to Valkey
 
+**Built 2026-11-10** ([design decisions](design-decisions.md#writes)): `CLOCK_MONOTONIC_COARSE` (3.6-4.1 ns, as cheap as
+the realtime coarse clock), not `CLOCK_BOOTTIME` (11-14 ns, no coarse variant). `SET … PX`; a reader keeps the value Valkey
+holds even when the writer's second has passed. Tests 100, 101 (libfaketime: a writer an hour off).
+
 The arena does not survive a boot, so a boot-relative clock (`CLOCK_BOOTTIME`, or the coarse monotonic one where its cost
 matters) can carry expiry, leases and `seq`: a stepped wall clock then neither expires entries early nor keeps them late.
 Towards Valkey, `PX` instead of `PXAT`, so no two servers' clocks are compared

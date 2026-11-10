@@ -19,7 +19,7 @@ Ranked by blast radius × likelihood in real deployments.
 | 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field (done 2026-11-10, owner naming open) |
 | 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end (id fixed 2026-11-10; collect open) |
 | 5 | Valkey: a process that starts no new request never re-checks | real flaw for workers | stale reads without bound | "by design" for a request | re-check the heartbeat by age |
-| 6 | Valkey TTLs use the writer's wall clock | real flaw with skew | short TTLs never cached, or outliving their TTL | no | `PX` instead of `PXAT` |
+| 6 | Valkey TTLs use the writer's wall clock | real flaw with skew | short TTLs never cached, or outliving their TTL | no | `PX` instead of `PXAT` (done 2026-11-10, and a monotonic local clock) |
 | 7 | A named file full of pointers at a fixed address | trade-off, under-documented | a file write as the pool's user is code execution in every worker | half | docs; a random base (done 2026-11-10) |
 | 8 | A stopped lock holder is waited for forever | trade-off, undocumented | writers spin at 100% CPU | no | docs; a spin budget |
 | 9 | 1,024 worker slots, then every call throws | trade-off, undocumented | `Error: no free worker slot` | no | degrade to no cache; docs (done 2026-11-10) |
@@ -249,6 +249,9 @@ monotonic clock read per fetch (the realtime coarse clock cost 3.5 ns in design-
 `./dev ab`), or a check every N calls with no clock at all.
 
 ### 6. Valkey TTLs use the writer's wall clock
+
+**Mitigated 2026-11-10**: `SET … PX`, entries and leases on the coarse monotonic clock, the payload's second only bounds a
+local copy ([design decisions](design-decisions.md#writes)). Tests 100, 101.
 
 **Premise attacked.** TTLs are whole seconds of the wall clock, and that clock is one clock.
 

@@ -230,8 +230,8 @@ void nocopy_list_keys(zend_string *prefix, HashTable *out)
 		zval info;
 		array_init_size(&info, 3);
 		add_assoc_long(&info, "size", (zend_long) nocopy_entry_size(e));
-		add_assoc_long(&info, "created", (zend_long) nocopy_entry_created(e));
-		add_assoc_long(&info, "expires", (zend_long) nocopy_entry_expires(e));
+		add_assoc_long(&info, "created", (zend_long) nocopy_to_wall(nocopy_entry_created(e)));
+		add_assoc_long(&info, "expires", (zend_long) nocopy_to_wall(nocopy_entry_expires(e)));
 		zend_symtable_str_update(out, nocopy_key(e), nocopy_entry_klen(e), &info);
 	}
 	nocopy_borrow_end(c);

@@ -194,7 +194,7 @@ INI values set in MINIT (`nocopy.serializer` in effect) go through `ini_put()`, 
 - Push `invalidate [keys]`: `inval_gen++` (seq_cst) first, then `nocopy_drop_local` per key; a null list (FLUSHALL) clears the arena.
 - Fill guard: `vk_fetch` reads `inval_gen` before its `GET` and drops the copy it just stored if the counter moved. The listener bumps before it drops, so either the filler sees the bump or the drop comes after the store.
 - Writes: local first, then `SET` (an invalidation from elsewhere can only remove our copy, never be overtaken by it). `add`: `SET NX` first, local after. The listener gets our own write pushed too and drops the fresh copy: one refetch per write per server.
-- Encoding: integers as decimal (for `INCRBY`); else `0x00, flags, int64 expires, uint32 compute ms` + the serialized value. `PXAT` = (expires + 1) s.
+- Encoding: integers as decimal (for `INCRBY`); else `0x00, flags, int64 expires (unix s), uint32 compute ms` + the serialized value. `SET … PX` = ms to the end of second expires; the payload's second only bounds a reader's local copy.
 
 ## Invariants worth remembering
 

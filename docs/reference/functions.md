@@ -112,7 +112,7 @@ Counters and sizes of the arena: see [`nocopy_stats()`](stats.md).
 ### `nocopy_keys(string $prefix = ""): array`
 
 The live keys of this host's arena that start with `$prefix`, oldest first (to the clock tick, 1-4 ms, not exact):
-`key => ['size' => bytes of the entry, 'created' => unix time, 'expires' => unix time, 0 never]`. Lock-free: writers keep going,
+`key => ['size' => bytes of the entry, 'created' => unix time, 'expires' => unix time, 0 never]` (entries keep monotonic time; converted, within a second). Lock-free: writers keep going,
 and a key a concurrent delete moves may be missing. Walks every slot of the arena, so it is for tools and admin pages,
 not for every request. With Valkey it lists what this host has cached, not every key in Valkey.
 

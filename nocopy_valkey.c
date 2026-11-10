@@ -427,15 +427,15 @@ static void arg_long(smart_str *s, int64_t v)
 	arg(s, b, (size_t) snprintf(b, sizeof b, "%" PRId64, v));
 }
 
-/* SET key val [NX] [PXAT pxat] */
-static void set_cmd(smart_str *s, const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)
+/* SET key val [NX] [PX px]: relative, so Valkey's clock is never compared with ours */
+static void set_cmd(smart_str *s, const char *k, size_t kl, const char *val, size_t vl, int64_t px, bool nx)
 {
-	head(s, 3 + nx + (pxat ? 2 : 0)), ARG(s, "SET"), key_arg(s, k, kl), arg(s, val, vl);
+	head(s, 3 + nx + (px ? 2 : 0)), ARG(s, "SET"), key_arg(s, k, kl), arg(s, val, vl);
 	if (nx) {
 		ARG(s, "NX");
 	}
-	if (pxat) {
-		ARG(s, "PXAT"), arg_long(s, pxat);
+	if (px) {
+		ARG(s, "PX"), arg_long(s, px);
 	}
 }
 
@@ -788,7 +788,7 @@ static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 	return ok ? 1 : -1;
 }
 
-static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
+static int vk_mset(uint32_t n, const vk_kv *kv, int64_t px, int8_t *res)
 {
 	memset(res, -1, n);
 	nocopy_vk *v = vk_conn();
@@ -797,7 +797,7 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 	}
 	smart_str s = {0};
 	for (uint32_t i = 0; i < n; i++) {
-		set_cmd(&s, kv[i].k, kv[i].kl, kv[i].v, kv[i].vl, pxat, false);
+		set_cmd(&s, kv[i].k, kv[i].kl, kv[i].v, kv[i].vl, px, false);
 	}
 	if (!vk_send(v, &s)) {
 		return -1;
@@ -813,10 +813,10 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t pxat, int8_t *res)
 	return 1;
 }
 
-static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t pxat, bool nx)
+static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t px, bool nx)
 {
 	smart_str s = {0};
-	set_cmd(&s, k, kl, val, vl, pxat, nx);
+	set_cmd(&s, k, kl, val, vl, px, nx);
 	valkeyReply *r = vk_cmd(&s);
 	int ret = !r ? -1 : r->type == VALKEY_REPLY_STATUS ? 1 : r->type == VALKEY_REPLY_NIL ? 0 : -1;
 	freeReplyObject(r);
@@ -928,9 +928,18 @@ static void vk_forget(zend_string *key)
 	nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 }
 
-/* A ttl as the last second it lives (0: never), and that second's end for SET PXAT (0: none). */
-static time_t vk_expires(zend_long ttl) { return nocopy_expiry(nocopy_now(), ttl); }
-static int64_t vk_pxat(time_t expires) { return expires ? ((int64_t) expires + 1) * 1000 : 0; }
+/* A ttl as the last unix second it lives (0: never; the payload's, other hosts compare it), and the ms to that second's end for SET PX. */
+static time_t vk_expires(zend_long ttl) { return nocopy_expiry(time(NULL), ttl); }
+static int64_t vk_px(time_t expires)
+{
+	if (!expires) {
+		return 0;
+	}
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	int64_t ms = ((int64_t) expires + 1 - ts.tv_sec) * 1000 - ts.tv_nsec / 1000000;
+	return ms > 0 ? ms : 1;
+}
 
 #define VK_HDR 14 /* 0x00, flags (VK_IGB), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
 #define VK_IGB 2  /* the value is igbinary's (a wire format: Valkey may hold values older builds wrote) */
@@ -979,9 +988,6 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 	memcpy(&x, b + 2, 8);
 	memcpy(user, b + 10, 4);
 	*expires = (time_t) x;
-	if (x && x < nocopy_now()) {
-		return false;
-	}
 	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[1] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
 }
 
@@ -993,10 +999,12 @@ static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *
 	if (!vk_decode(raw, rv, &expires, &user)) {
 		return false;
 	}
-	const nocopy_opts o = {.expires = expires, .add_only = true};
-	nocopy_put_local(key, rv, &o, user);
+	const nocopy_opts o = {.expires = nocopy_from_wall(expires), .add_only = true};
+	if (!expires || expires >= time(NULL)) { /* Valkey's PX decides it lives; the writer's second only bounds our copy */
+		nocopy_put_local(key, rv, &o, user);
+	}
 	if (exp) {
-		*exp = expires;
+		*exp = o.expires;
 		*delta = user;
 	}
 	return true;
@@ -1041,7 +1049,7 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 		return NOCOPY_REFUSED;
 	}
-	int r = vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_pxat(expires), o->add_only);
+	int r = vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_px(expires), o->add_only);
 	zend_string_release(enc);
 	if (r != 1) {
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
@@ -1091,7 +1099,7 @@ static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 	} ZEND_HASH_FOREACH_END();
 	int8_t *res = emalloc(m + 1);
 	if (m) {
-		vk_mset(m, kv, vk_pxat(expires), res);
+		vk_mset(m, kv, vk_px(expires), res);
 	}
 	for (uint32_t i = 0; i < m; i++) {
 		if (res[i] != 1) {

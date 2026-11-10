@@ -158,7 +158,18 @@ round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (me
 best of 7: store+delete with a 58-byte key 85.3 -> 68.9 ns, `nocopy_delete_multiple` of 10 missing 59-byte keys 177.5 -> 50.7 ns;
 `ab.sh` store+delete int (3-byte key), best of 7 three times: +1.6..+3.4% (HEAD against itself +1.0 / 0.0%).
 
-**Coarse clock** (`CLOCK_REALTIME_COARSE` where it exists): TTLs are seconds, the coarse clock is a tick (1-4 ms) behind at most and costs 3.5 ns
+**Monotonic clock for TTLs, leases and `seq`** (2026-11-10, `CLOCK_MONOTONIC_COARSE`; [rebuild item 5](rebuild-2026-11.md#5-a-monotonic-clock-locally-relative-ttls-to-valkey)):
+the arena does not outlive a boot, so a stepped wall clock (NTP, an admin, a VM resume) neither expires entries early nor
+keeps them late. Read cost in the dev image, 2x10^7 reads, 3 runs: `MONOTONIC_COARSE` 3.6-4.1 ns, `REALTIME_COARSE` 4.0-4.2,
+`BOOTTIME`/`MONOTONIC`/`REALTIME` 11.3-13.7. `CLOCK_BOOTTIME` was the plan's first choice (it counts suspend) and is
+rejected: it has no coarse variant, 3x per read, and servers do not suspend; a suspended laptop keeps entries that long
+longer. Wall time stays where time leaves the arena: `start_time`, `nocopy_keys()` (converted, within a second) and the
+Valkey payload. Valkey gets `SET … PX <ms>` (relative, was `PXAT`): Valkey's clock is never compared with ours. The
+payload's absolute second only bounds a reader's local copy; it no longer turns a value Valkey still holds into a miss.
+Test 100 (a writer an hour behind or ahead, libfaketime) and 101 (the same against Valkey) fail on the wall clock.
+Processes in different time namespaces (`unshare --time`, CRIU) must not share an arena.
+
+**Coarse clock** (`CLOCK_REALTIME_COARSE` where it exists, before the monotonic one above): TTLs are seconds, the coarse clock is a tick (1-4 ms) behind at most and costs 3.5 ns
 vs `CLOCK_REALTIME` 11.2 ns (perf: half of a store's samples were in `clock_gettime`). `ab.sh` best of 5, copy / zero: store int +9 / +9%,
 store string +9 / +9%, failing add +6 / +4%. `seq` carries the shard in its low 3 bits, so it is unique across shards without the nanoseconds.
 Scalars skip `copy_out` and the pin: fetch int +7 / +4%, `fetch 10 keys` (ints) copy +11%.

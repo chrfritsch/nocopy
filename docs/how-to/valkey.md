@@ -76,6 +76,8 @@ Plan for misses, not errors.
 - Local only: `nocopy_stats()`, and the single flight of `nocopy_remember()` (one computation per server, not per cluster).
 - Trust Valkey as much as php-fpm: values read from it are unserialized with every class allowed (as in APCu or
   Symfony's Redis adapter). Use AUTH/ACLs and TLS, and do not share the key prefix with untrusted clients.
+- TTLs go to Valkey as relative `PX`, so Valkey's clock does not matter. A local copy of a value lives until the second the
+  writer computed, so servers whose clocks differ by more than a TTL keep copies for less or more than it: run NTP.
 - Not supported yet: Sentinel, Cluster, TLS over unix sockets.
 
 Background: [Sharing: by name and through Valkey](../explanation/sharing.md).

@@ -6,11 +6,12 @@ nocopy
 nocopy.shm_name=/nocopy-t032
 --FILE--
 <?php
-while (($f = fmod(microtime(true), 1)) < 0.02 || $f > 0.05) usleep(1000); // past the coarse clock's tick lag
+$mono = fn() => hrtime(true) / 1e9; // TTLs tick on the monotonic clock's seconds
+while (($f = fmod($mono(), 1)) < 0.02 || $f > 0.05) usleep(1000); // past the coarse clock's tick lag
 nocopy_put('k', 1, 1);
-$t0 = microtime(true);
+$t0 = $mono();
 foreach ([1.5, 2.2] as $at) {
-    while (microtime(true) - $t0 < $at) usleep(1000);
+    while ($mono() - $t0 < $at) usleep(1000);
     var_dump(nocopy_get('k'));
 }
 ?>

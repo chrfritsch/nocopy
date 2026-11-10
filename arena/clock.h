@@ -1,4 +1,5 @@
-/* nocopy arena: time. TTLs are whole seconds of the wall clock; a test may replace those seconds (nocopy_set_clock). */
+/* nocopy arena: time. TTLs, leases and versions run on the coarse monotonic clock (the arena does not outlive a boot), so a stepped
+ * wall clock neither expires entries early nor keeps them late; wall time only where it leaves the arena. A test may replace the seconds. */
 
 #ifndef NOCOPY_ARENA_CLOCK_H
 #define NOCOPY_ARENA_CLOCK_H
@@ -8,15 +9,15 @@
 #define NOCOPY_TTL_MAX ((time_t) 1 << 32) /* s (~136 years): longer TTLs are capped, so now + ttl cannot overflow */
 
 typedef time_t (*nocopy_clock_fn)(void);
-AR_HIDDEN extern nocopy_clock_fn ar_clock_fake; /* NULL: the wall clock */
+AR_HIDDEN extern nocopy_clock_fn ar_clock_fake; /* NULL: the monotonic clock */
 
-/* The coarse clock is a tick behind at most (1-4 ms) and 3x cheaper than CLOCK_REALTIME (3.5 vs 11.2 ns). Sub-second: always the wall clock. */
+/* Coarse: a tick behind at most (1-4 ms), 3x cheaper than CLOCK_MONOTONIC or CLOCK_BOOTTIME (3.6-4.1 vs 11-14 ns). Stops while suspended. */
 static inline void nocopy_clock(struct timespec *ts)
 {
-#ifdef CLOCK_REALTIME_COARSE
-	clock_gettime(CLOCK_REALTIME_COARSE, ts);
+#ifdef CLOCK_MONOTONIC_COARSE
+	clock_gettime(CLOCK_MONOTONIC_COARSE, ts);
 #else
-	clock_gettime(CLOCK_REALTIME, ts);
+	clock_gettime(CLOCK_MONOTONIC, ts);
 #endif
 }
 
@@ -31,6 +32,15 @@ static inline time_t nocopy_now(void)
 	struct timespec ts;
 	nocopy_clock(&ts);
 	return ts.tv_sec;
+}
+
+/* A local second as unix time, and back: for key listings and the Valkey payload (within a second). 0 stays 0 (never). */
+static inline time_t nocopy_wall_offset(void) { return time(NULL) - nocopy_now(); }
+static inline time_t nocopy_to_wall(time_t t) { return t ? t + nocopy_wall_offset() : 0; }
+static inline time_t nocopy_from_wall(time_t t)
+{
+	time_t o = nocopy_wall_offset();
+	return t ? (t > o ? t - o : 1) : 0;
 }
 
 /* For durations and deadlines: CLOCK_MONOTONIC ms. */
