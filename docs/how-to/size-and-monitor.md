@@ -26,10 +26,10 @@ Roughly: shards double with size up to 8, each at least 8 MB; an entry gets a bi
 
 More shards mean less write contention: each shard has its own lock.
 
-`shm_size / 64` is set aside for short strings stored once for the whole cache (cache tags, render keys: a warmed Drupal's
-take 0.3 MB and save 16% of its entries' bytes). `shared_strings_used` close to `shared_strings_size` with
-`shared_strings_rotations` not moving means that space is full of strings old entries still use: new ones are stored per entry again
-until those entries go. A larger `shm_size` makes it larger.
+`shm_size / 16` is set aside for short strings and arrays stored once for the whole cache (cache tags, render keys, `#cache`
+metadata, page chrome, field wrappers: a warmed Drupal's take 1.3 MB and save 29% of its entries' bytes). `shared_strings_used`
+close to `shared_strings_size` with `shared_strings_rotations` not moving means that space is full of strings and arrays old entries
+still use: new ones are stored per entry again until those entries go. A larger `shm_size` makes it larger.
 
 ## Too small? Compare `ghost_hits` with `evicted`
 

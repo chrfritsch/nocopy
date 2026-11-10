@@ -7,6 +7,8 @@
 #include "index_read.h"
 
 #define NOCOPY_ATOM_WIPING 0x80000000u
+#define NOCOPY_ATOM_ARRAY 0x80000000u /* in a key's len: an array's record, never equal to a string's */
+#define NOCOPY_ATOM_LEN 0x7fffffffu
 
 /* A writer's view: the generation its lookups search, which no rotation wipes until the view ends. */
 typedef struct {
@@ -48,7 +50,7 @@ static inline __attribute__((always_inline)) void *nocopy_atom_find(const nocopy
 		if ((uint32_t) (sl >> 32) == tag) {
 			char *rec = area + ((uint32_t) sl << 3);
 			const uint32_t *r = (const uint32_t *) rec;
-			if (r[0] == len && nocopy_key_eq(rec + 8 + r[1], s, len)) {
+			if (r[0] == len && nocopy_key_eq(rec + 8 + r[1], s, len & NOCOPY_ATOM_LEN)) {
 				return rec + 8;
 			}
 		}

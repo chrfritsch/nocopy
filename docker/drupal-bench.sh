@@ -145,6 +145,7 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
     rm -f /dev/shm/nocopy-rows.*
     runuser -u www-data -- env HOME=/tmp php -d memory_limit=2G -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-rows -d nocopy.shm_size=512M \
       $D/vendor/drush/drush/drush.php -r $D/web php:script /src/bench/drupal/rows.php | tee /out/rows.tsv.$cfg
+    runuser -u www-data -- env HOME=/tmp php -d memory_limit=4G $D/vendor/drush/drush/drush.php -r $D/web php:script /src/bench/drupal/share.php | tee /out/share.tsv.$cfg
     [ -d /old ] && { rm -rf /build-old && mkdir /build-old && cp -R /old/*.c /old/*.h /old/config.m4 /old/third_party /build-old/ && { [ ! -d /old/arena ] || cp -R /old/arena /build-old/; } \
       && (cd /build-old && phpize >/dev/null 2>&1 && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>&1) || exit 1; }
     for size in $REPLAY; do for wl in zipf loop; do for so in /build-old /build; do [ -d $so/modules ] || continue

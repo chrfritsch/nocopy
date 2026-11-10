@@ -332,6 +332,8 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "shared_strings_used", s.atoms_used);
 	add_assoc_long(return_value, "shared_strings_size", s.atoms_size);
 	add_assoc_long(return_value, "shared_strings_rotations", s.atom_rotations);
+	add_assoc_long(return_value, "shared_arrays", s.shared_arrays);
+	add_assoc_long(return_value, "shared_arrays_used", s.shared_arrays_used);
 	if (shm_attached[0]) {
 		add_assoc_string(return_value, "shm_name", shm_attached);
 	} else {

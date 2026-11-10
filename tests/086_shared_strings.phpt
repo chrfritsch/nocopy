@@ -10,7 +10,7 @@ nocopy.shm_size=2M
 require __DIR__ . '/serve.inc';
 $lib = <<<'PHP'
 $st = fn($k) => nocopy_stats()[$k];
-$batch = fn($t, $n) => array_map(fn($i) => str_pad("$t-$i", 60, "."), range(0, $n - 1)); // 96-byte atoms: 170 fill a half
+$batch = fn($t, $n) => array_map(fn($i) => str_pad("$t-$i", 60, "."), range(0, $n - 1)); // 96-byte atoms: 680 fill a half
 $fill = function ($t, $n) use ($batch) { // the second put admits what the first one met
     $v = $batch($t, $n);
     nocopy_put("$t-1", $v);
@@ -30,9 +30,9 @@ $copy = nocopy_get('r3'); $copy['tags'][] = 'x'; // copy on write: the atoms sta
 var_dump(nocopy_get('r3') === $row);
 
 // generation 2 fills, then the empty generation 1's half is wiped for generation 3
-$a = $fill('a', 120);
+$a = $fill('a', 480);
 nocopy_put('old', $a); // references generation 2
-$fill('b', 300);
+$fill('b', 1200);
 var_dump($st('shared_strings_rotations'));
 
 // a zero-copy reader holds 'old' (its strings are generation 2's atoms): the half stays, also past a clear
@@ -40,14 +40,14 @@ echo serve("<?php $lib" . <<<'PHP'
     $v = nocopy_get('old');
     nocopy_clear();
     sleep(1); // a rotation that found generation 2 referenced waits a second
-    $fill('c', 400);
-    var_dump($st('shared_strings_rotations'), $v === $batch('a', 120));
+    $fill('c', 1600);
+    var_dump($st('shared_strings_rotations'), $v === $batch('a', 480));
     PHP);
 
 // unpinned and cleared: the next fill rotates again, and every value reads back intact
 nocopy_clear();
 sleep(1);
-$d = $fill('d', 400);
+$d = $fill('d', 1600);
 nocopy_put('new', $d);
 var_dump($st('shared_strings_rotations'), nocopy_get('d-2') === $d, nocopy_get('new') === $d);
 

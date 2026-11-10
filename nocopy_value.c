@@ -55,13 +55,14 @@ void nocopy_env_free(nocopy_env *env)
 /* ---- in ---- */
 
 /* Plans val into x (OK: release it after the commit); REFUSED leaves nothing to release. tape, str: the plan's first buffers. */
-static zend_always_inline nocopy_status encode(encoding *x, nocopy_env *env, zval *val, const nocopy_atom_view *av, uint32_t *tape, zend_string **str)
+static zend_always_inline nocopy_status encode(encoding *x, nocopy_env *env, zval *val, const nocopy_atom_view *av, uint32_t *tape, zend_string **str,
+	nc_share *ss)
 {
 	if (Z_TYPE_P(val) > IS_STRING) { /* a value of its own in the table (a reference too); scalars and strings alone bypass it */
 		strtab_reset(&env->strs);
 	}
 	graph_b_off(&x->g);
-	x->z = (plan) {.env = env, .strs = env->strs, .g = &x->g, .av = av, .sight = av != NULL,
+	x->z = (plan) {.env = env, .strs = env->strs, .g = &x->g, .av = av, .sight = av != NULL, .sh = av ? nc_share_init(ss) : NULL,
 		.tape = tape, .tcap = TAPE_INL, .tape_inl = tape, .str = str, .scap = STR_INL, .str_inl = str};
 	x->fmt = NOCOPY_FMT_PLAIN;
 	x->val = val;
@@ -107,8 +108,9 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 {
 	uint32_t tape[TAPE_INL]; /* not zeroed: it cost every store */
 	zend_string *str[STR_INL];
+	nc_share ss;
 	encoding x;
-	nocopy_status r = encode(&x, env, val, av, tape, str);
+	nocopy_status r = encode(&x, env, val, av, tape, str, &ss);
 	if (r != NOCOPY_OK) {
 		return r;
 	}
@@ -123,6 +125,9 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 		nc_write(&x, e);
 		nocopy_put_result c = nocopy_put_commit(&p, add_only);
 		r = c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+	}
+	if (x.z.sh && x.z.sh->ncand) {
+		nc_share_admit(env, &x.z, av); /* before the release: candidates may be a node's own data */
 	}
 	encoding_release(&x); /* after the commit: may run destructors */
 	return r;
@@ -145,7 +150,7 @@ bool nocopy_value_check(nocopy_env *env, zval *val)
 	uint32_t tape[TAPE_INL];
 	zend_string *str[STR_INL];
 	encoding x;
-	if (encode(&x, env, val, NULL, tape, str) != NOCOPY_OK) {
+	if (encode(&x, env, val, NULL, tape, str, NULL) != NOCOPY_OK) {
 		return false;
 	}
 	encoding_release(&x);

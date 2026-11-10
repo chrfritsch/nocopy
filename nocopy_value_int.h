@@ -8,6 +8,10 @@
 
 #define NC_MAX_DEPTH 64
 #define NC_VSTR_MAX 64 /* strings up to this length are stored once: per value (the string table), and arena-wide (atoms) */
+#define NC_SHARE_MIN 128      /* bytes an array takes before an equal one is shared arena-wide */
+#define NC_SHARE_MAX 65536    /* larger arrays are not admitted */
+#define NC_SHARE_STR 256      /* longer strings are not hashed: arrays holding them are not shared */
+#define NC_SHARE_ADMIT 64     /* arrays a write may admit */
 
 #define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
 #define KEY_OFF SALIGN(sizeof(nocopy_block)) /* the key's bytes: only compared, never a zend_string */
@@ -182,6 +186,7 @@ typedef struct {
 	pslot inl[32];
 } pmap;
 
+
 /* What planning learned about one object. */
 typedef struct {
 	uint32_t ck;          /* class index << 3 | kind */
@@ -255,6 +260,45 @@ static zend_always_inline void graph_b_release(graph_b *g)
 #define T_ONCE UINT32_MAX
 #define TAPE_INL 64
 #define STR_INL 32
+#define T_SHARED 1u /* an array's tape entry: index in nc_share.arr << 1 | T_SHARED, or 0: written as a copy of its own */
+
+#define HV_INL 16
+
+/* An array of a region, in planning's order: its hash (0: not shareable), the arrays of its subtree with itself, bytes at most. */
+typedef struct {
+	uint64_t h;
+	uint32_t n, up;
+} hnode;
+
+/* An array no shared one equals yet: admitted after the commit if the doorkeeper has seen it before. */
+typedef struct {
+	zend_array *a;
+	uint64_t h;
+} nc_cand;
+
+/* Sharing arrays: set up by array and object writes only (scalars do not zero it). */
+typedef struct {
+	hnode *hv;         /* the regions' arrays: the current one [hc, hend), nested ones above it up to hn */
+	uint32_t hn, hc, hend, hcap;
+	zend_array **arr;  /* the shared arrays the tape points at */
+	uint32_t narr, acap;
+	nc_cand *cand;
+	uint32_t ncand, ccap;
+	hnode inl[HV_INL];
+	zend_array *arr_inl[8];
+} nc_share;
+
+static zend_always_inline nc_share *nc_share_init(nc_share *s)
+{
+	s->hv = s->inl;
+	s->hn = s->hc = s->hend = 0;
+	s->hcap = HV_INL;
+	s->arr = s->arr_inl;
+	s->acap = 8;
+	s->narr = s->ncand = s->ccap = 0;
+	s->cand = NULL;
+	return s;
+}
 
 typedef struct {
 	nocopy_env *env;
@@ -270,6 +314,7 @@ typedef struct {
 	uint32_t ns, scap;
 	uint32_t *tape_inl; /* the caller's buffers, until they grow into request memory */
 	zend_string **str_inl;
+	nc_share *sh;      /* NULL: arrays are not shared (no atoms) */
 } plan;
 
 typedef enum { PLAN_OK, PLAN_DEEP, PLAN_OBJECT, PLAN_RESOURCE, PLAN_ERROR /* an exception is pending */ } plan_status;
@@ -289,6 +334,8 @@ static zend_always_inline plan_status nc_plan_value(plan *z, zval *val)
 	return nc_plan_walk(z, val);
 }
 void nc_plan_free(plan *z);
+bool nc_same_array(const zend_array *a, const zend_array *b, int depth); /* equal keys, order, types and values (doubles bitwise) */
+void nc_share_admit(nocopy_env *env, const plan *outer, const nocopy_atom_view *av); /* its candidates the doorkeeper lets in */
 
 /* ---- writing (nocopy_write.c): under a shard lock, so no allocation and no user code ---- */
 
@@ -303,6 +350,8 @@ typedef struct {
 
 static zend_always_inline size_t encoding_size(const encoding *x, size_t klen) { return SALIGN(sizeof(nocopy_block)) + SALIGN(klen) + x->z.n; }
 void nc_write(encoding *x, nocopy_entry *e); /* fills e after its header and key: exactly encoding_size bytes */
+void nc_write_array(const plan *z, const zend_array *src, void *dst); /* a shared array at dst: exactly z->n bytes */
+
 
 /* ---- reading (nocopy_read.c) ---- */
 

@@ -15,6 +15,7 @@ typedef struct {
 	zend_string **str;   /* the plan's: a deduped string's atom, or its copy once written */
 	graph_b *g;
 	nc_graph *graph;
+	zend_array *const *arr; /* the plan's shared arrays; NULL: no array has a tape entry */
 	bool obj;            /* an object or shared reference met since the innermost array began */
 } writer;
 
@@ -236,6 +237,14 @@ static void write_zval(writer *w, zval *z)
 			Z_TYPE_FLAGS_P(z) = 0;
 			break;
 		case IS_ARRAY: {
+			if (UNEXPECTED(w->arr) && zend_hash_num_elements(Z_ARR_P(z))) {
+				uint32_t t = w->tape[w->ti++];
+				if (t & T_SHARED) {
+					Z_ARR_P(z) = w->arr[t >> 1];
+					Z_TYPE_FLAGS_P(z) = 0;
+					break;
+				}
+			}
 			bool outer = w->obj;
 			w->obj = false;
 			Z_ARR_P(z) = write_array(w, Z_ARR_P(z));
@@ -315,6 +324,10 @@ static void check_zval(void *ctx, zval *z)
 			if (a == ARENA_EMPTY) {
 				break;
 			}
+			if (nocopy_atom_bits(a)) {
+				NC_ASSERT(Z_TYPE_P(z) == IS_ARRAY && (GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2);
+				break; /* a shared array: checked when admitted */
+			}
 			check_ptr(c, a, sizeof *a);
 			NC_ASSERT((GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2 && !a->pDestructor && zend_hash_num_elements(a));
 			check_ptr(c, HT_GET_DATA_ADDR(a), HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : HT_USED_SIZE(a));
@@ -371,7 +384,8 @@ static void block_check(nocopy_entry *e)
 
 void nc_write(encoding *x, nocopy_entry *e)
 {
-	writer w = {.cursor = (char *) e + SALIGN(sizeof(nocopy_block)), .tape = x->z.tape, .str = x->z.str, .g = &x->g};
+	writer w = {.cursor = (char *) e + SALIGN(sizeof(nocopy_block)), .tape = x->z.tape, .str = x->z.str, .g = &x->g,
+		.arr = x->z.sh ? x->z.sh->arr : NULL};
 	take(&w, nocopy_entry_klen(e)); /* the key's bytes: nocopy_put_begin copied them */
 	zval *v = block_val(e);
 	if (x->fmt == NOCOPY_FMT_GRAPH) {
@@ -387,6 +401,17 @@ void nc_write(encoding *x, nocopy_entry *e)
 #if NC_CHECKS
 	block_check(e);
 #endif
+}
+
+void nc_write_array(const plan *z, const zend_array *src, void *dst)
+{
+	writer w = {.cursor = dst, .tape = z->tape, .str = z->str, .arr = z->sh->arr};
+	zval v;
+	ZVAL_ARR(&v, (zend_array *) src);
+	write_zval(&w, &v); /* its own tape entry first: a copy */
+	zend_array *a = Z_ARR(v);
+	NC_ASSERT((void *) a == dst && w.cursor == (char *) dst + z->n && w.ti == z->nt);
+	(void) a;
 }
 
 /* ---- moving: merge byte-copied a block, its pointers still aim into the old one ---- */
@@ -425,8 +450,8 @@ static void rebase_zval(void *ctx, zval *z)
 		case NC_SPINE:
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(z) = moved(r, Z_ARR_P(z));
-			if (a == ARENA_EMPTY) {
-				break;
+			if (a == ARENA_EMPTY || nocopy_atom_bits(a)) {
+				break; /* a shared array: noted by moved, never written */
 			}
 			a->arData = moved(r, a->arData);
 			if (HT_IS_PACKED(a)) {

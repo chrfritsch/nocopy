@@ -161,6 +161,8 @@ void nocopy_stats(nocopy_stats_t *st)
 	st->atoms_used = a.used;
 	st->atoms_size = a.size;
 	st->atom_rotations = a.rotations;
+	st->shared_arrays = a.arrays;
+	st->shared_arrays_used = a.array_bytes;
 }
 
 uint64_t nocopy_expunges(void) { return __atomic_load_n(&ar_hdr->expunges, __ATOMIC_RELAXED); }

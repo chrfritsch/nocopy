@@ -124,7 +124,7 @@ static inline void nocopy_atom_end(nocopy_ctx *c) { ar_atom_end(&c->atom, c->pin
 
 typedef struct {
 	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
-	uint64_t atoms, atoms_used, atoms_size, atom_rotations;
+	uint64_t atoms, atoms_used, atoms_size, atom_rotations, shared_arrays, shared_arrays_used;
 	uint64_t segment_size;
 	uint32_t segments, free_segments, dead_segments, pinned_segments, kept_segments, shards;
 	time_t start_time;

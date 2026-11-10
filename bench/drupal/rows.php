@@ -16,4 +16,4 @@ foreach ($db->query("SHOW TABLES LIKE 'cache%'")->fetchCol() as $t) {
     }
 }
 $s = nocopy_stats();
-printf("rows\t%d\tfailed\t%d\tdiffer\t%d\tarena_bytes\t%d\tshared_strings\t%d\tshared_bytes\t%d\n", $rows, $failed, $differ, $s['used'] - $u, $s['shared_strings'] ?? 0, $s['shared_strings_used'] ?? 0);
+printf("rows\t%d\tfailed\t%d\tdiffer\t%d\tarena_bytes\t%d\tshared_strings\t%d\tshared_bytes\t%d\tshared_arrays\t%d\tshared_arrays_bytes\t%d\n", $rows, $failed, $differ, $s['used'] - $u, $s['shared_strings'] ?? 0, $s['shared_strings_used'] ?? 0, $s['shared_arrays'] ?? 0, $s['shared_arrays_used'] ?? 0);

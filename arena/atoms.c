@@ -20,9 +20,9 @@ static uint32_t *agen_of(int slot) { return &ar_worker_at((uint32_t) slot)->agen
 size_t ar_atoms_plan(ar_atoms_hdr *h, size_t at, size_t arena_size)
 {
 	size_t a64 = ~(size_t) 63;
-	h->half_bytes = (uint32_t) ((arena_size >> 7) & ~(size_t) 7);
+	h->half_bytes = (uint32_t) ((arena_size >> 5) & ~(size_t) 7);
 	h->slots = 64;
-	while (h->slots < h->half_bytes / 32) {
+	while (h->slots < h->half_bytes / 64) {
 		h->slots <<= 1;
 	}
 	h->tab_off = (at + 63) & a64;
@@ -130,6 +130,8 @@ static bool rotate(void)
 	AR_HOOK("rotate.wiped");
 	__atomic_store_n(&o->used, 8, __ATOMIC_RELAXED);
 	__atomic_store_n(&o->n, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&o->arrays, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&o->array_bytes, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&o->state, g + 1, __ATOMIC_RELEASE);
 	AR_HOOK("rotate.state");
 	__atomic_store_n(&A->gen, g + 1, __ATOMIC_RELEASE);
@@ -138,22 +140,30 @@ static bool rotate(void)
 	return true;
 }
 
-void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, uint32_t hlen, const char *s, uint32_t len)
+static void copy_fill(void *dst, void *arg) { memcpy(dst, ((const void **) arg)[0], (size_t) (uintptr_t) ((const void **) arg)[1]); }
+
+/* hlen bytes by fill, then the key: len's flag kept in the record, the bytes compared without it. */
+static void *add(const nocopy_atom_view *v, uint64_t h, uint32_t hlen, void (*fill)(void *, void *), void *arg, const char *s, uint32_t len)
 {
 	if (__atomic_load_n(&A->tried, __ATOMIC_RELAXED) == nocopy_now() || !atom_lock()) {
 		return NULL; /* full and the other half still referenced this second, or another process admits */
 	}
+	bool array = len & NOCOPY_ATOM_ARRAY;
+	uint32_t klen = len & NOCOPY_ATOM_LEN;
 	char *blob = NULL;
-	uint32_t need = 8 + (uint32_t) NOCOPY_ALIGN((size_t) hlen + len + 1), tag = ar_slot_tag(h), m = ar_atom_mask;
+	uint32_t need = 8 + (uint32_t) NOCOPY_ALIGN((size_t) hlen + klen + 1), tag = ar_slot_tag(h), m = ar_atom_mask;
 	for (int round = 0; round < 2; round++) {
 		uint32_t g = A->gen;
+		if (array && g != v->gen) {
+			goto out; /* rotated: the array may point at the view's atoms, so only the view's half may hold it */
+		}
 		ar_atom_half *hf = half_of(g);
 		ar_slot *t = tab_of(g);
 		char *area = area_of(g);
 		uint32_t i = tag & m;
 		for (; t[i]; i = (i + 1) & m) {
 			const uint32_t *r = (const uint32_t *) (area + ((uint32_t) t[i] << 3));
-			if ((uint32_t) (t[i] >> 32) == tag && r[0] == len && !memcmp((const char *) r + 8 + r[1], s, len)) {
+			if ((uint32_t) (t[i] >> 32) == tag && r[0] == len && !memcmp((const char *) r + 8 + r[1], s, klen)) {
 				blob = (char *) r + 8; /* in already: another writer admitted it meanwhile */
 				goto out;
 			}
@@ -169,12 +179,16 @@ void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, ui
 		char *rec = area + at;
 		((uint32_t *) rec)[0] = len;
 		((uint32_t *) rec)[1] = hlen;
-		memcpy(rec + 8, hdr, hlen);
-		memcpy(rec + 8 + hlen, s, len);
-		rec[8 + hlen + len] = 0;
+		fill(rec + 8, arg);
+		memcpy(rec + 8 + hlen, s, klen);
+		rec[8 + hlen + klen] = 0;
 		AR_HOOK("atom.bytes");
 		__atomic_store_n(&hf->used, at + need, __ATOMIC_RELAXED); /* relaxed: stats read them racily */
 		__atomic_store_n(&hf->n, hf->n + 1, __ATOMIC_RELAXED);
+		if (array) {
+			__atomic_store_n(&hf->arrays, hf->arrays + 1, __ATOMIC_RELAXED);
+			__atomic_store_n(&hf->array_bytes, hf->array_bytes + need, __ATOMIC_RELAXED);
+		}
 		AR_HOOK("atom.used");
 		__atomic_store_n(&t[i], ar_slot_make(tag, at >> 3), __ATOMIC_RELEASE);
 		blob = rec + 8;
@@ -186,6 +200,18 @@ out:;
 	return mine ? blob : NULL;
 }
 
+void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, uint32_t hlen, const char *s, uint32_t len)
+{
+	const void *arg[2] = {hdr, (const void *) (uintptr_t) hlen};
+	return add(v, h, hlen, copy_fill, arg, s, len);
+}
+
+void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size, void (*fill)(void *dst, void *arg), void *arg,
+	const char *s, uint32_t len)
+{
+	return add(v, h, size, fill, arg, s, len | NOCOPY_ATOM_ARRAY);
+}
+
 void ar_atoms_stat(ar_atoms_stats *s)
 {
 	const ar_atom_half *cur = half_of(__atomic_load_n(&A->gen, __ATOMIC_RELAXED));
@@ -193,4 +219,6 @@ void ar_atoms_stat(ar_atoms_stats *s)
 	s->used = __atomic_load_n(&A->half[0].used, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].used, __ATOMIC_RELAXED) - 16;
 	s->size = 2 * (uint64_t) A->half_bytes;
 	s->rotations = __atomic_load_n(&A->rotations, __ATOMIC_RELAXED);
+	s->arrays = __atomic_load_n(&cur->arrays, __ATOMIC_RELAXED);
+	s->array_bytes = __atomic_load_n(&A->half[0].array_bytes, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].array_bytes, __ATOMIC_RELAXED);
 }

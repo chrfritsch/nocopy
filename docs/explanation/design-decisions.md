@@ -138,8 +138,32 @@ as it stays cached.
 
 **Strings shared across entries (atoms)**: strings up to 64 bytes are stored once for the whole arena (OPcache stores interned strings once for all scripts; nocopy deduped per value only). Every row of a warmed Drupal 11's database cache bins, put one by one (`ROWS_ONLY=1 CONFIGS=stock ./dev drupal-bench`: front, RSS, JSON:API, 300 nodes, 50 terms; 6,477 rows): 46.16 -> 38.37 MB plus 0.29 MB of atoms, -16% (the estimate, every string stored once with no first copy, was -20%); after the plain warm-up only (785 rows) 11.08 -> 9.72 + 0.24 MB, -10%. `bench/run.php` 1k rows 425,472 -> 352,320 bytes. `ab.sh write`, best of 7, copy / zero: store array 10 rows -4 / -5%, 1k rows -6 / -5%, object -2 / -3%, string 100B -2 / -2%, int within noise; all fetches within noise (hits stay zero-copy: entries point at the atoms).
 Hit ratio at equal `shm_size` (`ROWS_ONLY=1 CONFIGS=stock REPLAY="16M 24M 32M"`, `bench/drupal/replay.php`: those 6,477 rows read through, HEAD vs this; the half's reserve is part of it): Zipf 0.99 16M 79.7 -> 81.8%, 24M 86.3 -> 88.8%, 32M 91.9 -> 94.6% (a third fewer misses); rows in a loop 24M 2.0 -> 18.3%, 32M 40.1 -> 57.5%; failed puts at 16M 164 -> 40.
-Admitted on the second sighting (a doorkeeper of tags), so a string met once never takes room; the write that admits it already uses it. The area is two halves of `shm_size / 128` (0.29 MB covers the 46 MB above), each one generation; a full half's successor takes the other half only once no segment's entries and no writer in progress use it ([architecture](architecture.md#atoms-strings-shared-across-entries)).
+Admitted on the second sighting (a doorkeeper of tags), so a string met once never takes room; the write that admits it already uses it. The area was two halves of `shm_size / 128` (0.29 MB covers the 46 MB above; `/ 32` since arrays share it), each one generation; a full half's successor takes the other half only once no segment's entries and no writer in progress use it ([architecture](architecture.md#atoms-strings-shared-across-entries)).
 Built along the way, measured and dropped: an area that is never reset (fills with strings nobody uses and stays full for the arena's life); freeing it in `nocopy_clear`, as first planned (zero-copy readers keep atom pointers past a clear, as do writers between sizing and commit: test 086 reads overwritten strings without the reference check); a probe of the shared table per string occurrence (store array 10 rows -37%; the value's own table first: -16%); persisting probing again and agreeing with sizing through a published-bytes watermark (sizing now records its answers in walk order and persisting replays them: -10 -> -5%, and the admitting write can use its new atom: 785 rows 9.88 -> 9.72 MB); the record list's inline buffer in the zero-initialized `sizing` (store int -20%). Not built: class names as atoms, 152 KB per entry vs 60 KB once over the 785 rows (under 1% of the arena; persisting walks classes in another order than sizing, so it needs its own mechanism).
+
+**Arrays shared across entries** (hash-consing: an array equal to one already stored is stored once for the whole arena, as an atom).
+Measured first with a model (`bench/drupal/share.php`, the 6,477 rows above): sharing every repeated array would save 34-42% of the
+entries' bytes arena-wide, 5-6% within one entry only; 4,403 distinct arrays (3.1 MB) carry all of it, the top 40 (page chrome,
+`#cache` metadata, response headers, `x-default` field wrappers) 13.3 of 20.4 MB, and 98% sits in arrays of 128 bytes or more.
+Built: the same rows 38.38 -> 26.02 MB plus 1.47 MB of atoms (0.29 before), -29%; the model under the built rules (two private copies before
+sharing, strings over 256 bytes unhashed) said -29 to -37%. Every row reads back identical. Read-through replay of the rows
+(`REPLAY`, HEAD -> this), hit % and evictions: 16M zipf 82.5 -> 85.6 (21,378 -> 17,219 evicted), loop 0.2 -> 11.0;
+24M zipf 89.5 -> 94.6 (12,213 -> 4,941), loop 18.6 -> 52.7; 32M zipf 94.7 -> 98.2 (4,790 -> 0), loop 53.9 -> 100.0; puts too big for a 16M
+arena 43/272 -> 0/0.
+Price, `ab.sh write` best of 5 vs HEAD, copy / zero: a value whose every row is shared (the bench re-stores one array): store array 10 rows
+-11 / -11%, 1k rows -4 / -6%, 1k unserialized keys +1 / +2%; object -4 / -5%, int and string 100B -2 to -4%. Fetches unchanged (they get an
+ordinary immutable array). Equality is always checked: the hash only finds a candidate. Trusting a 128-bit hash instead would drop the
+compare, but string hashes are PHP's DJBX33A, which collides by construction, so equal hashes over different arrays are easy to make; a
+keyed universal hash over every string's bytes would be needed and was not built.
+The first version decided bottom-up inside the planning walk: plan an array, look it up, compare, roll its plan back on a hit (strings first
+met inside it marked for re-planning), one decision per source array in a pointer map. A fully shared value then paid three walks to write
+nothing (perf, 1k rows: planning 32%, the map and lookups 26%, compare 32%): 10 rows -33%, 1k rows -34%, unserialized keys -43%, and only
+-25% on the rows (outer arrays never matched once their inner ones were already shared). Hashing first and planning top-down skips hit
+subtrees whole; decisions on the tape instead of the map drop the map (its allocation, zeroing and a probe per array written); the sharing
+state in its own struct, set up by array and object writes only, kept scalar stores from zeroing it (int -7 -> -2%); no region for a flat
+array of scalars under 128 bytes (object -14 -> -4%). Also measured and dropped: the hash through a pointer to stack temporaries (object
+-11%), two dependent multiplies per element, admitting up to 1,024 arrays per write instead of 64 (no change), the doorkeeper off (~5 points
+more saved, but the area fills with arrays met once), the area at `/ 128` vs `/ 32` (`ab.sh write` within ±2%).
 
 **Planning decides, writing replays (the tape).** Sizing and persisting used to agree because both walks took the same decisions
 (the string table probed twice, the object and reference maps probed again while persisting; only atoms were recorded and replayed).

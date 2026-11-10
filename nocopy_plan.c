@@ -87,13 +87,117 @@ static zend_always_inline void plan_vstr(plan *z, zend_string *s)
 
 /* ---- plain values ---- */
 
+/* Hashes for sharing arrays; 0: not shareable (an object, a reference, a long string). Equality is checked, so they only need to
+ * spread: an element's hash is independent of the chain, which takes one multiply per element. */
+#define H_SEED 0x9E3779B97F4A7C15ULL
+static zend_always_inline uint64_t hval(uint64_t type, uint64_t x) { return (x ^ type) * 0xD6E8FEB86659FD93ULL; }
+static zend_always_inline uint64_t hchain(uint64_t h, uint64_t key, uint64_t v) { return (h ^ (key * 0x9E3779B97F4A7C15ULL) ^ v) * 0xFF51AFD7ED558CCDULL + (h >> 29); }
+
+static __attribute__((noinline)) void hv_grow(plan *z)
+{
+	z->sh->hcap *= 2;
+	z->sh->hv = inl_grow(z->sh->hv, z->sh->inl, z->sh->hn * sizeof *z->sh->hv, z->sh->hcap * sizeof *z->sh->hv);
+}
+
+static uint64_t hash_array(plan *z, zend_array *a, int depth, size_t *up);
+
+static zend_always_inline uint64_t hash_zval(plan *z, const zval *v, int depth, size_t *up)
+{
+	switch (Z_TYPE_P(v)) {
+		case IS_UNDEF: case IS_NULL: case IS_FALSE: case IS_TRUE:
+			return hval(Z_TYPE_P(v), 0);
+		case IS_LONG: case IS_DOUBLE: /* the bits: -0.0 is not 0.0 */
+			return hval(Z_TYPE_P(v), (uint64_t) Z_LVAL_P(v));
+		case IS_STRING:
+			*up += str_size(Z_STRLEN_P(v));
+			return Z_STRLEN_P(v) <= NC_SHARE_STR ? hval(IS_STRING, zend_string_hash_val(Z_STR_P(v)) ^ Z_STRLEN_P(v)) : 0;
+		case IS_ARRAY:
+			return hash_array(z, Z_ARR_P(v), depth, up);
+		default:
+			return 0;
+	}
+}
+
+/* The hash walk: a's arrays in planning's order (not below objects or references: theirs are regions of their own). */
+static uint64_t hash_array(plan *z, zend_array *a, int depth, size_t *up)
+{
+	if (zend_hash_num_elements(a) == 0) {
+		return H_SEED;
+	}
+	if (depth > NC_MAX_DEPTH) {
+		return 0;
+	}
+	if (UNEXPECTED(z->sh->hn == z->sh->hcap)) {
+		hv_grow(z);
+	}
+	uint32_t i = z->sh->hn++;
+	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
+	uint64_t h = H_SEED, c;
+	if (HT_IS_PACKED(a)) {
+		for (uint32_t k = 0; k < a->nNumUsed; k++) {
+			const zval *v = &a->arPacked[k];
+			if (Z_TYPE_P(v) != IS_UNDEF) {
+				c = hash_zval(z, v, depth + 1, &n);
+				h = h && c ? hchain(h, k, c) : 0;
+			}
+		}
+	} else {
+		Bucket *b;
+		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
+			if (b->key) {
+				n += str_size(ZSTR_LEN(b->key));
+			}
+			c = hash_zval(z, &b->val, depth + 1, &n);
+			h = h && c ? hchain(h, b->key ? ~b->h ^ ZSTR_LEN(b->key) : b->h, c) : 0;
+		} ZEND_HASH_FOREACH_END();
+	}
+	z->sh->hv[i] = (hnode) {h, z->sh->hn - i, (uint32_t) MIN(n, UINT32_MAX)};
+	*up += n;
+	return h;
+}
+
+/* Too small to share: under NC_SHARE_MIN bytes with its keys, and only scalars in it. */
+static zend_always_inline bool unshareable(const zend_array *a)
+{
+	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
+	if (n >= NC_SHARE_MIN) {
+		return false;
+	}
+	zend_string *k;
+	zval *v;
+	ZEND_HASH_FOREACH_STR_KEY_VAL(a, k, v) {
+		if (Z_TYPE_P(v) >= IS_STRING || (k && (n += str_size(ZSTR_LEN(k))) >= NC_SHARE_MIN)) {
+			return false;
+		}
+	} ZEND_HASH_FOREACH_END();
+	return true;
+}
+
 static plan_status plan_zval(plan *z, zval *v, int depth);
+static bool share_try(plan *z, zend_array *a, const hnode *e);
+static plan_status plan_region(plan *z, zend_array *a, int depth);
 
 static plan_status plan_array(plan *z, zend_array *a, int depth)
 {
 	if (zend_hash_num_elements(a) == 0) {
 		return PLAN_OK;
 	}
+	if (z->sh) {
+		if (z->sh->hc == z->sh->hend) {
+			if (unshareable(a)) { /* no region */
+				tape_push(z, 0);
+				goto plan;
+			}
+			return plan_region(z, a, depth);
+		}
+		const hnode *e = &z->sh->hv[z->sh->hc++];
+		if (e->h && e->up >= NC_SHARE_MIN && share_try(z, a, e)) {
+			z->sh->hc += e->n - 1; /* its arrays: not planned */
+			return PLAN_OK;
+		}
+		tape_push(z, 0); /* written as a copy of its own */
+	}
+plan:
 	z->n += SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
 	plan_status st;
 	if (HT_IS_PACKED(a)) {
@@ -117,8 +221,33 @@ static plan_status plan_array(plan *z, zend_array *a, int depth)
 	return PLAN_OK;
 }
 
+/* An array outside any region: hashed with its arrays, then planned top-down against those hashes. */
+static __attribute__((noinline)) plan_status plan_region(plan *z, zend_array *a, int depth)
+{
+	uint32_t hc = z->sh->hc, hend = z->sh->hend, base = z->sh->hn;
+	size_t up = 0;
+	hash_array(z, a, depth, &up);
+	z->sh->hc = base;
+	z->sh->hend = z->sh->hn;
+	plan_status st = plan_array(z, a, depth);
+	z->sh->hc = hc;
+	z->sh->hend = hend;
+	z->sh->hn = base;
+	return st;
+}
+
 static plan_status plan_object(plan *z, zend_object *o, int depth);
 static plan_status plan_ref(plan *z, zend_reference *r, int depth);
+
+/* Below an object or a reference, arrays start regions of their own. */
+#define OUT_OF_REGION(z, call) do { \
+	nc_share *s_ = (z)->sh; \
+	uint32_t hend_ = s_ ? s_->hend : 0; \
+	if (s_) { s_->hend = s_->hc; } \
+	plan_status st_ = (call); \
+	if (s_) { s_->hend = hend_; } \
+	return st_; \
+} while (0)
 
 static plan_status plan_zval(plan *z, zval *v, int depth)
 {
@@ -130,9 +259,9 @@ static plan_status plan_zval(plan *z, zval *v, int depth)
 			return PLAN_OK;
 		case IS_REFERENCE:
 			if (Z_REFCOUNT_P(v) > 1) {
-				return plan_ref(z, Z_REF_P(v), depth);
+				OUT_OF_REGION(z, plan_ref(z, Z_REF_P(v), depth));
 			}
-			return plan_zval(z, Z_REFVAL_P(v), depth + 1);
+			OUT_OF_REGION(z, plan_zval(z, Z_REFVAL_P(v), depth + 1));
 		case IS_STRING:
 			plan_vstr(z, Z_STR_P(v));
 			return PLAN_OK;
@@ -141,7 +270,7 @@ static plan_status plan_zval(plan *z, zval *v, int depth)
 		case IS_RESOURCE:
 			return PLAN_RESOURCE;
 		case IS_OBJECT:
-			return plan_object(z, Z_OBJ_P(v), depth);
+			OUT_OF_REGION(z, plan_object(z, Z_OBJ_P(v), depth));
 		default:
 			return PLAN_OBJECT;
 	}
@@ -204,6 +333,140 @@ static zend_always_inline pslot *pmap_add(pmap *m, uintptr_t k, uint32_t v, bool
 		m->n++;
 	}
 	return s;
+}
+
+/* ---- arrays shared arena-wide ---- */
+
+static void share_reset(nc_share *s)
+{
+	s->narr = s->ncand = 0;
+	s->hn = s->hc = s->hend = 0;
+}
+
+/* The next element of a at *i (holes skipped): its key (NULL: integer h) and value; false past the end. */
+static zend_always_inline bool next_elem(const zend_array *a, uint32_t *i, zend_string **k, zend_ulong *h, zval **v)
+{
+	for (; *i < a->nNumUsed; (*i)++) {
+		if (HT_IS_PACKED(a)) {
+			*v = &a->arPacked[*i];
+			*k = NULL;
+			*h = *i;
+		} else {
+			Bucket *b = &a->arData[*i];
+			*v = &b->val;
+			*k = b->key;
+			*h = b->h;
+		}
+		if (Z_TYPE_P(*v) != IS_UNDEF) {
+			(*i)++;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
+{
+	if (a == b) {
+		return true;
+	}
+	if (zend_hash_num_elements(a) != zend_hash_num_elements(b) || depth > NC_MAX_DEPTH) {
+		return false;
+	}
+	uint32_t i = 0, j = 0;
+	zend_string *ka, *kb;
+	zend_ulong ha, hb;
+	zval *va, *vb;
+	while (next_elem(a, &i, &ka, &ha, &va)) {
+		if (!next_elem(b, &j, &kb, &hb, &vb) || ha != hb || (ka == NULL) != (kb == NULL) || (ka && !zend_string_equals(ka, kb))
+			|| Z_TYPE_P(va) != Z_TYPE_P(vb)) {
+			return false;
+		}
+		switch (Z_TYPE_P(va)) {
+			case IS_LONG: case IS_DOUBLE: /* bitwise: -0.0 is not 0.0 */
+				if (Z_LVAL_P(va) != Z_LVAL_P(vb)) {
+					return false;
+				}
+				break;
+			case IS_STRING:
+				if (!zend_string_equals(Z_STR_P(va), Z_STR_P(vb))) {
+					return false;
+				}
+				break;
+			case IS_ARRAY:
+				if (!nc_same_array(Z_ARR_P(va), Z_ARR_P(vb), depth + 1)) {
+					return false;
+				}
+				break;
+			case IS_NULL: case IS_FALSE: case IS_TRUE:
+				break;
+			default:
+				return false;
+		}
+	}
+	return true;
+}
+
+/* An equal shared array replaces a (true: on the tape), else a may become a candidate. */
+static __attribute__((noinline)) bool share_try(plan *z, zend_array *a, const hnode *e)
+{
+	nc_share *sh = z->sh;
+	uint64_t h = e->h;
+	zend_array *s = nocopy_atom_find(z->av, h, (const char *) &h, sizeof h | NOCOPY_ATOM_ARRAY);
+	if (s && nc_same_array(a, s, 0)) {
+		if (UNEXPECTED(sh->narr == sh->acap)) {
+			sh->acap *= 2;
+			sh->arr = inl_grow(sh->arr, sh->arr_inl, sh->narr * sizeof *sh->arr, sh->acap * sizeof *sh->arr);
+		}
+		sh->arr[sh->narr] = s;
+		tape_push(z, sh->narr++ << 1 | T_SHARED);
+		z->atoms = true;
+		return true;
+	}
+	if (!s && e->up <= NC_SHARE_MAX && sh->ncand < NC_SHARE_ADMIT) {
+		GROW(sh->cand, sh->ncand, sh->ccap, 8);
+		sh->cand[sh->ncand++] = (nc_cand) {a, h};
+	}
+	return false;
+}
+
+typedef struct {
+	const plan *z;
+	const zend_array *src;
+} admit_arg;
+
+static void admit_fill(void *dst, void *arg)
+{
+	const admit_arg *x = arg;
+	nc_write_array(x->z, x->src, dst);
+}
+
+/* After the commit, still in the view: each candidate the doorkeeper has seen before, written into the atoms. Listed outer
+ * first; admitted inner first, so outer ones point at them. */
+void nc_share_admit(nocopy_env *env, const plan *outer, const nocopy_atom_view *av)
+{
+	for (uint32_t i = outer->sh->ncand; i-- > 0;) {
+		const nc_cand *c = &outer->sh->cand[i];
+		if (!nocopy_atom_admit(c->h)) {
+			continue;
+		}
+		uint32_t tape[TAPE_INL];
+		zend_string *str[STR_INL];
+		nc_share ss;
+		graph_b g;
+		graph_b_off(&g);
+		strtab_reset(&env->strs);
+		plan z = {.env = env, .strs = env->strs, .g = &g, .av = av, .sh = nc_share_init(&ss), .tape = tape, .tcap = TAPE_INL,
+			.tape_inl = tape, .str = str, .scap = STR_INL, .str_inl = str};
+		zval v;
+		ZVAL_ARR(&v, c->a);
+		/* n == 0: an equal one came in meanwhile and replaced it */
+		if (nc_plan_walk(&z, &v) == PLAN_OK && z.n && z.n <= NC_SHARE_MAX) {
+			admit_arg x = {&z, c->a};
+			nocopy_atom_add_array(av, c->h, (uint32_t) z.n, admit_fill, &x, (const char *) &c->h, sizeof c->h);
+		}
+		nc_plan_free(&z);
+	}
 }
 
 /* ---- the graph builder ---- */
@@ -625,6 +888,9 @@ plan_status nc_plan_walk(plan *z, zval *val)
 		z->n = 0;
 		z->atoms = false;
 		z->nt = z->ns = 0;
+		if (z->sh) {
+			share_reset(z->sh); /* the last pass's arrays may be gone (a node's own data) */
+		}
 		graph_b_end_pass(z->g);
 		graph_b_init_pass(z->g);
 		st = plan_zval(z, val, 0);
@@ -635,8 +901,28 @@ plan_status nc_plan_walk(plan *z, zval *val)
 	return st;
 }
 
+static __attribute__((noinline)) void share_free(nc_share *s)
+{
+	share_reset(s);
+	if (s->arr != s->arr_inl) {
+		efree(s->arr);
+		s->arr = s->arr_inl;
+	}
+	if (s->cand) {
+		efree(s->cand);
+		s->cand = NULL;
+	}
+	if (s->hv != s->inl) {
+		efree(s->hv);
+		s->hv = s->inl;
+	}
+}
+
 void nc_plan_free(plan *z)
 {
+	if (z->sh) {
+		share_free(z->sh);
+	}
 	if (z->tape != z->tape_inl) {
 		efree(z->tape);
 		z->tape = z->tape_inl;
