@@ -81,8 +81,8 @@ case $cmd in
   apcu)       img; run "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && /src/scripts/apcu-suite.sh' ;;
   drupal)     PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
-  ci)         for c in layers tidy test novalkey asan clang stress c fuzz shm pie zts frankenphp symfony apcu; do
-                echo "== $c"; ./dev "$c" || { echo "== $c FAILED"; exit 1; }
+  ci)         for c in layers tidy test novalkey asan debug clang stress c fuzz "debug fuzz" shm pie zts frankenphp symfony apcu; do
+                echo "== $c"; ./dev $c || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;
   ab)         ref=${1:-main}; [ $# -gt 0 ] && shift; a=.cache/ab-old; rm -rf "$a" && mkdir -p "$a" && git archive "$ref" | tar -x -C "$a"

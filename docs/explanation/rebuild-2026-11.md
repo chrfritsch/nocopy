@@ -106,6 +106,10 @@ designed as a process someone can supervise, with being spawned by a worker as t
 
 ### 7. The test harness before the features
 
+**Done 2026-11-10:** the hooks, `crash.c`, `block_check` and the mangling fuzzer were in since the
+[audit](audit-2026-11.md#tooling-added); what was missing is the debug PHP in CI: `./dev debug` and `./dev debug fuzz` are
+now steps of `./dev ci` and of the workflow's lint job (timeout 30 -> 60 minutes for building PHP).
+
 The audit's five bugs were invisible to `./dev test`, `stress 30` and `fuzz 20000`, and the assertion that a write fills
 what was planned was compiled out of every image ([audit](audit-2026-11.md#tooling-added)). On an empty repository the
 arena starts as the standalone library it became (`arena/`), and CI has from the first commit: kills at named steps
