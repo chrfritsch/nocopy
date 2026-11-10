@@ -9,6 +9,7 @@ These docs follow [Diátaxis](https://diataxis.fr): pick the column that matches
 | [Your first cache](tutorials/first-cache.md): build nocopy, cache 10,000 rows, read them from a web server in 17 ns | [Install on a server](how-to/install.md) |
 | [Your first change](tutorials/first-change.md): change the C code, add a test, run what CI runs | [Share one cache between php-fpm and the CLI](how-to/share-between-fpm-and-cli.md) |
 | | [Share a cache across servers with Valkey](how-to/valkey.md) |
+| | [Run nocopy on Kubernetes](how-to/kubernetes.md) |
 | | [Use nocopy in Symfony](how-to/symfony.md) |
 | | [Use nocopy in Drupal](../drupal/README.md) |
 | | [Migrate from APCu](how-to/migrate-from-apcu.md) |
