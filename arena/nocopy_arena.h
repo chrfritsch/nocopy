@@ -58,6 +58,8 @@ static inline void nocopy_borrow_end(nocopy_ctx *c)
 static inline void nocopy_drop_idle(nocopy_ctx *c) { ar_pins_drop_idle(&c->pins); }
 /* A zero-copy pointer into p's segment leaves the call: kept pinned until nocopy_request_end. True: the caller should copy from now on. */
 static inline bool nocopy_keep(nocopy_ctx *c, const void *p) { return ar_pin_keep(&c->pins, p); }
+/* nocopy_keep answers true for keeps after this monotonic ms (nocopy_mono_ms), 0 never. */
+static inline void nocopy_keep_until(nocopy_ctx *c, int64_t ms) { c->pins.keep_until = ms; }
 
 /* This worker's xorshift: uniform 32 bits, no syscall. */
 static inline uint32_t nocopy_rand(nocopy_ctx *c) { return ar_rand(&c->rng); }
@@ -124,7 +126,7 @@ typedef struct {
 	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
 	uint64_t atoms, atoms_used, atoms_size, atom_rotations;
 	uint64_t segment_size;
-	uint32_t segments, free_segments, dead_segments, pinned_segments, shards;
+	uint32_t segments, free_segments, dead_segments, pinned_segments, kept_segments, shards;
 	time_t start_time;
 } nocopy_stats_t;
 void nocopy_stats(nocopy_stats_t *s);

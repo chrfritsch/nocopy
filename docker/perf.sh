@@ -13,7 +13,7 @@ lines() {
 }
 /src/docker/build.sh
 echo -1 > /proc/sys/kernel/perf_event_paranoid; echo 0 > /proc/sys/kernel/kptr_restrict
-C="-n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-prof -d nocopy.shm_size=128M -d nocopy.entries_hint=200000"
+C="-n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-prof -d nocopy.zero_copy_seconds=0 -d nocopy.shm_size=128M -d nocopy.entries_hint=200000"
 for op in ${OPS:-get_int get_ttl get_str get_arr get_big get_miss get_100k get_multi remember put_int put_ttl put_str put_arr put_big put_obj put_del put_100k inc add_fail}; do
   for m in ${MODES:-copy zero}; do
     rm -f /dev/shm/nocopy-prof* /out/$op-$m.data.script

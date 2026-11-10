@@ -5,7 +5,7 @@
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 W=${1:-8}; S=${2:-10}; shift 2 2>/dev/null
 C="-n -d extension=pcntl -d apc.enable_cli=1 -d apc.shm_size=64M -d memory_limit=1G"
-N="-d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-tail -d nocopy.shm_size=64M"
+N="-d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-tail -d nocopy.zero_copy_seconds=0 -d nocopy.shm_size=64M"
 for s in ${*:-fit evict contend}; do
   echo "== APCu $s"; php $C -d extension=$APCU /src/bench/tail.php $s $W $S
   echo "== nocopy copy $s"; rm -f /dev/shm/nocopy-tail.*; php $C $N /src/bench/tail.php $s $W $S

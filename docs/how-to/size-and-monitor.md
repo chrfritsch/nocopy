@@ -66,6 +66,7 @@ The numbers that tell you something:
 | `evicted` growing | slow or flat | raise `nocopy.shm_size` (or `entries_hint`, see above) |
 | `ghost_hits / evicted` | low | most evicted keys come back: raise `nocopy.shm_size` ([above](#too-small-compare-ghost_hits-with-evicted)) |
 | `expunges` | rare | each one is a round of eviction under memory pressure |
+| `kept_segments` | well under `segments / 4` | near it: long zero-copy requests (a slow database, exports) hold memory; their further fetches copy. Lower `nocopy.zero_copy_seconds`, cap them with `request_terminate_timeout` |
 | `lock_steals` | 0 | a worker died while holding a lock (kill -9, OOM killer); repaired, but find out why |
 | `valkey_listener` | a pid, with `nocopy.valkey` | 0: no listener, nothing local is served |
 

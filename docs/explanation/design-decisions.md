@@ -21,6 +21,18 @@ hit (copy mode: 90.1%). Not gated on pressure (`unpin_gen`): the first writer to
 already kept ~185 of 207. Short Drupal run (`nocopy-all`, default 32 MB, 243 segments, cap 60), 28,640 requests: kept p50 5,
 p99 41, max 61; 193 (0.7%) reached the cap and copied the rest of their fetches.
 
+**The budget is arena-wide, and a request older than `nocopy.zero_copy_seconds` (3) copies** (was: a quarter per request;
+[design review, finding 2](design-review-2026-11.md#2-the-pin-cap-is-per-request-not-per-arena)). The count is the union of
+the live workers' published keep bitmaps, looked at on a request's first and every 8th new keep: a sum (one atomic add per
+keep, the review's proposal) counts a hot segment once per request holding it and would push ordinary concurrent traffic into
+copy mode. Repro (32 MB, 236 segments, 30k keys of ~600 B, 4 CLI workers 90/10 get/put for 8 s while N `php -S` requests
+each read every key from their own starting point and hold them): hit ratio of the CLI workers, old -> new: N=1 83.2 -> 82.7%,
+N=2 72.6 -> 82.2%, N=4 49.3 -> 81.2% (77.9% on a rerun), N=8 35.7 -> 54.6% (50.9%). At N=8 the rest is idle transient pins:
+a request asleep holds up to segments/16 it never drops (looking at the union on every keep instead: 58.3%, within noise).
+`./dev ab HEAD 7 read` within noise (COW and object rows rerun twice: ±5%). Price: a second bitmap per worker slot (packed:
+one 64-byte line each cost a 4 MB arena one segment, test 029 lost a key). Micro benches set `nocopy.zero_copy_seconds=0`:
+they run as one long `php -S` request. Tests 096, 097.
+
 ## Sharing
 
 **`nocopy.shm_name` is required; without it there is no cache.** Unset or not attachable means a startup warning and no
@@ -72,7 +84,7 @@ raise `nocopy.entries_hint`.
 
 ## Copy mode
 
-**The fetch mode follows the SAPI; there is no setting.** `nocopy.request_scope` (`auto`/`1`/`0`) only let users get it wrong:
+**The fetch mode follows the SAPI, then the request's age and the arena's pin budget** (below); only the age has a setting, for long requests that are meant to be. **Before: the SAPI alone, no setting.** `nocopy.request_scope` (`auto`/`1`/`0`) only let users get it wrong:
 `1` under a long CLI worker pinned segments until it exited, `0` under php-fpm copied for nothing. Nobody needed zero-copy CLI
 scripts. Price: none on the fetch path (same code). Tests and `bench.sh` get zero-copy as `php -S` requests (`tests/serve.inc`); `fpm-bench`'s copy row, FrankenPHP's forced run and the Drupal suite's zero-copy mode went (phpunit is CLI).
 

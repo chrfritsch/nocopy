@@ -12,10 +12,12 @@
 /* In the arena header. Offsets are from ar_base. */
 typedef struct {
 	uint32_t nsegs, shift, pin_stride; /* pin_stride: words per worker's bitmap, a multiple of 8 (own cache lines) */
+	uint32_t keep_stride;              /* words per worker's kept subset: packed, written once per new keep */
 	size_t segs_off;  /* the first segment */
 	size_t owner_off; /* uint8_t per segment: tenant, 0 free */
 	size_t meta_off;  /* ar_segmeta per segment */
 	size_t pins_off;  /* NOCOPY_MAX_WORKERS bitmaps */
+	size_t keeps_off; /* as many, the kept subsets */
 	uint32_t unpin_gen __attribute__((aligned(64)));
 } ar_pool_hdr;
 
@@ -53,6 +55,7 @@ bool ar_pool_any_deps(uint8_t bits);
 void ar_pool_pinned(const uint64_t *dead, uint64_t *held, time_t now);
 void ar_pool_ask_unpin(void); /* readers drop their idle pins at their next call end */
 uint32_t ar_pool_pinned_count(void);
+uint32_t ar_pool_kept_count(void); /* distinct segments live workers keep past a call */
 
 void ar_pins_clear(int slot);                /* a slot claimed or released */
 void ar_pins_publish(const ar_pins_t *r);    /* a forked child's new slot: the parent's pins it inherited */

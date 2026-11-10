@@ -20,6 +20,7 @@ With `nocopy.valkey`, these describe this server's local copies only.
 | `free_segments` | Segments in the shared pool, ready for any shard's writes |
 | `dead_segments` | Segments without live entries, not yet reused (a reader may still pin them) |
 | `pinned_segments` | Segments some process currently reads from |
+| `kept_segments` | Of those, segments zero-copy requests keep until they end. Past a quarter of `segments`, requests copy their further fetches |
 | `shards` | Independent parts with their own lock (1-8) |
 | `slots` | Slot table size; a shard fills at most 3/4 of its slots |
 | `lock_steals` | Locks taken over from a dead process (and its shard repaired). Should be 0 |

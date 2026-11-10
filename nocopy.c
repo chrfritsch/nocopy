@@ -38,6 +38,7 @@ static zend_long ini_hint = 4096;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_attached() false: unavailable) */
 static bool sapi_zero_copy;
+static zend_long zero_copy_seconds = 3; /* a zero-copy request older than this copies: a slow backend must not pin the cache away */
 static bool open_deferred; /* fpm master as root: each worker opens the arena on its first request */
 static bool want_igbinary; /* nocopy.serializer=igbinary: in effect if igbinary is loaded (MINIT) */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
@@ -321,6 +322,7 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "free_segments", s.free_segments);
 	add_assoc_long(return_value, "dead_segments", s.dead_segments);
 	add_assoc_long(return_value, "pinned_segments", s.pinned_segments);
+	add_assoc_long(return_value, "kept_segments", s.kept_segments);
 	add_assoc_long(return_value, "entries", s.entries);
 	add_assoc_long(return_value, "hits", s.hits);
 	add_assoc_long(return_value, "misses", s.misses);
@@ -411,6 +413,12 @@ static ZEND_INI_MH(OnHint)
 	return SUCCESS;
 }
 
+static ZEND_INI_MH(OnZeroCopySeconds)
+{
+	zero_copy_seconds = ZEND_STRTOL(ZSTR_VAL(new_value), NULL, 10);
+	return SUCCESS;
+}
+
 static ZEND_INI_MH(OnSerializer)
 {
 	want_igbinary = zend_string_equals_literal_ci(new_value, "igbinary");
@@ -426,6 +434,7 @@ PHP_INI_BEGIN()
 	PHP_INI_ENTRY("nocopy.serializer", "php", PHP_INI_SYSTEM, OnSerializer)
 	PHP_INI_ENTRY1("nocopy.local_size", "8M", PHP_INI_SYSTEM, OnSize, &nocopy_kept_size)
 	PHP_INI_ENTRY("nocopy.shm_name", "", PHP_INI_SYSTEM, OnShmName)
+	PHP_INI_ENTRY("nocopy.zero_copy_seconds", "3", PHP_INI_SYSTEM, OnZeroCopySeconds)
 PHP_INI_END()
 
 /* Read by apcu_* callers (Symfony's ApcuAdapter, Composer) before they use the apcu polyfill; nocopy itself ignores them. */
@@ -585,6 +594,7 @@ PHP_RINIT_FUNCTION(nocopy)
 		nocopy_claim(&NOCOPY_G(ctx));
 	}
 	NOCOPY_G(zero_copy) = sapi_zero_copy;
+	nocopy_keep_until(&NOCOPY_G(ctx), sapi_zero_copy && zero_copy_seconds > 0 ? nocopy_mono_ms() + zero_copy_seconds * 1000 : 0);
 	nocopy_kept_rinit(&NOCOPY_G(kept));
 	nocopy_vk_new_request();
 	return SUCCESS;

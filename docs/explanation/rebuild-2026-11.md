@@ -38,6 +38,11 @@ per-slot file there), and `tests/c/crash.c` and `repair.c` passing unchanged.
 
 ### 2. A pin budget for the arena, and the fetch mode by behaviour
 
+**Built 2026-11-10** ([design decisions](design-decisions.md#memory-lifetime)): the budget counts the union of live workers'
+kept segments (published bitmaps), not a sum, which would count each hot segment once per request; requests older than
+`nocopy.zero_copy_seconds` (3) copy. Four long requests: other workers' hit ratio 49% -> 81%; eight: 36% -> 51-55%, the rest
+held by idle pins of sleeping requests. Tests 096, 097.
+
 The cap is a quarter of the segments per request, and zero-copy is chosen by SAPI name. Four long php-fpm requests took the
 other workers' hit ratio from 100% to 27% ([finding 2](design-review-2026-11.md#2-the-pin-cap-is-per-request-not-per-arena)).
 

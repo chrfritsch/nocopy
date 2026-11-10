@@ -141,6 +141,7 @@ void nocopy_stats(nocopy_stats_t *st)
 		st->misses += __atomic_load_n(&ar_worker_at(i)->misses, __ATOMIC_RELAXED);
 	}
 	st->pinned_segments = ar_pool_pinned_count();
+	st->kept_segments = ar_pool_kept_count();
 	st->segments = ar_nsegs;
 	st->free_segments = ar_pool_free_count();
 	st->segment_size = ar_seg_size;

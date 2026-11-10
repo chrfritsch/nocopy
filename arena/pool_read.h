@@ -12,11 +12,14 @@ AR_HIDDEN extern unsigned ar_seg_shift;
 AR_HIDDEN extern uint32_t ar_nsegs;
 AR_HIDDEN extern uint32_t ar_seg_words;  /* bitmap words in use: (nsegs + 63) / 64 */
 AR_HIDDEN extern uint64_t *ar_pins;      /* per worker slot: the segments it pins (ar_pin_stride words) */
+AR_HIDDEN extern uint64_t *ar_keeps;     /* per worker slot: the subset it keeps past a call (ar_keep_stride words) */
+AR_HIDDEN extern uint32_t ar_keep_stride;
 AR_HIDDEN extern uint32_t ar_pin_stride;
 AR_HIDDEN extern uint32_t *ar_unpin_gen; /* bumped when a dead segment is still pinned: readers drop their idle pins */
 
 static inline uint32_t ar_seg_of(const void *p) { return (uint32_t) (((const char *) p - ar_seg_base) >> ar_seg_shift); }
 static inline uint64_t *ar_pins_of(int slot) { return ar_pins + (size_t) slot * ar_pin_stride; }
+static inline uint64_t *ar_keeps_of(int slot) { return ar_keeps + (size_t) slot * ar_keep_stride; }
 
 /* What this reader has pinned: per process (NTS) or thread (ZTS). */
 typedef struct {
@@ -25,6 +28,7 @@ typedef struct {
 	uint32_t unpin_seen; /* *ar_unpin_gen when the idle pins were last dropped */
 	uint32_t idle;       /* pins taken since then (upper bound) */
 	uint32_t nkeep;      /* segments in keep */
+	int64_t keep_until;  /* monotonic ms after which nothing more is kept, 0 no limit */
 	uint64_t mine[NOCOPY_SEG_WORDS]; /* published as pinned */
 	uint64_t keep[NOCOPY_SEG_WORDS]; /* subset kept past the call: a zero-copy pointer escaped */
 } ar_pins_t;
@@ -46,17 +50,18 @@ static inline bool ar_pin(ar_pins_t *r, const void *p)
 	return true;
 }
 
+/* s newly kept: true once the arena's pin budget is spent or keep_until passed (pool.c). */
+bool ar_pins_kept(ar_pins_t *r, uint32_t s);
+
 /* A zero-copy pointer into p's segment leaves the call: keep it pinned until ar_pins_drop_all.
- * True once more than a quarter of the segments are kept: kept pins block reclaim for everyone, so further fetches should copy.
- * Not gated on pressure: a writer first meets a pinned dead segment when nearly all are kept. */
+ * True: further fetches should copy. Kept pins block reclaim for everyone, so the budget is arena-wide. */
 static inline bool ar_pin_keep(ar_pins_t *r, const void *p)
 {
 	uint32_t s = ar_seg_of(p);
 	if (r->keep[s >> 6] & ar_segbit(s)) {
 		return false;
 	}
-	ar_segs_add(r->keep, s);
-	return ++r->nkeep > ar_nsegs / 4;
+	return ar_pins_kept(r, s);
 }
 
 static inline void ar_pins_drop_transient(ar_pins_t *r)
@@ -95,6 +100,11 @@ static inline void ar_pins_drop_idle(ar_pins_t *r)
 /* Every pin goes, kept ones too: no earlier zero-copy result is used again. */
 static inline void ar_pins_drop_all(ar_pins_t *r)
 {
+	for (uint32_t w = 0; r->nkeep && w < ar_seg_words; w++) {
+		if (r->keep[w]) {
+			__atomic_store_n(&ar_keeps_of(r->slot)[w], 0, __ATOMIC_RELAXED);
+		}
+	}
 	memset(r->keep, 0, sizeof r->keep);
 	r->nkeep = 0;
 	r->transient = true;

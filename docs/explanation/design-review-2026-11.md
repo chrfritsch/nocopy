@@ -15,7 +15,7 @@ Ranked by blast radius × likelihood in real deployments.
 | # | Finding | Verdict | What the user sees | Docs admit it | Cheapest mitigation |
 |---|---|---|---|---|---|
 | 1 | Liveness is a guess that fails toward "dead" | real flaw | segfaults and wrong values in every process | wrongly: "cannot share" | fail closed + refuse another PID namespace at attach (fixed instead by kernel locks, 2026-11-10) |
-| 2 | The pin cap is per request, not per arena | real flaw | hit ratio 100% -> 27% while 4 requests run long | half | a global cap; a stat |
+| 2 | The pin cap is per request, not per arena | real flaw | hit ratio 100% -> 27% while 4 requests run long | half | a global cap; a stat (fixed: union budget + age, 2026-11-10) |
 | 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field |
 | 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end |
 | 5 | Valkey: a process that starts no new request never re-checks | real flaw for workers | stale reads without bound | "by design" for a request | re-check the heartbeat by age |
@@ -94,6 +94,9 @@ not the one stored under that key, `lock_steals` climbing while nothing died. `s
    corruption without it.
 
 ### 2. The pin cap is per request, not per arena
+
+**Fixed 2026-11-10** by an arena-wide budget and an age limit ([rebuild, item 2](rebuild-2026-11.md#2-a-pin-budget-for-the-arena-and-the-fetch-mode-by-behaviour)),
+with a `kept_segments` stat; tests 096, 097.
 
 **Premise attacked.** "A request keeps at most a quarter of the segments; past that its fetches copy" bounds the damage
 of long requests, and "long-running processes use copy mode" covers the rest.
