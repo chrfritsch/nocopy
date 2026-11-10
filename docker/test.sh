@@ -12,9 +12,13 @@ export NOCOPY_SO=/build/modules/nocopy.so
 [ -n "$NOCOPY_ASAN" ] && export LD_PRELOAD="$(cc -print-file-name=libasan.so)" USE_ZEND_ALLOC=0 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1
 TEST_PHP_EXECUTABLE=$(command -v php) NO_INTERACTION=1 php "$(php-config --prefix)/lib/php/build/run-tests.php" \
   -n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-runner -q -j"$(nproc)" "${@:-/build/tests}" > /build/run.out 2>&1 || true
-grep -E "^(FAIL|SKIP|BORK)|Tests (passed|failed|skipped)" /build/run.out || true
+grep -E "^(FAIL|SKIP|BORK)|XFAIL REASON|Tests (passed|failed|skipped)" /build/run.out || true
 bad=0
 grep -q "^Tests passed" /build/run.out || { tail -20 /build/run.out; bad=1; }
 grep -q "^BORK" /build/run.out && bad=1
-for f in /build/tests/*.diff; do [ -f "$f" ] && { echo "== $f"; head -20 "$f"; bad=1; }; done
+for f in /build/tests/*.diff; do
+  [ -f "$f" ] || continue
+  grep -q "XFAIL.*/$(basename "${f%.diff}").phpt" /build/run.out && continue # an expected failure (--XFAIL--) leaves its diff too
+  echo "== $f"; head -20 "$f"; bad=1
+done
 exit $bad
