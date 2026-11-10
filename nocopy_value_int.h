@@ -27,7 +27,7 @@ static inline void *inl_grow(void *p, const void *inl, size_t used, size_t size)
 # define NC_ASSERT(c) do { if (UNEXPECTED(!(c))) { fprintf(stderr, "nocopy: assertion failed: %s (%s:%d)\n", #c, __FILE__, __LINE__); abort(); } } while (0)
 #else
 # define NC_CHECKS 0
-# define NC_ASSERT(c) ((void) 0)
+# define NC_ASSERT(c) ZEND_ASSUME(c) /* as ZEND_ASSERT does in a release build */
 #endif
 
 typedef void (*zval_fn)(void *ctx, zval *z);
