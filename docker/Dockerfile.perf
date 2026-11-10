@@ -1,4 +1,4 @@
 # nocopy-linux with perf, for ./dev perf (docker/perf.sh).
 ARG PHP=8.5
 FROM nocopy-linux:${PHP}
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends linux-perf >/dev/null && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends linux-perf valgrind >/dev/null && rm -rf /var/lib/apt/lists/*

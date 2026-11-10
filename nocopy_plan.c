@@ -367,13 +367,51 @@ static zend_always_inline bool next_elem(const zend_array *a, uint32_t *i, zend_
 	return false;
 }
 
+static zend_always_inline bool same_val(const zval *va, const zval *vb, int depth)
+{
+	if (Z_TYPE_P(va) != Z_TYPE_P(vb)) {
+		return false;
+	}
+	switch (Z_TYPE_P(va)) {
+		case IS_LONG: case IS_DOUBLE: /* bitwise: -0.0 is not 0.0 */
+			return Z_LVAL_P(va) == Z_LVAL_P(vb);
+		case IS_STRING:
+			return zend_string_equals(Z_STR_P(va), Z_STR_P(vb));
+		case IS_ARRAY:
+			return nc_same_array(Z_ARR_P(va), Z_ARR_P(vb), depth + 1);
+		case IS_NULL: case IS_FALSE: case IS_TRUE:
+			return true;
+		default:
+			return false;
+	}
+}
+
 bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
 {
 	if (a == b) {
 		return true;
 	}
-	if (zend_hash_num_elements(a) != zend_hash_num_elements(b) || depth > NC_MAX_DEPTH) {
+	uint32_t n = zend_hash_num_elements(a);
+	if (n != zend_hash_num_elements(b) || depth > NC_MAX_DEPTH) {
 		return false;
+	}
+	if (n == a->nNumUsed && n == b->nNumUsed && HT_IS_PACKED(a) == HT_IS_PACKED(b)) { /* no holes: in step */
+		if (HT_IS_PACKED(a)) {
+			for (uint32_t i = 0; i < n; i++) {
+				if (!same_val(&a->arPacked[i], &b->arPacked[i], depth)) {
+					return false;
+				}
+			}
+		} else {
+			for (uint32_t i = 0; i < n; i++) {
+				const Bucket *x = &a->arData[i], *y = &b->arData[i];
+				if (x->h != y->h || (x->key == NULL) != (y->key == NULL) || (x->key && !zend_string_equals(x->key, y->key))
+					|| !same_val(&x->val, &y->val, depth)) {
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 	uint32_t i = 0, j = 0;
 	zend_string *ka, *kb;
@@ -381,29 +419,8 @@ bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
 	zval *va, *vb;
 	while (next_elem(a, &i, &ka, &ha, &va)) {
 		if (!next_elem(b, &j, &kb, &hb, &vb) || ha != hb || (ka == NULL) != (kb == NULL) || (ka && !zend_string_equals(ka, kb))
-			|| Z_TYPE_P(va) != Z_TYPE_P(vb)) {
+			|| !same_val(va, vb, depth)) {
 			return false;
-		}
-		switch (Z_TYPE_P(va)) {
-			case IS_LONG: case IS_DOUBLE: /* bitwise: -0.0 is not 0.0 */
-				if (Z_LVAL_P(va) != Z_LVAL_P(vb)) {
-					return false;
-				}
-				break;
-			case IS_STRING:
-				if (!zend_string_equals(Z_STR_P(va), Z_STR_P(vb))) {
-					return false;
-				}
-				break;
-			case IS_ARRAY:
-				if (!nc_same_array(Z_ARR_P(va), Z_ARR_P(vb), depth + 1)) {
-					return false;
-				}
-				break;
-			case IS_NULL: case IS_FALSE: case IS_TRUE:
-				break;
-			default:
-				return false;
 		}
 	}
 	return true;

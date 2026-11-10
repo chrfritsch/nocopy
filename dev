@@ -37,6 +37,8 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   soak [minutes=60] [workers=8] [interval_s=30]  long mixed workload, one line per interval to spot drift
   tail [workers=8] [secs=10] [scenarios]  get/put latency percentiles (p50..p99.99, max) under eviction and contention, vs APCu
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, ROWS_ONLY=1 its DB cache rows in an arena, PERF_ONLY=1 perf profile; CONFIGS=...)
+  cg [ops...]                 cachegrind instructions per op of bench/prof.php (N, TOP, ANNOTATE=1; .cache/perf)
+  cg [ops...]                 cachegrind instructions per op of bench/prof.php (N, TOP, ANNOTATE=1; .cache/perf)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
   hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
   trace [raw.csv...]          Twitter traces with TTLs replayed read-through: nocopy vs libCacheSim's policies at equal bytes (SIZES, ALGOS, N; traces in .cache/traces, see docker/trace.sh)
@@ -100,6 +102,10 @@ case $cmd in
               docker run --rm -v "$PWD/$a":/app -w /app composer:2 install -q --no-dev --classmap-authoritative '--ignore-platform-req=ext-*'
               run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro dunglas/frankenphp:1-php8.5 sh /src/docker/fp-bench.sh ;;
   stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
+  cg)         img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
+              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -e TOP -e ANNOTATE -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
+  cg)         img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
+              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -e TOP -e ANNOTATE -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
   perf)       img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
               run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
