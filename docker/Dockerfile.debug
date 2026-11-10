@@ -1,0 +1,12 @@
+# PHP built with --enable-debug next to the image's release build, first in PATH: ZEND_ASSERT and the engine's checks on
+# immutable values (a refcount changed, an immutable array written) are compiled in; the release build drops them.
+#   docker build --build-arg PHP=8.5 -f docker/Dockerfile.debug -t nocopy-debug:8.5 docker   (needs nocopy-linux:8.5: ./dev image)
+ARG PHP=8.5
+FROM nocopy-linux:${PHP}
+RUN docker-php-source extract && cd /usr/src/php \
+ && ./configure --prefix=/opt/php-debug --enable-debug --disable-all --disable-cgi --disable-phpdbg --enable-pcntl --enable-posix --enable-session >/dev/null \
+ && make -j"$(nproc)" >/dev/null && make install >/dev/null && docker-php-source delete \
+ && cd /tmp && pecl download igbinary >/dev/null && tar xzf igbinary-*.tgz && cd igbinary-*/ \
+ && /opt/php-debug/bin/phpize >/dev/null && ./configure --with-php-config=/opt/php-debug/bin/php-config >/dev/null && make -j"$(nproc)" >/dev/null && make install >/dev/null \
+ && rm -rf /tmp/igbinary* /tmp/package.xml
+ENV PATH=/opt/php-debug/bin:$PATH

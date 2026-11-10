@@ -12,7 +12,8 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 |---|---|---|
 | `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests) on all cores, with a Valkey server for the 05x tests | `nocopy-linux:$PHP` |
 | `./dev novalkey [tests …]` | same, built with `--disable-nocopy-valkey` | `nocopy-linux:$PHP` |
-| `./dev asan [tests …]` | same, built with AddressSanitizer + UBSan (libasan preloaded into the uninstrumented php, `USE_ZEND_ALLOC=0`, no leak check) | `nocopy-linux:$PHP` |
+| `./dev asan [tests …]` | same, built with AddressSanitizer + UBSan (libasan preloaded into the uninstrumented php, `USE_ZEND_ALLOC=0`, no leak check) and `-DNOCOPY_DEBUG`: nocopy's own assertions (`NC_ASSERT`: a write filled exactly the planned bytes and consumed the tape; every pointer in the written block stays in it, or is the empty array or an atom; keys carry their hash; no graph marker reaches userland), which a release PHP's `ZEND_ASSERT` drops | `nocopy-linux:$PHP` |
+| `./dev debug [tests …]` | same as `asan`, on PHP built with `--enable-debug` (pcntl, posix, session, igbinary): the engine's own assertions, among them a refcount changed on an immutable array or interned string (`ZEND_RC_DEBUG`) and hash-table consistency. `./dev debug fuzz [iterations] [seed]`: the fuzzer on that build. The image builds PHP once (minutes), then is cached | `nocopy-debug:$PHP` |
 | `./dev clang [tests …]` | same, built with clang (warnings gcc does not give; `-Werror` too) | `nocopy-linux:$PHP` |
 | `./dev zts [tests …]` | suite on thread-safe PHP 8.4 with ext-parallel | `nocopy-zts:8.4` |
 | `./dev stress [loops=30]` | concurrency tests (011, 015, 018, 021, 022) in a loop on a release build, stops at the first failure or hang | `nocopy-linux:$PHP` |
@@ -62,7 +63,8 @@ usage in their headers and in [Develop, test and benchmark](../how-to/develop.md
 | Path | Role |
 |---|---|
 | `docker/Dockerfile` | `nocopy-linux`: official `php:<PHP>-fpm` + nginx, Valkey, git, OpenSSL headers, clang + clang-tidy + compiler-rt, pcntl, APCu and igbinary (built, not loaded) |
+| `docker/Dockerfile.debug` | `nocopy-debug`: `nocopy-linux:<PHP>` + PHP from the image's own source with `--enable-debug` in `/opt/php-debug`, first in `PATH`, igbinary built for it |
 | `docker/Dockerfile.zts` | `nocopy-zts`: `php:8.4-zts` + ext-parallel |
 | `docker/Dockerfile.drupal` | `nocopy-drupal`: `nocopy-linux:8.5` + Drupal's extensions, MariaDB, composer |
-| `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` with `-Wall -Wextra -Werror` (`NOCOPY_CONFIGURE` for configure flags, `NOCOPY_ASAN=1` for sanitizers) |
+| `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` with `-Wall -Wextra -Werror` (`NOCOPY_CONFIGURE` for configure flags, `NOCOPY_ASAN=1` for sanitizers and `NOCOPY_DEBUG`) |
 | `docker/*.sh` | the in-container scripts the commands above run |

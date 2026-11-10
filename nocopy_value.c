@@ -154,7 +154,7 @@ bool nocopy_value_check(nocopy_env *env, zval *val)
 
 /* ---- out ---- */
 
-#if ZEND_DEBUG
+#if NC_CHECKS
 /* No graph marker reached userland (objects' properties are not followed: cycles). */
 static bool no_marker(const zval *v, int depth)
 {
@@ -181,8 +181,8 @@ int nocopy_value_read_slow(nocopy_env *env, const nocopy_entry *e, bool copy, zv
 	switch (fmt) {
 		case NOCOPY_FMT_GRAPH: {
 			int r = nc_graph_out(env, rv, v, copy) ? NOCOPY_HIT : NOCOPY_MISS;
-#if ZEND_DEBUG
-			ZEND_ASSERT(no_marker(rv, 0));
+#if NC_CHECKS
+			NC_ASSERT(no_marker(rv, 0));
 #endif
 			return copy ? r : r | NOCOPY_BORROWED; /* a hook may have kept an object even when the build failed */
 		}

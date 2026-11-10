@@ -21,6 +21,15 @@ _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
 /* p grown to size bytes: out of inl (used bytes kept) into request memory, or reallocated there. */
 static inline void *inl_grow(void *p, const void *inl, size_t used, size_t size) { return p == inl ? memcpy(emalloc(size), inl, used) : erealloc(p, size); }
 
+/* Checked in a debug build of PHP and in ours with -DNOCOPY_DEBUG (./dev asan, fuzz, debug): a release PHP compiles ZEND_ASSERT out. */
+#if ZEND_DEBUG || defined(NOCOPY_DEBUG)
+# define NC_CHECKS 1
+# define NC_ASSERT(c) do { if (UNEXPECTED(!(c))) { fprintf(stderr, "nocopy: assertion failed: %s (%s:%d)\n", #c, __FILE__, __LINE__); abort(); } } while (0)
+#else
+# define NC_CHECKS 0
+# define NC_ASSERT(c) ((void) 0)
+#endif
+
 typedef void (*zval_fn)(void *ctx, zval *z);
 
 static zend_always_inline size_t str_size(size_t len) { return SALIGN(_ZSTR_STRUCT_SIZE(len)); }

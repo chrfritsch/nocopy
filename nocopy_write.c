@@ -180,7 +180,7 @@ static void write_node(writer *w, const gnode *gn, zend_object *o, nc_obj *n, ze
 /* *z becomes NC_OREF; the object's node is written the first time. */
 static __attribute__((noinline)) void write_object(writer *w, zval *z)
 {
-	ZEND_ASSERT(w->graph); /* an object makes the value a graph */
+	NC_ASSERT(w->graph); /* an object makes the value a graph */
 	zend_object *o = Z_OBJ_P(z);
 	uint32_t i = w->tape[w->ti++];
 	gnode *gn = &w->g->nodes[i];
@@ -205,7 +205,7 @@ static __attribute__((noinline)) bool write_ref(writer *w, zval *z)
 	if (t == T_ONCE) {
 		return false;
 	}
-	ZEND_ASSERT(w->graph); /* without a graph nref is 0: every reference was planned T_ONCE */
+	NC_ASSERT(w->graph); /* without a graph nref is 0: every reference was planned T_ONCE */
 	uint32_t i = t >> 1;
 	if (t & T_FIRST) {
 		zval *rv = &graph_refs(w->graph)[i];
@@ -279,6 +279,96 @@ static __attribute__((noinline)) nc_graph *write_graph(writer *w, zval *val)
 	return gr;
 }
 
+#if NC_CHECKS
+/* Everything the block points to lies in the block, is the arena's empty array or an atom, and is immutable. */
+typedef struct {
+	const nocopy_entry *e;
+} checker;
+
+static void check_ptr(const checker *c, const void *p, size_t n)
+{
+	NC_ASSERT((uintptr_t) p - (uintptr_t) c->e < c->e->size && n <= c->e->size - ((uintptr_t) p - (uintptr_t) c->e));
+}
+
+static void check_str(const checker *c, const zend_string *s)
+{
+	if (!nocopy_atom_bits(s)) {
+		check_ptr(c, s, _ZSTR_HEADER_SIZE);
+		check_ptr(c, s, _ZSTR_STRUCT_SIZE(ZSTR_LEN(s)));
+	}
+	NC_ASSERT(ZSTR_IS_INTERNED(s) && !(GC_FLAGS(s) & IS_STR_PERMANENT) && GC_REFCOUNT(s) >= 2 && ZSTR_VAL(s)[ZSTR_LEN(s)] == 0);
+}
+
+static void check_zval(void *ctx, zval *z)
+{
+	const checker *c = ctx;
+	switch (Z_TYPE_P(z)) {
+		case IS_STRING:
+			NC_ASSERT(!Z_TYPE_FLAGS_P(z));
+			check_str(c, Z_STR_P(z));
+			NC_ASSERT(ZSTR_LEN(Z_STR_P(z)) > NC_VSTR_MAX || z == block_val((nocopy_entry *) c->e) || ZSTR_H(Z_STR_P(z)));
+			break;
+		case NC_SPINE:
+		case IS_ARRAY: {
+			zend_array *a = Z_ARR_P(z);
+			NC_ASSERT(!Z_TYPE_FLAGS_P(z));
+			if (a == ARENA_EMPTY) {
+				break;
+			}
+			check_ptr(c, a, sizeof *a);
+			NC_ASSERT((GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2 && !a->pDestructor && zend_hash_num_elements(a));
+			check_ptr(c, HT_GET_DATA_ADDR(a), HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : HT_USED_SIZE(a));
+			if (HT_IS_PACKED(a)) {
+				zval *v;
+				ZEND_HASH_PACKED_FOREACH_VAL(a, v) {
+					check_zval(ctx, v);
+				} ZEND_HASH_FOREACH_END();
+			} else {
+				Bucket *b;
+				ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
+					if (b->key) {
+						check_str(c, b->key);
+						NC_ASSERT(ZSTR_H(b->key) == b->h && zend_hash_find_known_hash(a, b->key) == &b->val);
+					}
+					check_zval(ctx, &b->val);
+				} ZEND_HASH_FOREACH_END();
+			}
+			break;
+		}
+		case NC_OREF: case NC_RREF: case NC_DEFAULT:
+			break;
+		default:
+			NC_ASSERT(Z_TYPE_P(z) < IS_STRING);
+	}
+}
+
+static void block_check(nocopy_entry *e)
+{
+	checker c = {.e = e};
+	zval *v = block_val(e);
+	if (nocopy_value_fmt(e) != NOCOPY_FMT_GRAPH) {
+		NC_ASSERT(Z_TYPE_P(v) <= IS_ARRAY);
+		check_zval(&c, v);
+		return;
+	}
+	nc_graph *g = Z_PTR_P(v);
+	check_ptr(&c, g, graph_head(g->ncls, g->nref, g->nobj, g->nhooks));
+	for (uint32_t i = 0; i < g->ncls; i++) {
+		check_str(&c, graph_cls(g)[i].name);
+		check_str(&c, graph_cls(g)[i].lc);
+	}
+	for (uint32_t i = 0; i < g->nobj; i++) {
+		check_ptr(&c, graph_obj(g, i), obj_size(0));
+		NC_ASSERT(graph_obj(g, i)->cls < g->ncls);
+		check_ptr(&c, graph_obj(g, i), obj_size(obj_nz(graph_cls(g), graph_obj(g, i))));
+	}
+	for (uint32_t i = 0; i < g->nhooks; i++) {
+		NC_ASSERT(graph_hooks(g)[i] < g->nobj);
+	}
+	graph_each(g, check_zval, &c);
+}
+#endif
+
 void nc_write(encoding *x, nocopy_entry *e)
 {
 	writer w = {.cursor = (char *) e + SALIGN(sizeof(nocopy_block)), .tape = x->z.tape, .str = x->z.str, .g = &x->g};
@@ -293,7 +383,10 @@ void nc_write(encoding *x, nocopy_entry *e)
 		ZVAL_COPY_VALUE(v, x->val);
 		write_zval(&w, v);
 	}
-	ZEND_ASSERT(w.cursor == (char *) e + nocopy_entry_size(e) && w.ti == x->z.nt);
+	NC_ASSERT(w.cursor == (char *) e + nocopy_entry_size(e) && w.ti == x->z.nt); /* written == planned, the tape consumed */
+#if NC_CHECKS
+	block_check(e);
+#endif
 }
 
 /* ---- moving: merge byte-copied a block, its pointers still aim into the old one ---- */
