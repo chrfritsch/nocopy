@@ -54,6 +54,15 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
       AS_VAR_IF([nocopy_lto], [], [AC_MSG_RESULT([no])], [AC_MSG_RESULT([yes]); break])
     done
   ])])
+  dnl the layout id is the linker's build id (nocopy.c: build_id): ask for one where the toolchain does not add it
+  AS_VAR_IF([ext_shared], [no],, [
+    AC_MSG_CHECKING([whether $CC links with -Wl,--build-id])
+    nocopy_save_ldflags=$LDFLAGS
+    LDFLAGS="$LDFLAGS -Wl,--build-id"
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([], [])],
+      [AC_MSG_RESULT([yes]); NOCOPY_SHARED_LIBADD="$NOCOPY_SHARED_LIBADD -Wl,--build-id"], [AC_MSG_RESULT([no])])
+    LDFLAGS=$nocopy_save_ldflags
+  ])
   dnl -Wc,: libtool drops a bare -flto from the link line for clang (whose objects are then bitcode)
   AS_VAR_IF([nocopy_lto], [],, [NOCOPY_SHARED_LIBADD="$NOCOPY_SHARED_LIBADD -Wc,$nocopy_lto"])
   PHP_SUBST([NOCOPY_SHARED_LIBADD])

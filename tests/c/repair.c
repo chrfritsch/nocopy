@@ -102,8 +102,26 @@ static void no_owner_id(void)
 	assert(waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 }
 
+/* A creator maps the arena at a random 2 MB-aligned base: two creations, two addresses (alike once in 2^22). */
+static void random_base(void)
+{
+	uintptr_t b[2];
+	for (int i = 0; i < 2; i++) {
+		char name[48];
+		nocopy_named nm;
+		snprintf(name, sizeof name, "/nocopy-base-%d-%d", (int) getpid(), i);
+		assert(nocopy_arena_open(&(nocopy_config) {.name = name, .size = 4 << 20, .abi = 1, .rebase = rebase}, &nm).code == NOCOPY_ERR_NONE);
+		shm_unlink(nm.name);
+		b[i] = (uintptr_t) ar_base;
+		assert(b[i] % (2 << 20) == 0 && b[i] >= 0x1000000000ULL && b[i] < 0x400000000000ULL);
+		nocopy_arena_close();
+	}
+	assert(b[0] != b[1]);
+}
+
 int main(void)
 {
+	random_base();
 	char base[32];
 	nocopy_named nm;
 	snprintf(base, sizeof base, "/nocopy-repair-%d", (int) getpid());

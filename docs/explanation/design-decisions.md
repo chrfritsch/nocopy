@@ -379,9 +379,18 @@ ttl churn's `evacuated` read 8-14% higher at best-of, but per run old copy 4959-
 copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
 inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.
 
-**The layout id hashes the loaded `nocopy.so`** (was: its GNU build id from the ELF notes on Linux, the file hash elsewhere; ~50 lines
-dropped). Price: 200 bare CLI starts, 3 rounds, `php -r ';'` 5128-5457 -> 5370-5971 µs (+0.24-0.5 ms for a 1.16 MB `.so`; PHP alone
-5105); php-fpm pays it once, in the master.
+**The layout id is the loaded code's build id, read in MINIT** (was: a hash of the `.so` file, read when the arena is
+opened; before that the GNU build id, dropped for ~50 lines). The file hash read whatever file was at the path at open
+time: a root fpm master's workers open on their first request, so after a package upgrade one pool ran two caches
+([design review, finding 4](design-review-2026-11.md#4-the-layout-id-is-read-from-disk-when-the-arena-is-opened)). The
+GNU build-id note (`-Wl,--build-id`) or `LC_UUID`, from memory; the file hash only without one, and then in MINIT. Test
+099: the same code from two different files shares one arena (fails with the file hash). Startup back: 400 interleaved bare
+`php -r ';'` starts, median 6835 µs (file hash) -> 6516 µs, PHP alone 6397.
+
+**The creator picks a random base** (was: the first free of two fixed addresses): the pointers in the arena were the same
+on every host ([finding 7](design-review-2026-11.md#7-a-named-file-full-of-pointers-at-a-fixed-address)). Attachers already
+mapped at the header's base, so nothing else changed; 2 MB-aligned in a 32 TB window, else a 192 GB one for 39-bit address
+spaces. An attacher that has something at that address gets no cache, as before with the fixed one.
 
 ## Code style
 

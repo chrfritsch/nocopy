@@ -20,6 +20,11 @@
 #include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
+#ifdef __APPLE__
+# include <mach-o/loader.h>
+#elif defined(__linux__)
+# include <link.h>
+#endif
 
 /* One translation unit, so nocopy_* inlines the store and value layers (split: miss -5%, failing add -6%); each also compiles alone. */
 #include "nocopy_class.c" /* NOLINT(bugprone-suspicious-include) */
@@ -353,12 +358,75 @@ static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 
 /* ---- module ---- */
 
+static uint64_t abi_id; /* layout_id(), once in MINIT */
+
+#ifdef __linux__
+typedef struct {
+	uintptr_t at;
+	uint64_t id;
+} build_find;
+
+/* The GNU build-id note of the loaded object that holds f->at. */
+static int build_note(struct dl_phdr_info *info, size_t size, void *arg)
+{
+	(void) size;
+	build_find *f = arg;
+	bool ours = false;
+	for (int i = 0; i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		ours |= ph->p_type == PT_LOAD && f->at - (info->dlpi_addr + ph->p_vaddr) < ph->p_memsz;
+	}
+	for (int i = 0; ours && i < info->dlpi_phnum; i++) {
+		const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+		const char *p = (const char *) (info->dlpi_addr + ph->p_vaddr), *end = p + ph->p_memsz;
+		while (ph->p_type == PT_NOTE && p + sizeof(ElfW(Nhdr)) <= end) {
+			const ElfW(Nhdr) *n = (const ElfW(Nhdr) *) p;
+			const char *name = p + sizeof *n, *desc = name + ((n->n_namesz + 3) & ~3u);
+			if (n->n_type == NT_GNU_BUILD_ID && n->n_namesz == 4 && memcmp(name, "GNU", 4) == 0 && desc + n->n_descsz <= end) {
+				f->id = zend_hash_func(desc, n->n_descsz);
+				return 1;
+			}
+			p = desc + ((n->n_descsz + 3) & ~3u);
+		}
+	}
+	return ours;
+}
+#endif
+
+/* The id the linker gave the binary that holds this code (in memory, not the file on disk now): 0 if it has none. */
+static uint64_t build_id(void)
+{
+#ifdef __linux__
+	build_find f = {.at = (uintptr_t) build_id};
+	dl_iterate_phdr(build_note, &f);
+	return f.id;
+#elif defined(__APPLE__)
+	Dl_info dl;
+	if (!dladdr((void *) build_id, &dl) || !dl.dli_fbase) {
+		return 0;
+	}
+	const struct mach_header_64 *h = dl.dli_fbase;
+	const struct load_command *lc = (const struct load_command *) (h + 1);
+	for (uint32_t i = 0; i < h->ncmds; i++, lc = (const struct load_command *) ((const char *) lc + lc->cmdsize)) {
+		if (lc->cmd == LC_UUID) {
+			return zend_hash_func((const char *) ((const struct uuid_command *) lc)->uuid, 16);
+		}
+	}
+	return 0;
+#else
+	return 0;
+#endif
+}
+
 /* What processes sharing a named arena must agree on: the code that lays out and reads it. The same binary gives the same id; any other build gets its own arena. */
 static uint64_t layout_id(void)
 {
-	uint64_t id = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION " " ZEND_EXTENSION_BUILD_ID));
+	uint64_t id = zend_hash_func(ZEND_STRL(PHP_NOCOPY_VERSION " " ZEND_EXTENSION_BUILD_ID)), b = build_id();
+	if (b) {
+		return id ^ b;
+	}
 #ifdef COMPILE_DL_NOCOPY
-	/* hash the loaded .so */
+	/* no build id: hash the .so, now, while it is the file just loaded */
 	Dl_info dl;
 	int fd = dladdr((void *) layout_id, &dl) && dl.dli_fname ? open(dl.dli_fname, O_RDONLY | O_CLOEXEC) : -1;
 	struct stat st;
@@ -372,7 +440,7 @@ static uint64_t layout_id(void)
 		return id;
 	}
 #endif
-	return id ^ zend_hash_func(ZEND_STRL(__DATE__ " " __TIME__)); /* built into PHP, or our .so unreadable */
+	return id ^ zend_hash_func(ZEND_STRL(__DATE__ " " __TIME__)); /* built into PHP without a build id, or our .so unreadable */
 }
 
 static ZEND_INI_MH(OnShmName)
@@ -492,7 +560,7 @@ static void arena_open(bool late)
 	nocopy_named named;
 	char msg[512] = "";
 	if (shm_name) {
-		const nocopy_config cfg = {.name = shm_name, .size = arena_size, .hint = ini_hint > 0 ? (uint64_t) ini_hint : 0, .abi = layout_id(), .rebase = nocopy_value_rebase};
+		const nocopy_config cfg = {.name = shm_name, .size = arena_size, .hint = ini_hint > 0 ? (uint64_t) ini_hint : 0, .abi = abi_id, .rebase = nocopy_value_rebase};
 		err = nocopy_arena_open(&cfg, &named);
 	}
 	off_why[0] = 0;
@@ -569,6 +637,7 @@ static void atfork_child(void)
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
+	abi_id = layout_id(); /* now: a root fpm master's workers open the arena later, maybe after nocopy.so was replaced */
 	sapi_zero_copy = short_lived_sapi();
 	if (!zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {
 		zend_register_ini_entries(ini_apc, module_number);

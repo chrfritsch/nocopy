@@ -33,8 +33,10 @@ rather than serve stale data.
   the cache off (with a warning) until it is removed. For the same reason php-fpm's master, when it runs as root, does
   not open the cache: each worker opens it on its first request as the pool's user. Otherwise the workers would write
   memory a root process reads, and every pool would share the master's cache whatever its user or `nocopy.shm_name`.
-- **One build.** The build id hashes the loaded `nocopy.so`: different code may lay out memory differently, so processes
-  share only when they run the same build. Objects of old builds are removed once no process uses them.
+- **One build.** The build id is the loaded code's (the linker's build id, read from memory): different code may lay out
+  memory differently, so processes share only when they run the same build. Replacing `nocopy.so` on disk changes nothing
+  for processes that already loaded it, also for workers that open the cache later. Objects of old builds are removed once
+  no process uses them.
 - **One `/dev/shm`.** A lock held by a crashed process is detected by a kernel file lock the process held on the object,
   which the kernel drops when it dies, whatever its PID namespace. Containers that see the same `/dev/shm`
   (`--ipc=container:…`, a pod's shared memory volume, a sidecar) share the cache when they run the same build as the same
@@ -42,6 +44,17 @@ rather than serve stale data.
 
 The creator reserves the whole `nocopy.shm_size` up front (`posix_fallocate`), so memory can never run out under a reader.
 On tmpfs, a lazily-allocated page past `/dev/shm`'s limit would crash the process on first touch instead.
+
+## Security: one user is one trust domain
+
+The cache is a file in `/dev/shm`, full of pointers that every attached process follows. Any code running as the pool's
+user can open it, nocopy loaded or not, and a script that rewrites it can make every worker that fetches a value crash or
+run what it wants, past `disable_functions`. So:
+
+- Do not share a uid between sites that do not trust each other, also not with different `nocopy.shm_name`s.
+- Keep `/dev/shm` out of `open_basedir` where scripts must not reach it.
+- Each creation maps the arena at a random address, so its pointers are not the same on every host; attachers use the
+  creator's. Pointers are not validated on read: that would cost every fetch.
 
 ## Several servers: Valkey as the cache of record
 

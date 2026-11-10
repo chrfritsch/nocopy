@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -76,12 +77,29 @@ static void *map_at(int fd, size_t size, uintptr_t base)
 	return p;
 }
 
-/* Far from PIE binaries, heaps, mmap bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
-static const uintptr_t bases[] = {(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x1000000000ULL,
+/* Where a creator puts the arena, at random (per-creation ASLR for the pointers in it): far from PIE binaries, heaps, mmap
+ * bases and Go's arenas (FrankenPHP); the second fits 39-bit address spaces. */
+static const struct {
+	uintptr_t lo, hi;
+} windows[] = {
 #ifdef __SANITIZE_ADDRESS__
-	(uintptr_t) 0x300000000000ULL, /* both above are ASan shadow on aarch64 */
+	{(uintptr_t) 0x300000000000ULL, (uintptr_t) 0x400000000000ULL}, /* below is ASan shadow on aarch64 */
+#else
+	{(uintptr_t) 0x200000000000ULL, (uintptr_t) 0x400000000000ULL},
 #endif
+	{(uintptr_t) 0x1000000000ULL, (uintptr_t) 0x4000000000ULL},
 };
+#define AR_BASE_ALIGN ((uintptr_t) 2 << 20)
+
+/* A random AR_BASE_ALIGN-aligned base in w with room for size, 0 if it has none. */
+static uintptr_t random_base(uintptr_t lo, uintptr_t hi, size_t size)
+{
+	uint64_t r;
+	if (hi - lo <= size || getentropy(&r, sizeof r) != 0) {
+		return 0;
+	}
+	return lo + (uintptr_t) (r % ((hi - lo - size) / AR_BASE_ALIGN)) * AR_BASE_ALIGN;
+}
 
 typedef enum { OPEN_OK, OPEN_RETRY, OPEN_FAIL } open_result;
 
@@ -116,8 +134,11 @@ static open_result create_new(const char *name, int fd, opening *o)
 	o->err = ftruncate(fd, (off_t) o->size) ? "ftruncate failed" : NULL;
 #endif
 	void *p = NULL;
-	for (size_t i = 0; !o->err && !p && i < sizeof bases / sizeof bases[0]; i++) {
-		p = map_at(fd, o->size, bases[i]);
+	for (size_t i = 0; !o->err && !p && i < sizeof windows / sizeof windows[0]; i++) {
+		for (int tries = 0; !p && tries < 8; tries++) { /* taken here: another try; beyond the address space: the next window */
+			uintptr_t b = random_base(windows[i].lo, windows[i].hi, o->size);
+			p = b ? map_at(fd, o->size, b) : NULL;
+		}
 	}
 	if (!p) {
 		o->err = o->err ? o->err : "no free address for it";

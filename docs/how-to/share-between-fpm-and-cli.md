@@ -37,8 +37,8 @@ php_admin_value[nocopy.shm_name] = /nocopy-shop
 
 ## 3. Load the same build
 
-The object's name includes a hash of the loaded `nocopy.so`. php-fpm and the CLI share only if they load the same file:
-point both at the same path, and restart php-fpm after replacing it.
+The object's name includes the build id of the loaded `nocopy.so`. php-fpm and the CLI share only if they load the same
+build: point both at the same path, and restart php-fpm after replacing it (until then it keeps the old build's cache).
 
 ## 4. Verify
 

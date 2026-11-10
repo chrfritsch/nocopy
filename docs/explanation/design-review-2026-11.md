@@ -17,10 +17,10 @@ Ranked by blast radius × likelihood in real deployments.
 | 1 | Liveness is a guess that fails toward "dead" | real flaw | segfaults and wrong values in every process | wrongly: "cannot share" | fail closed + refuse another PID namespace at attach (fixed instead by kernel locks, 2026-11-10) |
 | 2 | The pin cap is per request, not per arena | real flaw | hit ratio 100% -> 27% while 4 requests run long | half | a global cap; a stat (fixed: union budget + age, 2026-11-10) |
 | 3 | "No cache" is silent exactly where it matters | real flaw | `cache:clear` clears nothing and says `true` | partly | `nocopy_clear()` false; a health check; `stats()` field (done 2026-11-10, owner naming open) |
-| 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end |
+| 4 | The layout id is read from disk when the arena is opened | real flaw | one fpm pool split over two caches; 2x `shm_size` | no | hash once at load; collect on a timer or at request end (id fixed 2026-11-10; collect open) |
 | 5 | Valkey: a process that starts no new request never re-checks | real flaw for workers | stale reads without bound | "by design" for a request | re-check the heartbeat by age |
 | 6 | Valkey TTLs use the writer's wall clock | real flaw with skew | short TTLs never cached, or outliving their TTL | no | `PX` instead of `PXAT` |
-| 7 | A named file full of pointers at a fixed address | trade-off, under-documented | a file write as the pool's user is code execution in every worker | half | docs; a random base |
+| 7 | A named file full of pointers at a fixed address | trade-off, under-documented | a file write as the pool's user is code execution in every worker | half | docs; a random base (done 2026-11-10) |
 | 8 | A stopped lock holder is waited for forever | trade-off, undocumented | writers spin at 100% CPU | no | docs; a spin budget |
 | 9 | 1,024 worker slots, then every call throws | trade-off, undocumented | `Error: no free worker slot` | no | degrade to no cache; docs (done 2026-11-10) |
 | 10 | Fixed-at-creation settings are ignored silently on attach | trade-off, undocumented | a raised `shm_size` does nothing | no | a warning (done 2026-11-10) |
@@ -180,6 +180,9 @@ this is the common failure, not an exotic one.
 
 ### 4. The layout id is read from disk when the arena is opened
 
+**Fixed 2026-11-10** ([rebuild, item 4](rebuild-2026-11.md#4-identity-and-address-fixed-when-built-and-when-created)): the
+id is the loaded code's build id; test 099. Open: other builds' leftover objects are still removed only at open.
+
 **Premise attacked.** "The layout id hashes the loaded `nocopy.so`, so processes share only when they run the same code."
 
 **Evidence.** `layout_id()` opens the path `dladdr` reports and hashes the file that is there *now* (`nocopy.c:362-381`).
@@ -268,6 +271,9 @@ monotonic (`arena/shard.c:332`). Code that uses a TTL as a correctness bound (a 
 that servers need synchronized clocks for TTLs shorter than their skew.
 
 ### 7. A named file full of pointers, at a fixed address
+
+**Mitigated 2026-11-10**: a random base per creation, and a Security section in [Sharing](sharing.md#security-one-user-is-one-trust-domain).
+The trust boundary stays: any code of the pool's user can still rewrite the file.
 
 **Premise attacked.** Mode `0600` and the owner check make the arena as private as APCu's or OPcache's memory.
 

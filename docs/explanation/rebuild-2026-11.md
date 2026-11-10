@@ -70,6 +70,10 @@ a warning at attach. The all-or-nothing rule stays as it is: a private fallback 
 
 ### 4. Identity and address fixed when built and when created
 
+**Built 2026-11-10** ([design decisions](design-decisions.md#build)): the layout id is the linker's build id read from
+memory in MINIT (file hash only without one); a creator maps at a random 2 MB-aligned base. CLI start: median 6835 -> 6516 µs.
+Tests 099, `tests/c/repair.c`. Not done: removing other builds' leftover objects outside of open (finding 4's second part).
+
 - A build id compiled into the binary, not a hash of the file `dladdr` names when the arena is opened: that file can have
   been replaced since the code was loaded, and one fpm pool then runs two caches
   ([finding 4](design-review-2026-11.md#4-the-layout-id-is-read-from-disk-when-the-arena-is-opened)). It also returns the
