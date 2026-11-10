@@ -119,8 +119,20 @@ static void random_base(void)
 	assert(b[0] != b[1]);
 }
 
+/* A huge entries_hint is refused, not an endless loop (hint * 2 overflowed) or taken as 0. */
+static void huge_hint(void)
+{
+	ar_layout l;
+	uint64_t hints[] = {(uint64_t) 1 << 34, (uint64_t) 1 << 63, INT64_MAX, UINT64_MAX};
+	for (size_t i = 0; i < sizeof hints / sizeof hints[0]; i++) {
+		assert(ar_layout_plan(&l, 32 << 20, hints[i]).code == NOCOPY_ERR_TOO_SMALL);
+	}
+	assert(ar_layout_plan(&l, 32 << 20, 4096).code == NOCOPY_ERR_NONE);
+}
+
 int main(void)
 {
+	huge_hint();
 	random_base();
 	char base[32];
 	nocopy_named nm;

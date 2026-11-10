@@ -23,7 +23,7 @@ nocopy_err ar_layout_plan(ar_layout *l, size_t size, uint64_t hint)
 		nshards *= 2;
 	}
 	uint64_t per = 1024;
-	while (per * nshards < hint * 2 || per * nshards < size / 256) {
+	while (per <= ((uint64_t) 1 << 31) && (per * nshards / 2 < hint || per * nshards < size / 256)) { /* bounded: a huge hint fails below */
 		per <<= 1;
 	}
 	size_t maxsegs = size >> shift; /* an upper bound: the header takes some */
