@@ -47,11 +47,11 @@ static zend_string *atom_sight(const nocopy_atom_view *v, const zend_string *s, 
 
 /* A key, or a short string inside an array or object: stored once per value, not at all if it is an atom.
  * The value's table first: the shared one is probed once per distinct string. */
-static zend_always_inline void plan_str(plan *z, zend_string *s, zend_ulong h)
+static zend_always_inline void plan_str(plan *z, zend_string *s, zend_ulong h, nc_opk kind)
 {
 	nocopy_strslot *k = strtab_slot(&z->strs, h);
 	if (k->gen == z->strs.gen && k->h == h && zend_string_equals(k->s, s)) {
-		tape_push(z, k->ord << 1);
+		tape_push(z, OP(kind, k->ord << 1));
 		return;
 	}
 	strtab_put(&z->strs, k, s, h);
@@ -67,7 +67,7 @@ static zend_always_inline void plan_str(plan *z, zend_string *s, zend_ulong h)
 	}
 	k->ord = z->ns;
 	z->str[z->ns++] = a;
-	tape_push(z, k->ord << 1 | T_FIRST);
+	tape_push(z, OP(kind, k->ord << 1 | T_FIRST));
 	if (a) {
 		z->atoms = true;
 	} else {
@@ -79,9 +79,10 @@ static zend_always_inline void plan_str(plan *z, zend_string *s, zend_ulong h)
 static zend_always_inline void plan_vstr(plan *z, zend_string *s)
 {
 	if (ZSTR_LEN(s) > NC_VSTR_MAX) {
+		tape_push(z, OP_LSTR);
 		z->n += str_size(ZSTR_LEN(s));
 	} else {
-		plan_str(z, s, zend_string_hash_val(s));
+		plan_str(z, s, zend_string_hash_val(s), OP_STR);
 	}
 }
 
@@ -180,12 +181,12 @@ static plan_status plan_region(plan *z, zend_array *a, int depth);
 static plan_status plan_array(plan *z, zend_array *a, int depth)
 {
 	if (zend_hash_num_elements(a) == 0) {
+		tape_push(z, OP_EMPTY);
 		return PLAN_OK;
 	}
 	if (z->sh) {
 		if (z->sh->hc == z->sh->hend) {
 			if (unshareable(a)) { /* no region */
-				tape_push(z, 0);
 				goto plan;
 			}
 			return plan_region(z, a, depth);
@@ -195,9 +196,9 @@ static plan_status plan_array(plan *z, zend_array *a, int depth)
 			z->sh->hc += e->n - 1; /* its arrays: not planned */
 			return PLAN_OK;
 		}
-		tape_push(z, 0); /* written as a copy of its own */
 	}
 plan:
+	tape_push(z, OP(OP_ARR, a->nNumUsed & NC_OP_MAX));
 	z->n += SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
 	plan_status st;
 	if (HT_IS_PACKED(a)) {
@@ -211,7 +212,7 @@ plan:
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(a, b) {
 			if (b->key) {
-				plan_str(z, b->key, b->h);
+				plan_str(z, b->key, b->h, OP_KEY);
 			}
 			if ((st = plan_zval(z, &b->val, depth + 1)) != PLAN_OK) {
 				return st;
@@ -261,6 +262,7 @@ static plan_status plan_zval(plan *z, zval *v, int depth)
 			if (Z_REFCOUNT_P(v) > 1) {
 				OUT_OF_REGION(z, plan_ref(z, Z_REF_P(v), depth));
 			}
+			tape_push(z, OP_DEREF);
 			OUT_OF_REGION(z, plan_zval(z, Z_REFVAL_P(v), depth + 1));
 		case IS_STRING:
 			plan_vstr(z, Z_STR_P(v));
@@ -419,7 +421,7 @@ static __attribute__((noinline)) bool share_try(plan *z, zend_array *a, const hn
 			sh->arr = inl_grow(sh->arr, sh->arr_inl, sh->narr * sizeof *sh->arr, sh->acap * sizeof *sh->arr);
 		}
 		sh->arr[sh->narr] = s;
-		tape_push(z, sh->narr++ << 1 | T_SHARED);
+		tape_push(z, OP(OP_SHARED, sh->narr++));
 		z->atoms = true;
 		return true;
 	}
@@ -435,10 +437,10 @@ typedef struct {
 	const zend_array *src;
 } admit_arg;
 
-static void admit_fill(void *dst, void *arg)
+static bool admit_fill(void *dst, void *arg)
 {
 	const admit_arg *x = arg;
-	nc_write_array(x->z, x->src, dst);
+	return nc_write_array(x->z, x->src, dst);
 }
 
 /* After the commit, still in the view: each candidate the doorkeeper has seen before, written into the atoms. Listed outer
@@ -455,7 +457,6 @@ void nc_share_admit(nocopy_env *env, const plan *outer, const nocopy_atom_view *
 		nc_share ss;
 		graph_b g;
 		graph_b_off(&g);
-		strtab_reset(&env->strs);
 		plan z = {.env = env, .strs = env->strs, .g = &g, .av = av, .sh = nc_share_init(&ss), .tape = tape, .tcap = TAPE_INL,
 			.tape_inl = tape, .str = str, .scap = STR_INL, .str_inl = str};
 		zval v;
@@ -818,7 +819,7 @@ static __attribute__((noinline)) plan_status plan_object(plan *z, zend_object *o
 	}
 	bool added;
 	uint32_t i = pmap_add(&g->objs, o->handle, g->objs.n, &added)->v;
-	tape_push(z, i);
+	tape_push(z, OP(added ? OP_OBJ : OP_OBJ_REF, i));
 	if (!added) {
 		return PLAN_OK; /* met before: a back reference */
 	}
@@ -860,15 +861,15 @@ static __attribute__((noinline)) plan_status plan_ref(plan *z, zend_reference *r
 	bool added;
 	pslot *s = pmap_add(&g->refs, (uintptr_t) r, z->nt, &added);
 	if (added) {
-		tape_push(z, T_ONCE); /* until a second sighting makes it a node */
+		tape_push(z, OP_DEREF); /* until a second sighting makes it a node */
 		return plan_zval(z, &r->val, depth + 1);
 	}
 	if (!(s->v & REF_MULTI)) {
 		uint32_t idx = g->nref++;
-		z->tape[s->v] = idx << 1 | T_FIRST;
+		z->tape[s->v] = OP(OP_REF, idx);
 		s->v = REF_MULTI | idx;
 	}
-	tape_push(z, (s->v & ~REF_MULTI) << 1);
+	tape_push(z, OP(OP_REF_USE, s->v & ~REF_MULTI));
 	return PLAN_OK;
 }
 
@@ -876,6 +877,8 @@ static __attribute__((noinline)) plan_status plan_ref(plan *z, zend_reference *r
 
 plan_status nc_plan_walk(plan *z, zval *val)
 {
+	strtab_reset(&z->env->strs); /* here, not in the callers: whatever reaches the table starts with an empty one */
+	z->strs = z->env->strs;
 	plan_status st = plan_zval(z, val, 0);
 	z->sight = false; /* a later pass meets the same strings again */
 	for (int pass = 0; st == PLAN_OK && z->g->on && z->g->nrun < z->g->nres; pass++) {

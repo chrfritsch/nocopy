@@ -58,9 +58,6 @@ void nocopy_env_free(nocopy_env *env)
 static zend_always_inline nocopy_status encode(encoding *x, nocopy_env *env, zval *val, const nocopy_atom_view *av, uint32_t *tape, zend_string **str,
 	nc_share *ss)
 {
-	if (Z_TYPE_P(val) > IS_STRING) { /* a value of its own in the table (a reference too); scalars and strings alone bypass it */
-		strtab_reset(&env->strs);
-	}
 	graph_b_off(&x->g);
 	x->z = (plan) {.env = env, .strs = env->strs, .g = &x->g, .av = av, .sight = av != NULL, .sh = av ? nc_share_init(ss) : NULL,
 		.tape = tape, .tcap = TAPE_INL, .tape_inl = tape, .str = str, .scap = STR_INL, .str_inl = str};
@@ -122,9 +119,14 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 	nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
 	r = NOCOPY_NO_ROOM;
 	if (e) {
-		nc_write(&x, e);
-		nocopy_put_result c = nocopy_put_commit(&p, add_only);
-		r = c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+		if (EXPECTED(nc_write(&x, e))) {
+			nocopy_put_result c = nocopy_put_commit(&p, add_only);
+			r = c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+		} else {
+			nocopy_put_abort(&p);
+			php_error_docref(NULL, E_WARNING, "nocopy: the value changed between planning and writing; not stored");
+			r = NOCOPY_REFUSED;
+		}
 	}
 	if (x.z.sh && x.z.sh->ncand) {
 		nc_share_admit(env, &x.z, av); /* before the release: candidates may be a node's own data */

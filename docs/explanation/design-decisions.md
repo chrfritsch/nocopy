@@ -173,6 +173,16 @@ lowercase names are made while planning; before, `zend_string_tolower` ran under
 `./dev ab main 7`, copy / zero: store array 10 rows -1.9 / -2.2%, 1k rows -2.7 / -2.0%, 1k rows unserialized keys -2.3 / -3.2% (a tape
 entry per string); store object +10.8 / +8.7% and fetch object (zero) +5.5% (no map probes while writing); other stores and fetches within ±3%.
 
+**Planning decides, writing replays and checks (tagged ops).** Every decision the writer used to re-derive from the value (long string,
+empty array, reference held once, object first or again, array while sharing is off) is now a tagged op on the tape; the writer takes one
+op per non-scalar slot, checks it against the slot and the bytes left, and a failure (release builds too) aborts the put: store refused with
+a warning, never a corrupt or overrunning block. Rebase descends only through pointers that moved; `block_check` also runs after rebase in
+checked builds. Final `./dev ab HEAD 7 write`, copy / zero: array stores -0.8 to -2.6%, object -5.3 / -5.1%, scalar and lone-string stores
++6 to +10% (no writer struct for them), fetches within noise, block bytes unchanged (240,544). Rejected: a writer driven by indexed ops
+without a walk (arrays -2.6 to -5.9%, and it cannot notice a slot it was never told about); relocation data in blocks (bitmap +1.56%
+bytes per array block, u32 list +2.5 to 6%; would move array blocks 1.8 to 3x faster, left for later); hashing every string on write
+(string alone 100 B 31-37 -> 60 ns, 10 KB 222 -> 2,690 ns).
+
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
 round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:

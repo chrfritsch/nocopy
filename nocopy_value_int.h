@@ -257,10 +257,13 @@ static zend_always_inline void graph_b_release(graph_b *g)
  * A deduped string: its index in str << 1 | T_FIRST the first time. An object: its index.
  * A reference held by more than one zval: T_ONCE (the value holds it once: written as its value), else its index << 1 | T_FIRST. */
 #define T_FIRST 1u
-#define T_ONCE UINT32_MAX
+typedef enum { OP_KEY, OP_STR, OP_LSTR, OP_ARR, OP_EMPTY, OP_SHARED, OP_OBJ, OP_OBJ_REF, OP_DEREF, OP_REF, OP_REF_USE } nc_opk;
+#define NC_OP_MAX 0xFFFFFFFu /* 28 bits of payload */
+/* Only a long value string (or a string alone) may be unhashed in a block: such a string is never in the string table, and rebase zeroes exactly these. */
+static zend_always_inline bool nc_may_be_unhashed(const zend_string *s) { return ZSTR_LEN(s) > NC_VSTR_MAX; }
+#define OP(k, x) ((uint32_t) (k) | (uint32_t) (x) << 4)
 #define TAPE_INL 64
 #define STR_INL 32
-#define T_SHARED 1u /* an array's tape entry: index in nc_share.arr << 1 | T_SHARED, or 0: written as a copy of its own */
 
 #define HV_INL 16
 
@@ -349,8 +352,8 @@ typedef struct {
 } encoding;
 
 static zend_always_inline size_t encoding_size(const encoding *x, size_t klen) { return SALIGN(sizeof(nocopy_block)) + SALIGN(klen) + x->z.n; }
-void nc_write(encoding *x, nocopy_entry *e); /* fills e after its header and key: exactly encoding_size bytes */
-void nc_write_array(const plan *z, const zend_array *src, void *dst); /* a shared array at dst: exactly z->n bytes */
+bool nc_write(encoding *x, nocopy_entry *e); /* fills e after its header and key: exactly encoding_size bytes */
+bool nc_write_array(const plan *z, const zend_array *src, void *dst); /* a shared array at dst: exactly z->n bytes */
 
 
 /* ---- reading (nocopy_read.c) ---- */

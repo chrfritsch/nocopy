@@ -140,10 +140,14 @@ static bool rotate(void)
 	return true;
 }
 
-static void copy_fill(void *dst, void *arg) { memcpy(dst, ((const void **) arg)[0], (size_t) (uintptr_t) ((const void **) arg)[1]); }
+static bool copy_fill(void *dst, void *arg)
+{
+	memcpy(dst, ((const void **) arg)[0], (size_t) (uintptr_t) ((const void **) arg)[1]);
+	return true;
+}
 
 /* hlen bytes by fill, then the key: len's flag kept in the record, the bytes compared without it. */
-static void *add(const nocopy_atom_view *v, uint64_t h, uint32_t hlen, void (*fill)(void *, void *), void *arg, const char *s, uint32_t len)
+static void *add(const nocopy_atom_view *v, uint64_t h, uint32_t hlen, bool (*fill)(void *, void *), void *arg, const char *s, uint32_t len)
 {
 	if (__atomic_load_n(&A->tried, __ATOMIC_RELAXED) == nocopy_now() || !atom_lock()) {
 		return NULL; /* full and the other half still referenced this second, or another process admits */
@@ -179,7 +183,9 @@ static void *add(const nocopy_atom_view *v, uint64_t h, uint32_t hlen, void (*fi
 		char *rec = area + at;
 		((uint32_t *) rec)[0] = len;
 		((uint32_t *) rec)[1] = hlen;
-		fill(rec + 8, arg);
+		if (!fill(rec + 8, arg)) {
+			goto out; /* nothing published: used and the slot are untouched */
+		}
 		memcpy(rec + 8 + hlen, s, klen);
 		rec[8 + hlen + klen] = 0;
 		AR_HOOK("atom.bytes");
@@ -206,7 +212,7 @@ void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, ui
 	return add(v, h, hlen, copy_fill, arg, s, len);
 }
 
-void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size, void (*fill)(void *dst, void *arg), void *arg,
+void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size, bool (*fill)(void *dst, void *arg), void *arg,
 	const char *s, uint32_t len)
 {
 	return add(v, h, size, fill, arg, s, len | NOCOPY_ATOM_ARRAY);

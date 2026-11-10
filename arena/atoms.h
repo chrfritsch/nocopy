@@ -51,7 +51,7 @@ void ar_atoms_stat(ar_atoms_stats *s);
 void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, uint32_t hlen, const char *s, uint32_t len);
 /* An array as an atom of v's generation (never another: it may point at v's atoms): fill writes its size bytes at their final address,
  * the key (len | NOCOPY_ATOM_ARRAY) follows. Returns the blob, an equal key's if one is in, else NULL (full, busy, rotated). */
-void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size, void (*fill)(void *dst, void *arg), void *arg,
+void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size, bool (*fill)(void *dst, void *arg), void *arg,
 	const char *s, uint32_t len);
 
 #endif

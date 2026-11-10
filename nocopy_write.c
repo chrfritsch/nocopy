@@ -8,22 +8,51 @@
 #include "nocopy_value_int.h"
 #include "zend_enum.h"
 
+#ifdef __clang__ /* no __builtin_setjmp on every clang target */
+# include <setjmp.h>
+# define BAIL_SET(b) _setjmp(b)
+# define BAIL_GO(b) longjmp(b, 1)
+#else
+# define BAIL_SET(b) __builtin_setjmp(b)
+# define BAIL_GO(b) __builtin_longjmp(b, 1)
+#endif
+
 typedef struct {
 	char *cursor;        /* next free byte of the block */
+	char *end;
 	const uint32_t *tape;
-	uint32_t ti;
+	uint32_t ti, nt, ns, narr;
 	zend_string **str;   /* the plan's: a deduped string's atom, or its copy once written */
 	graph_b *g;
 	nc_graph *graph;
-	zend_array *const *arr; /* the plan's shared arrays; NULL: no array has a tape entry */
+	zend_array *const *arr; /* the plan's shared arrays */
 	bool obj;            /* an object or shared reference met since the innermost array began */
+#ifdef __clang__
+	jmp_buf bail;
+#else
+	void *bail[5];
+#endif
 } writer;
+
+/* The tape and the block disagree: leaves the write; the caller aborts the put. */
+static __attribute__((noinline, noreturn, cold)) void bad(writer *w)
+{
+	BAIL_GO(w->bail);
+}
+#define NEED(w, c) do { if (UNEXPECTED(!(c))) { bad(w); } } while (0)
 
 static zend_always_inline void *take(writer *w, size_t n)
 {
 	void *r = w->cursor;
+	NEED(w, (size_t) (w->end - w->cursor) >= SALIGN(n));
 	w->cursor += SALIGN(n);
 	return r;
+}
+
+static zend_always_inline uint32_t op_next(writer *w)
+{
+	NEED(w, w->ti < w->nt);
+	return w->tape[w->ti++];
 }
 
 /* ---- strings ---- */
@@ -40,9 +69,9 @@ static zend_string *write_copy(writer *w, const zend_string *s)
 }
 
 /* A deduped string: its first occurrence written (or its atom), later ones share it. */
-static zend_always_inline zend_string *write_str(writer *w, const zend_string *s, bool value)
+static zend_always_inline zend_string *write_str(writer *w, const zend_string *s, uint32_t t, bool value)
 {
-	uint32_t t = w->tape[w->ti++];
+	NEED(w, t >> 1 < w->ns);
 	zend_string **slot = &w->str[t >> 1];
 	if (t & T_FIRST) {
 		if (!*slot) {
@@ -51,15 +80,14 @@ static zend_always_inline zend_string *write_str(writer *w, const zend_string *s
 		return *slot;
 	}
 	zend_string *r = *slot;
+	NEED(w, r);
+#if NC_CHECKS
+	NC_ASSERT(zend_string_equals(r, s)); /* an op that fits the slot's type but belongs to another slot */
+#endif
 	if (value && ZSTR_LEN(r) > 1 && !nocopy_atom_bits(r)) {
 		GC_SET_REFCOUNT(r, 3); /* a value used more than once in the block: copy-out shares one copy (shorter: PHP's interned; atoms have it) */
 	}
 	return r;
-}
-
-static zend_always_inline zend_string *write_vstr(writer *w, const zend_string *s)
-{
-	return ZSTR_LEN(s) > NC_VSTR_MAX ? write_copy(w, s) : write_str(w, s, true);
 }
 
 /* ---- plain values ---- */
@@ -95,9 +123,6 @@ static void write_zval(writer *w, zval *z);
 
 static zend_array *write_array(writer *w, const zend_array *src)
 {
-	if (zend_hash_num_elements(src) == 0) {
-		return ARENA_EMPTY;
-	}
 	zend_array *ht = take(w, sizeof(zend_array));
 	memcpy(ht, src, sizeof(zend_array));
 	ht->pDestructor = NULL; /* a function address: differs between processes; immutable arrays are never destroyed */
@@ -123,7 +148,9 @@ static zend_array *write_array(writer *w, const zend_array *src)
 		Bucket *b;
 		ZEND_HASH_MAP_FOREACH_BUCKET(ht, b) {
 			if (b->key) {
-				b->key = write_str(w, b->key, false);
+				uint32_t t = op_next(w);
+				NEED(w, (t & 15) == OP_KEY);
+				b->key = write_str(w, b->key, t >> 4, false);
 			} else if ((zend_long) b->h > max) {
 				max = (zend_long) b->h;
 			}
@@ -175,18 +202,16 @@ static void write_node(writer *w, const gnode *gn, zend_object *o, nc_obj *n, ze
 		case K_NONE:
 			break;
 	}
-	ZEND_UNREACHABLE();
+	bad(w);
 }
 
-/* *z becomes NC_OREF; the object's node is written the first time. */
-static __attribute__((noinline)) void write_object(writer *w, zval *z)
+/* *z becomes NC_OREF; first: its node is written. */
+static __attribute__((noinline)) void write_object(writer *w, zval *z, uint32_t i, bool first)
 {
-	NC_ASSERT(w->graph); /* an object makes the value a graph */
+	NEED(w, w->graph && i < w->g->nn);
 	zend_object *o = Z_OBJ_P(z);
-	uint32_t i = w->tape[w->ti++];
 	gnode *gn = &w->g->nodes[i];
-	if (!gn->done) {
-		gn->done = true;
+	if (first) {
 		zend_array *dyn = node_dyn(gn, o);
 		nc_obj *n = take(w, obj_size(kind_nprops(o->ce, (nc_kind) (gn->ck & K_MASK)) + (dyn != NULL)));
 		graph_off(w->graph)[i] = (uint32_t) ((char *) n - (char *) w->graph);
@@ -199,16 +224,11 @@ static __attribute__((noinline)) void write_object(writer *w, zval *z)
 	w->obj = true;
 }
 
-/* *z becomes NC_RREF; false: the value holds it once, so it is written as its value. */
-static __attribute__((noinline)) bool write_ref(writer *w, zval *z)
+/* *z becomes NC_RREF; first: its value is written into the graph's refs. */
+static __attribute__((noinline)) void write_ref(writer *w, zval *z, uint32_t i, bool first)
 {
-	uint32_t t = w->tape[w->ti++];
-	if (t == T_ONCE) {
-		return false;
-	}
-	NC_ASSERT(w->graph); /* without a graph nref is 0: every reference was planned T_ONCE */
-	uint32_t i = t >> 1;
-	if (t & T_FIRST) {
+	NEED(w, w->graph && i < w->g->nref);
+	if (first) {
 		zval *rv = &graph_refs(w->graph)[i];
 		ZVAL_COPY_VALUE(rv, Z_REFVAL_P(z));
 		bool outer = w->obj;
@@ -218,33 +238,38 @@ static __attribute__((noinline)) bool write_ref(writer *w, zval *z)
 	Z_TYPE_INFO_P(z) = NC_RREF;
 	Z_LVAL_P(z) = i;
 	w->obj = true;
-	return true;
 }
 
-/* Rewrites *z in place so everything it points to lives in the block. */
+/* Rewrites *z in place so everything it points to lives in the block: one op per value that is no scalar, checked against it. */
 static void write_zval(writer *w, zval *z)
 {
-	switch (Z_TYPE_P(z)) {
-		case IS_REFERENCE:
-			if (Z_REFCOUNT_P(z) > 1 && write_ref(w, z)) {
-				break;
-			}
-			ZVAL_COPY_VALUE(z, Z_REFVAL_P(z));
-			write_zval(w, z);
-			break;
-		case IS_STRING:
-			Z_STR_P(z) = write_vstr(w, Z_STR_P(z));
+	if (Z_TYPE_P(z) < IS_STRING) {
+		return;
+	}
+	uint32_t t = op_next(w), x = t >> 4;
+	switch ((nc_opk) (t & 15)) {
+		case OP_STR:
+			NEED(w, Z_TYPE_P(z) == IS_STRING);
+			Z_STR_P(z) = write_str(w, Z_STR_P(z), x, true);
 			Z_TYPE_FLAGS_P(z) = 0;
-			break;
-		case IS_ARRAY: {
-			if (UNEXPECTED(w->arr) && zend_hash_num_elements(Z_ARR_P(z))) {
-				uint32_t t = w->tape[w->ti++];
-				if (t & T_SHARED) {
-					Z_ARR_P(z) = w->arr[t >> 1];
-					Z_TYPE_FLAGS_P(z) = 0;
-					break;
-				}
-			}
+			return;
+		case OP_LSTR:
+			NEED(w, Z_TYPE_P(z) == IS_STRING);
+			Z_STR_P(z) = write_copy(w, Z_STR_P(z));
+			Z_TYPE_FLAGS_P(z) = 0;
+			return;
+		case OP_EMPTY:
+			NEED(w, Z_TYPE_P(z) == IS_ARRAY);
+			Z_ARR_P(z) = ARENA_EMPTY;
+			Z_TYPE_FLAGS_P(z) = 0;
+			return;
+		case OP_SHARED:
+			NEED(w, Z_TYPE_P(z) == IS_ARRAY && x < w->narr);
+			Z_ARR_P(z) = w->arr[x];
+			Z_TYPE_FLAGS_P(z) = 0;
+			return;
+		case OP_ARR: {
+			NEED(w, Z_TYPE_P(z) == IS_ARRAY && (Z_ARRVAL_P(z)->nNumUsed & NC_OP_MAX) == x);
 			bool outer = w->obj;
 			w->obj = false;
 			Z_ARR_P(z) = write_array(w, Z_ARR_P(z));
@@ -253,14 +278,25 @@ static void write_zval(writer *w, zval *z)
 				Z_TYPE_INFO_P(z) = NC_SPINE;
 			}
 			w->obj |= outer;
-			break;
+			return;
 		}
-		case IS_OBJECT:
-			write_object(w, z);
-			break;
-		default: /* scalars: planning refused everything else */
+		case OP_OBJ: case OP_OBJ_REF:
+			NEED(w, Z_TYPE_P(z) == IS_OBJECT);
+			write_object(w, z, x, (t & 15) == OP_OBJ);
+			return;
+		case OP_DEREF:
+			NEED(w, Z_TYPE_P(z) == IS_REFERENCE);
+			ZVAL_COPY_VALUE(z, Z_REFVAL_P(z));
+			write_zval(w, z);
+			return;
+		case OP_REF: case OP_REF_USE:
+			NEED(w, Z_TYPE_P(z) == IS_REFERENCE);
+			write_ref(w, z, x, (t & 15) == OP_REF);
+			return;
+		case OP_KEY:
 			break;
 	}
+	bad(w);
 }
 
 static __attribute__((noinline)) nc_graph *write_graph(writer *w, zval *val)
@@ -315,7 +351,7 @@ static void check_zval(void *ctx, zval *z)
 		case IS_STRING:
 			NC_ASSERT(!Z_TYPE_FLAGS_P(z));
 			check_str(c, Z_STR_P(z));
-			NC_ASSERT(ZSTR_LEN(Z_STR_P(z)) > NC_VSTR_MAX || z == block_val((nocopy_entry *) c->e) || ZSTR_H(Z_STR_P(z)));
+			NC_ASSERT(nc_may_be_unhashed(Z_STR_P(z)) || z == block_val((nocopy_entry *) c->e) || ZSTR_H(Z_STR_P(z)));
 			break;
 		case NC_SPINE:
 		case IS_ARRAY: {
@@ -382,36 +418,76 @@ static void block_check(nocopy_entry *e)
 }
 #endif
 
-void nc_write(encoding *x, nocopy_entry *e)
+/* Arrays, objects, references: the tape's ops, each checked; false: the tape and the value disagree. Out of line: the bail-out's setup stays off the scalar path. */
+static __attribute__((noinline)) bool write_tape(writer *w, encoding *x, zval *v)
 {
-	writer w = {.cursor = (char *) e + SALIGN(sizeof(nocopy_block)), .tape = x->z.tape, .str = x->z.str, .g = &x->g,
-		.arr = x->z.sh ? x->z.sh->arr : NULL};
-	take(&w, nocopy_entry_klen(e)); /* the key's bytes: nocopy_put_begin copied them */
-	zval *v = block_val(e);
+	if (BAIL_SET(w->bail)) {
+		return false;
+	}
+#if NC_CHECKS
+	if (w->nt && getenv("NOCOPY_FAULT_TAPE")) {
+		w->nt--; /* test 103: the tape one op short */
+	}
+#endif
 	if (x->fmt == NOCOPY_FMT_GRAPH) {
-		ZVAL_PTR(v, write_graph(&w, x->val));
-	} else if (Z_TYPE_P(x->val) == IS_STRING) { /* alone: not through the table, as planned */
-		ZVAL_STR(v, write_copy(&w, Z_STR_P(x->val)));
-		Z_TYPE_FLAGS_P(v) = 0;
+		ZVAL_PTR(v, write_graph(w, x->val));
 	} else {
 		ZVAL_COPY_VALUE(v, x->val);
-		write_zval(&w, v);
+		write_zval(w, v);
 	}
-	NC_ASSERT(w.cursor == (char *) e + nocopy_entry_size(e) && w.ti == x->z.nt); /* written == planned, the tape consumed */
+	NEED(w, w->cursor == w->end && w->ti == w->nt); /* written == planned, the tape consumed */
+	return true;
+}
+
+bool nc_write(encoding *x, nocopy_entry *e)
+{
+	char *p = (char *) e + SALIGN(sizeof(nocopy_block)) + SALIGN(nocopy_entry_klen(e)), *end = (char *) e + nocopy_entry_size(e); /* the key's bytes: nocopy_put_begin copied them */
+	zval *v = block_val(e);
+	if (x->fmt != NOCOPY_FMT_GRAPH && Z_TYPE_P(x->val) <= IS_STRING) { /* no tape: a scalar, or a string alone (not through the table, as planned) */
+		if (Z_TYPE_P(x->val) == IS_STRING) {
+			const zend_string *s = Z_STR_P(x->val);
+			size_t size = _ZSTR_STRUCT_SIZE(ZSTR_LEN(s));
+			if (UNEXPECTED((size_t) (end - p) != SALIGN(size))) {
+				return false;
+			}
+			zend_string *r = (zend_string *) p;
+			memcpy(r, s, size);
+			GC_SET_REFCOUNT(r, 2);
+			GC_TYPE_INFO(r) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+			ZVAL_STR(v, r);
+			Z_TYPE_FLAGS_P(v) = 0;
+		} else {
+			if (UNEXPECTED(p != end)) {
+				return false;
+			}
+			ZVAL_COPY_VALUE(v, x->val);
+		}
+	} else {
+		writer w = {.cursor = p, .end = end, .tape = x->z.tape, .nt = x->z.nt, .ns = x->z.ns, .narr = x->z.sh ? x->z.sh->narr : 0,
+			.str = x->z.str, .g = &x->g, .arr = x->z.sh ? x->z.sh->arr : NULL};
+		if (UNEXPECTED(!write_tape(&w, x, v))) {
+			return false;
+		}
+	}
 #if NC_CHECKS
 	block_check(e);
 #endif
+	return true;
 }
 
-void nc_write_array(const plan *z, const zend_array *src, void *dst)
+bool nc_write_array(const plan *z, const zend_array *src, void *dst)
 {
-	writer w = {.cursor = dst, .tape = z->tape, .str = z->str, .arr = z->sh->arr};
+	writer w = {.cursor = dst, .end = (char *) dst + z->n, .tape = z->tape, .nt = z->nt, .ns = z->ns, .narr = z->sh->narr, .str = z->str, .arr = z->sh->arr};
+	if (BAIL_SET(w.bail)) {
+		return false;
+	}
 	zval v;
 	ZVAL_ARR(&v, (zend_array *) src);
 	write_zval(&w, &v); /* its own tape entry first: a copy */
 	zend_array *a = Z_ARR(v);
 	NC_ASSERT((void *) a == dst && w.cursor == (char *) dst + z->n && w.ti == z->nt);
 	(void) a;
+	return true;
 }
 
 /* ---- moving: merge byte-copied a block, its pointers still aim into the old one ---- */
@@ -441,7 +517,7 @@ static void rebase_zval(void *ctx, zval *z)
 			zend_string *s = moved(r, Z_STR_P(z));
 			if (s != Z_STR_P(z)) {
 				Z_STR_P(z) = s;
-				if (ZSTR_LEN(s) > NC_VSTR_MAX) { /* shorter ones were hashed before writing: no reader writes theirs, and keys may share them */
+				if (nc_may_be_unhashed(s)) { /* shorter ones were hashed before writing: no reader writes theirs, and keys may share them */
 					ZSTR_H(s) = 0; /* readers may have been hashing the old copy while it was copied: rehash on use */
 				}
 			}
@@ -449,10 +525,11 @@ static void rebase_zval(void *ctx, zval *z)
 		}
 		case NC_SPINE:
 		case IS_ARRAY: {
-			zend_array *a = Z_ARR_P(z) = moved(r, Z_ARR_P(z));
-			if (a == ARENA_EMPTY || nocopy_atom_bits(a)) {
-				break; /* a shared array: noted by moved, never written */
+			zend_array *a = moved(r, Z_ARR_P(z));
+			if (a == Z_ARR_P(z)) {
+				break; /* did not move (the empty array, a shared one): its atoms are noted, nothing of it is ours */
 			}
+			Z_ARR_P(z) = a;
 			a->arData = moved(r, a->arData);
 			if (HT_IS_PACKED(a)) {
 				zval *v;
@@ -496,5 +573,8 @@ uint8_t nocopy_value_rebase(nocopy_entry *e, const nocopy_entry *from)
 			ZSTR_H(Z_STR_P(v)) = 0; /* a string alone was stored as it came, maybe unhashed, at any length */
 		}
 	}
+#if NC_CHECKS
+	block_check(e);
+#endif
 	return r.atoms;
 }
