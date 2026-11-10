@@ -176,6 +176,7 @@ static bool relocate(nocopy_entry *old, uint8_t hot, void *arg)
 	if (!n) {
 		return false;
 	}
+	AR_HOOK("move.alloc");
 	memcpy(n + 1, old + 1, old->size - sizeof *old);
 	n->h = old->h;
 	n->expires = old->expires;
@@ -187,10 +188,12 @@ static bool relocate(nocopy_entry *old, uint8_t hot, void *arg)
 	n->user = old->user;
 	n->hot = hot;
 	ar_seg_deps_or(ar_seg_of(n), rebase(n, old));
+	AR_HOOK("move.copied");
 	ar_slot *sp = ar_index_find(ix_of(sh), slot_for(old));
 	if (sp) {
 		birth(sh, n);
 		ar_index_put(ix_of(sh), sp, slot_for(n));
+		AR_HOOK("move.linked");
 	} else {
 		ar_log_abort(&sh->log, n);
 	}
@@ -246,11 +249,13 @@ static __attribute__((cold, noinline)) bool rebalance(ar_shard *sh)
 		return false;
 	}
 	shard_unlock(sh);
+	AR_HOOK("rebalance.unlocked");
 	shard_lock(big);
 	ar_log_reclaim(&big->log);
 	if (big->log.nown > fair_segs && merge(big, false)) {
 		ar_log_reclaim(&big->log);
 	}
+	AR_HOOK("rebalance.merged");
 	shard_unlock(big);
 	shard_lock(sh);
 	return true;
@@ -326,10 +331,13 @@ static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 	}
 	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + (1u << NOCOPY_SEQ_SHARD_BITS); /* keeps the shard bits */
 	birth(sh, e);
+	AR_HOOK("commit.born");
 	ar_index_put(ix_of(sh), sp, slot_for(e));
+	AR_HOOK("commit.linked");
 	if (old) {
 		die(sh, old);
 	}
+	AR_HOOK("commit.done");
 	if (sh->log.hint) {
 		ar_log_reclaim(&sh->log);
 	}
@@ -351,6 +359,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 		shard_unlock(sh);
 		return NULL;
 	}
+	AR_HOOK("put.alloc");
 	e->h = q->h;
 	e->klen = q->klen;
 	e->koff = q->koff;
@@ -365,9 +374,11 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 	*p = (nocopy_put) {.c = c, .sh = sh, .e = e, .locked = q->size <= NOCOPY_INLINE_PUT};
 	if (!p->locked) {
 		wip_set(c->pins.slot, e);
+		AR_HOOK("put.wip");
 		shard_unlock(sh);
 	}
 	memcpy((char *) e + q->koff, q->key, q->klen);
+	AR_HOOK("put.fill");
 	return e;
 }
 
@@ -375,11 +386,13 @@ nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 {
 	if (!p->locked) {
 		shard_lock(p->sh);
+		AR_HOOK("commit.relocked");
 	}
 	nocopy_put_result r = commit(p->sh, p->e, add_only);
 	if (!p->locked) {
 		wip_set(p->c->pins.slot, NULL);
 	}
+	AR_HOOK("commit.unwip");
 	shard_unlock(p->sh);
 	return r;
 }
@@ -403,7 +416,9 @@ bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 	bool found = old && !nocopy_expired(old);
 	if (old) {
 		ar_index_remove(ix_of(sh), sp);
+		AR_HOOK("delete.unlinked");
 		die(sh, old);
+		AR_HOOK("delete.died");
 		if (sh->log.hint) {
 			ar_log_reclaim(&sh->log);
 		}
@@ -439,12 +454,14 @@ void nocopy_clear(void)
 		ar_index_clear(&ar_ix[i], cleared, &ar_shards[i]);
 	}
 	ar_policy_count_expunge();
+	AR_HOOK("clear.emptied");
 	for (uint32_t i = 0; i < nshards; i++) {
 		ar_shard *sh = &ar_shards[i];
 		wip_reap(sh);
 		ar_log_seal_all(&sh->log); /* so they die and go back to the pool (with their deps) */
 		ar_log_reclaim(&sh->log);
 		shard_unlock(sh);
+		AR_HOOK("clear.unlocked");
 	}
 }
 

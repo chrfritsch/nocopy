@@ -13,6 +13,14 @@
 /* Process-local state the read path loads: hidden, so no GOT load. */
 #define AR_HIDDEN __attribute__((visibility("hidden")))
 
+/* Test hooks (tests/c, -DNOCOPY_HOOKS): ar_hook runs at a named step of a write, where a test dies or runs another worker's step. */
+#ifdef NOCOPY_HOOKS
+extern void (*ar_hook)(const char *point);
+# define AR_HOOK(point) do { if (ar_hook) { ar_hook(point); } } while (0)
+#else
+# define AR_HOOK(point) ((void) 0)
+#endif
+
 #define NOCOPY_MAX_WORKERS 1024 /* ponytail: more live processes/threads than this cannot claim a slot */
 #define NOCOPY_MAX_SEGS 8192
 #define NOCOPY_SEG_WORDS (NOCOPY_MAX_SEGS / 64)

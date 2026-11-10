@@ -101,7 +101,7 @@ static bool viewed(uint32_t old)
 		if (ar_worker_live(i)) {
 			return true;
 		}
-		__atomic_store_n(agen_of((int) i), 0, __ATOMIC_RELAXED); /* died mid-write */
+		AR_HOOK("view.dead"); /* died mid-write: ignored, not cleared (the slot may have a new owner by now, who resets it) */
 	}
 	return false;
 }
@@ -119,16 +119,21 @@ static bool rotate(void)
 	ar_atom_half *o = half_of(old);
 	__atomic_store_n(&o->state, old | NOCOPY_ATOM_WIPING, __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	AR_HOOK("rotate.marked");
 	if (viewed(old) || segments_use((uint8_t) (1u << (old & 1)))) {
 		__atomic_store_n(&o->state, old, __ATOMIC_RELEASE);
 		__atomic_store_n(&A->tried, now, __ATOMIC_RELAXED);
 		return false;
 	}
+	AR_HOOK("rotate.unused");
 	memset(tab_of(old), 0, (size_t) A->slots * sizeof(ar_slot));
+	AR_HOOK("rotate.wiped");
 	__atomic_store_n(&o->used, 8, __ATOMIC_RELAXED);
 	__atomic_store_n(&o->n, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&o->state, g + 1, __ATOMIC_RELEASE);
+	AR_HOOK("rotate.state");
 	__atomic_store_n(&A->gen, g + 1, __ATOMIC_RELEASE);
+	AR_HOOK("rotate.gen");
 	__atomic_add_fetch(&A->rotations, 1, __ATOMIC_RELAXED);
 	return true;
 }
@@ -167,8 +172,10 @@ void *nocopy_atom_add(const nocopy_atom_view *v, uint64_t h, const void *hdr, ui
 		memcpy(rec + 8, hdr, hlen);
 		memcpy(rec + 8 + hlen, s, len);
 		rec[8 + hlen + len] = 0;
+		AR_HOOK("atom.bytes");
 		__atomic_store_n(&hf->used, at + need, __ATOMIC_RELAXED); /* relaxed: stats read them racily */
 		__atomic_store_n(&hf->n, hf->n + 1, __ATOMIC_RELAXED);
+		AR_HOOK("atom.used");
 		__atomic_store_n(&t[i], ar_slot_make(tag, at >> 3), __ATOMIC_RELEASE);
 		blob = rec + 8;
 		break;

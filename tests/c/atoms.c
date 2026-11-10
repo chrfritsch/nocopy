@@ -138,7 +138,7 @@ int main(void)
 	assert(nocopy_claim(&d));
 	ar_worker_at((uint32_t) nocopy_ctx_slot(&d))->agen = 3;
 	ar_worker_at((uint32_t) nocopy_ctx_slot(&d))->owner = dead_owner();
-	assert(fill() && AT->gen == 5 && ar_worker_at((uint32_t) nocopy_ctx_slot(&d))->agen == 0);
+	assert(fill() && AT->gen == 5 /* the dead worker's announcement is ignored, not written: its slot's next owner resets it (crash.c) */);
 
 	/* a live view of generation 5 does: until it ends */
 	nocopy_atom_view held;

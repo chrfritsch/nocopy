@@ -49,7 +49,7 @@ void ar_pool_give(uint32_t s, uint32_t k);
 bool ar_pool_any_deps(uint8_t bits);
 
 /* After `dead` (segments their tenant found unused) was collected: those some live worker pins go into held (cleared first).
- * A worker found dead has its pins cleared. Issues the fence that orders the collection before the pin reads. */
+ * A worker found dead has its pins ignored (its slot's next owner clears them). Issues the fence that orders the collection before the pin reads. */
 void ar_pool_pinned(const uint64_t *dead, uint64_t *held, time_t now);
 void ar_pool_ask_unpin(void); /* readers drop their idle pins at their next call end */
 uint32_t ar_pool_pinned_count(void);

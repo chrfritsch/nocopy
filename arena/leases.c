@@ -44,6 +44,7 @@ int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
 			r = NOCOPY_LEASE_HELD;
 		} else if (l || free) {
 			*(l ? l : free) = (ar_lease) {.h = h, .owner = ar_self, .until = now + ttl, .slot = slot};
+			AR_HOOK("lease.taken");
 		} else {
 			r = NOCOPY_LEASE_FULL;
 		}

@@ -75,6 +75,7 @@ uint32_t ar_pool_take(uint8_t tenant, uint32_t k, uint32_t from, uint32_t keep_f
 		}
 		uint32_t got = s + 1 - k, j = got;
 		while (j <= s && claim(tenant, j)) {
+			AR_HOOK("pool.claimed");
 			j++;
 		}
 		if (j <= s) { /* another tenant took j first */
@@ -98,6 +99,7 @@ void ar_pool_give(uint32_t s, uint32_t k)
 	for (uint32_t j = s; j < s + k; j++) {
 		ar_segmeta_at[j] = (ar_segmeta) {.gen = ar_segmeta_at[j].gen + 1};
 		unclaim(j);
+		AR_HOOK("pool.given");
 	}
 }
 
@@ -142,8 +144,8 @@ void ar_pool_pinned(const uint64_t *dead, uint64_t *held, time_t now)
 			continue;
 		}
 		if (ar_worker_dead(i, now)) {
-			ar_pins_clear((int) i); /* died holding pins */
-			continue;
+			AR_HOOK("pins.dead");
+			continue; /* died holding pins: not cleared, the slot may have a new owner by now (it clears them when it claims) */
 		}
 		for (uint32_t w = 0; w < nwords; w++) {
 			held[w] |= b[w];

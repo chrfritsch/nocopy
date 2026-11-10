@@ -222,6 +222,7 @@ static void evict_rest(const ar_merge *m, const uint32_t *v, uint32_t nv)
 				*ghost_cell(m->ghosts, e->h) = ghost_tag(e->h);
 			}
 			m->unlink(e, m->arg);
+			AR_HOOK("merge.evicted");
 		}
 	}
 }
@@ -245,7 +246,9 @@ bool ar_policy_merge(const ar_merge *m, bool evict_only)
 		}
 		budget = nv > 2 ? ar_seg_size : 0; /* survivors fill at most one segment: frees at least one */
 	}
+	AR_HOOK("merge.picked");
 	move_survivors(m, v, nv, budget, lossy);
+	AR_HOOK("merge.moved");
 	evict_rest(m, v, nv);
 	return true;
 }

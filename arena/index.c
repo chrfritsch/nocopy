@@ -29,8 +29,10 @@ void ar_index_remove(ar_index *ix, ar_slot *at)
 				shifting = true;
 				__atomic_store_n(mseq, *mseq + 1, __ATOMIC_RELAXED);
 				__atomic_thread_fence(__ATOMIC_RELEASE);
+				AR_HOOK("shift.odd");
 			}
 			__atomic_store_n(&t[i], s, __ATOMIC_RELEASE);
+			AR_HOOK("shift.moved");
 			i = j;
 		}
 	}

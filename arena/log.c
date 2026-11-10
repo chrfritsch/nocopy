@@ -36,10 +36,12 @@ static uint32_t take(ar_log *lg, uint32_t k, bool reserve, uint8_t state, uint64
 	if (got == AR_NONE) {
 		return AR_NONE;
 	}
+	AR_HOOK("take.claimed");
 	for (uint32_t j = got; j < got + k; j++) {
 		ar_segs_add(lg->own, j);
 	}
 	__atomic_store_n(&lg->nown, lg->nown + k, __ATOMIC_RELAXED);
+	AR_HOOK("take.owned");
 	for (uint32_t j = got + 1; j < got + k; j++) {
 		ar_seg_set(j, SEG_CONT);
 	}
@@ -61,7 +63,9 @@ __attribute__((noinline)) nocopy_entry *ar_log_alloc_new(ar_log *lg, size_t tota
 	if (got == AR_NONE) {
 		return NULL;
 	}
+	AR_HOOK("seg.taken");
 	ar_log_seal(lg, bucket);
+	AR_HOOK("seg.sealed");
 	ar_segs[got].bucket = (uint8_t) bucket;
 	lg->cur[bucket] = (int32_t) got;
 	return ar_log_carve(got, total, exp);
@@ -91,6 +95,7 @@ static void give(ar_log *lg, uint32_t s, uint32_t k)
 		ar_segs[j] = (ar_seg) {0}; /* SEG_FREE */
 		ar_segs_del(lg->own, j);
 		__atomic_store_n(&lg->nown, lg->nown - 1, __ATOMIC_RELAXED);
+		AR_HOOK("give.zeroed");
 	}
 	ar_pool_give(s, k);
 }
@@ -118,6 +123,7 @@ void ar_log_reclaim(ar_log *lg)
 			blocked = true;
 		} else {
 			give(lg, s, ar_segs[s].run);
+			AR_HOOK("reclaim.gave");
 			lg->ndead--;
 		}
 	}
@@ -152,6 +158,7 @@ bool ar_log_expire_step(ar_log *lg, time_t now, int budget, void (*unlink)(nocop
 				lg->exp_off += e->size;
 				if (e->live) {
 					unlink(e, arg);
+					AR_HOOK("expire.unlinked");
 					lg->expired++;
 					did = true;
 				}

@@ -15,8 +15,12 @@
 
 uint64_t ar_self;
 ar_procs *ar_proc;
+#ifdef NOCOPY_HOOKS
+void (*ar_hook)(const char *point);
+#endif
 
 static time_t checked[NOCOPY_MAX_WORKERS]; /* last owner lookup per slot (ar_worker_dead) */
+static uint64_t gone[NOCOPY_MAX_WORKERS];  /* the owner that lookup found dead: an owner id never comes back */
 
 /* ---- owner ids ---- */
 
@@ -145,8 +149,18 @@ void ar_worker_release(int slot) { __atomic_store_n(&ar_proc->w[slot].owner, 0, 
 
 bool ar_worker_dead(uint32_t i, time_t now)
 {
-	uint64_t o = __atomic_load_n(&ar_proc->w[i].owner, __ATOMIC_RELAXED);
-	return o && o != ar_self && __atomic_exchange_n(&checked[i], now, __ATOMIC_RELAXED) != now && ar_owner_dead(o);
+	uint64_t o = __atomic_load_n(&ar_proc->w[i].owner, __ATOMIC_SEQ_CST); /* after the caller read the slot's state: a new owner's is never taken for the dead one's */
+	if (!o || o == ar_self) {
+		return false;
+	}
+	if (__atomic_load_n(&gone[i], __ATOMIC_RELAXED) == o) {
+		return true;
+	}
+	if (__atomic_exchange_n(&checked[i], now, __ATOMIC_RELAXED) == now || !ar_owner_dead(o)) {
+		return false;
+	}
+	__atomic_store_n(&gone[i], o, __ATOMIC_RELAXED);
+	return true;
 }
 
 bool ar_worker_live(uint32_t i)

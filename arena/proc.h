@@ -64,7 +64,8 @@ int ar_worker_claim(void);
 void ar_worker_release(int slot);
 static inline uint32_t ar_worker_high(void) { return __atomic_load_n(&ar_proc->nworkers, __ATOMIC_ACQUIRE); }
 static inline ar_worker *ar_worker_at(uint32_t slot) { return &ar_proc->w[slot]; }
-/* Slot i is held by a process that died. Looked up at most once a second per slot; false meanwhile, and for our own process. */
+/* Slot i is held by a process that died. Looked up at most once a second per slot (false meanwhile, and for our own process), then remembered.
+ * What the dead owner left in the slot is ignored, never written: only a slot's owner writes it, and the next one resets it when it claims. */
 bool ar_worker_dead(uint32_t i, time_t now);
 /* Slot i is held by a live process (ours included). Reads /proc: call it with no lock held, or rarely. */
 bool ar_worker_live(uint32_t i);
