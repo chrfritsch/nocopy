@@ -274,6 +274,20 @@ static __attribute__((noinline)) void graph_ref_types(const nc_graph *g, zend_ob
 	}
 }
 
+/* Its nested arrays private as well: an internal class may write the array __unserialize() got in place
+ * (ArrayObject iterated by reference), and a template's arrays are shared with the next fetch. */
+static void own_arrays(zval *z, int depth)
+{
+	if (Z_TYPE_P(z) != IS_ARRAY || depth > NC_MAX_DEPTH) {
+		return;
+	}
+	SEPARATE_ARRAY(z);
+	zval *v;
+	ZEND_HASH_FOREACH_VAL(Z_ARR_P(z), v) {
+		own_arrays(v, depth + 1);
+	} ZEND_HASH_FOREACH_END();
+}
+
 /* The shared references' values, the objects' contents (K_DATA: data[i], for __unserialize()), the root. */
 static void graph_fill(gout *o, const nc_graph *g, zval *data, zval *rv)
 {
@@ -287,6 +301,9 @@ static void graph_fill(gout *o, const nc_graph *g, zval *data, zval *rv)
 		switch (kind) {
 			case K_DATA:
 				graph_zval(o, &data[i], &n->props[0]);
+				if (o->mode == G_TPL && o->objs[i]->ce->type == ZEND_INTERNAL_CLASS) {
+					own_arrays(&data[i], 0);
+				}
 				break;
 			case K_SLOTS: case K_WAKEUP: case K_SLEEP: case K_SLEEPW:
 				graph_slots(o, o->objs[i], n, c[n->cls].nprops);
