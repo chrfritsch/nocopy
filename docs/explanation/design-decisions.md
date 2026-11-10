@@ -21,8 +21,8 @@ hit (copy mode: 90.1%). Not gated on pressure (`unpin_gen`): the first writer to
 already kept ~185 of 207. Short Drupal run (`nocopy-all`, default 32 MB, 243 segments, cap 60), 28,640 requests: kept p50 5,
 p99 41, max 61; 193 (0.7%) reached the cap and copied the rest of their fetches.
 
-**The budget is arena-wide, and a request older than `nocopy.zero_copy_seconds` (3) copies** (was: a quarter per request;
-[design review, finding 2](design-review-2026-11.md#2-the-pin-cap-is-per-request-not-per-arena)). The count is the union of
+**The budget is arena-wide, and a request older than `nocopy.zero_copy_seconds` (3) copies** (was: a quarter per request).
+The count is the union of
 the live workers' published keep bitmaps, looked at on a request's first and every 8th new keep: a sum (one atomic add per
 keep, the review's proposal) counts a hot segment once per request holding it and would push ordinary concurrent traffic into
 copy mode. Repro (32 MB, 236 segments, 30k keys of ~600 B, 4 CLI workers 90/10 get/put for 8 s while N `php -S` requests
@@ -39,8 +39,8 @@ they run as one long `php -S` request. Tests 096, 097.
 cache, never a private one: a private cache splits invalidation silently ([Sharing](sharing.md#all-or-nothing)).
 
 **One off state** (was four behaviours: misses, `nocopy_clear()` answering `true`, an uncaught `Error` without a worker
-slot, silence on ignored settings; [design review](design-review-2026-11.md#3-no-cache-is-silent-exactly-where-it-matters)
-3, 9, 10): no name, no attach and no worker slot all route to the no-arena table, which misses and fails every write and
+slot, silence on ignored settings):
+no name, no attach and no worker slot all route to the no-arena table, which misses and fails every write and
 the clear, with the reason in `nocopy_stats()['off']`. The route moved into the module globals (per thread: a ZTS thread
 can lack a slot while the others have one): `./dev ab HEAD 7 read write` within noise on NTS (rows ±6%, with signs
 flipping across groups); ZTS not measured. `nocopy_clear()` with Valkey unreachable is `false` too: the other servers
@@ -48,7 +48,7 @@ keep their copies.
 **No default name:** two sites of one user would share keys.
 
 **Liveness from kernel file locks** (was: pid + start time from `/proc/<pid>/stat`, where every failure to read meant dead): a live
-holder in another PID namespace or at its fd limit was taken for dead and its lock stolen ([design review, finding 1](design-review-2026-11.md#1-liveness-is-a-guess-that-fails-toward-dead)).
+holder in another PID namespace or at its fd limit was taken for dead and its lock stolen.
 Each process holds an OFD lock on its process slot's byte of the shm object; a holder is dead when nobody holds the byte or its slot's generation moved on, and a query that fails means alive.
 Price: one descriptor per process, a 1024-process limit at attach. The lock fast path is unchanged; the query runs only where `/proc` was read before.
 macOS keeps pid + start time (`sysctl`, no fd, no namespaces; no OFD locks there).
@@ -182,7 +182,7 @@ round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (me
 best of 7: store+delete with a 58-byte key 85.3 -> 68.9 ns, `nocopy_delete_multiple` of 10 missing 59-byte keys 177.5 -> 50.7 ns;
 `ab.sh` store+delete int (3-byte key), best of 7 three times: +1.6..+3.4% (HEAD against itself +1.0 / 0.0%).
 
-**Monotonic clock for TTLs, leases and `seq`** (2026-11-10, `CLOCK_MONOTONIC_COARSE`; [rebuild item 5](rebuild-2026-11.md#5-a-monotonic-clock-locally-relative-ttls-to-valkey)):
+**Monotonic clock for TTLs, leases and `seq`** (2026-11-10, `CLOCK_MONOTONIC_COARSE`):
 the arena does not outlive a boot, so a stepped wall clock (NTP, an admin, a VM resume) neither expires entries early nor
 keeps them late. Read cost in the dev image, 2x10^7 reads, 3 runs: `MONOTONIC_COARSE` 3.6-4.1 ns, `REALTIME_COARSE` 4.0-4.2,
 `BOOTTIME`/`MONOTONIC`/`REALTIME` 11.3-13.7. `CLOCK_BOOTTIME` was the plan's first choice (it counts suspend) and is
@@ -425,14 +425,13 @@ inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns
 
 **The layout id is the loaded code's build id, read in MINIT** (was: a hash of the `.so` file, read when the arena is
 opened; before that the GNU build id, dropped for ~50 lines). The file hash read whatever file was at the path at open
-time: a root fpm master's workers open on their first request, so after a package upgrade one pool ran two caches
-([design review, finding 4](design-review-2026-11.md#4-the-layout-id-is-read-from-disk-when-the-arena-is-opened)). The
+time: a root fpm master's workers open on their first request, so after a package upgrade one pool ran two caches. The
 GNU build-id note (`-Wl,--build-id`) or `LC_UUID`, from memory; the file hash only without one, and then in MINIT. Test
 099: the same code from two different files shares one arena (fails with the file hash). Startup back: 400 interleaved bare
 `php -r ';'` starts, median 6835 µs (file hash) -> 6516 µs, PHP alone 6397.
 
 **The creator picks a random base** (was: the first free of two fixed addresses): the pointers in the arena were the same
-on every host ([finding 7](design-review-2026-11.md#7-a-named-file-full-of-pointers-at-a-fixed-address)). Attachers already
+on every host. Attachers already
 mapped at the header's base, so nothing else changed; 2 MB-aligned in a 32 TB window, else a 192 GB one for 39-bit address
 spaces. An attacher that has something at that address gets no cache, as before with the fixed one.
 
@@ -473,7 +472,6 @@ Code comments are one short line, or none.
 
 ## Ruled out by the 2026-11 audit
 
-What the correctness audit checked and found sound, with the reasoning, and what it left open: [findings and plan](audit-2026-11.md#ruled-out).
 **A dead worker's slot is ignored, not cleaned by others** (was: a reclaimer cleared its pins, a rotation its announced generation): the clear raced with the slot's next owner. The owner id found dead is remembered per process, so later reclaim passes cost no lock query; `pinned_segments` counts the stale bits until the slot is claimed.
 
 ## Adding to this page
