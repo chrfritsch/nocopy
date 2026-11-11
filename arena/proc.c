@@ -19,6 +19,7 @@ uint64_t ar_self;
 ar_procs *ar_proc;
 #ifdef NOCOPY_HOOKS
 void (*ar_hook)(const char *point);
+const void *ar_hook_on;
 #endif
 
 static time_t checked[NOCOPY_MAX_WORKERS]; /* last owner lookup per slot (ar_worker_dead) */
@@ -134,8 +135,10 @@ ar_lock_result ar_lock_wait(ar_lock *l, uint64_t *dead)
 				return AR_LOCKED;
 			}
 		} else if (++spins < 128) {
+			AR_HOOK_ON("lock.wait", l);
 			ar_cpu_relax();
 		} else {
+			AR_HOOK_ON("lock.wait", l);
 			sched_yield();
 			if (!(spins & 1023) && h != ar_self && ar_owner_dead(h)
 			 && __atomic_compare_exchange_n(&l->holder, &h, ar_self, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds tests/c/stress.c against the arena units twice (-O2, and ThreadSanitizer) and runs both on small and sharded arenas; then tests/c/repair.c, tests/c/atoms.c and tests/c/crash.c (with the arena's test hooks, -DNOCOPY_HOOKS).
+# Builds tests/c/stress.c against the arena units twice (-O2, and ThreadSanitizer) and runs both on small and sharded arenas; then tests/c/repair.c, tests/c/atoms.c,
+# tests/c/crash.c and tests/c/sched.c (both with the arena's test hooks, -DNOCOPY_HOOKS).
 # Usage: tests/c/run.sh [seconds=3]   (Linux; e.g. docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 /src/tests/c/run.sh)
 set -e
 cd "$(dirname "$0")/../.."
@@ -14,3 +15,4 @@ for mb in 4 64; do TSAN_OPTIONS=halt_on_error=1 "$out/stress-tsan" $mb 8 "$s"; d
 $CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/repair" tests/c/repair.c $ARENA -lpthread && "$out/repair"
 $CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/atoms" tests/c/atoms.c $ARENA -lpthread && "$out/atoms"
 $CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -DNOCOPY_HOOKS -o "$out/crash" tests/c/crash.c $ARENA -lpthread && "$out/crash"
+$CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -DNOCOPY_HOOKS -o "$out/sched" tests/c/sched.c $ARENA -lpthread && "$out/sched"

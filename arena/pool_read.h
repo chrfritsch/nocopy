@@ -47,6 +47,7 @@ static inline bool ar_pin(ar_pins_t *r, const void *p)
 	r->idle++;
 	__atomic_store_n(&ar_pins_of(r->slot)[w], r->mine[w], __ATOMIC_SEQ_CST);
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	AR_HOOK("pin.set");
 	return true;
 }
 

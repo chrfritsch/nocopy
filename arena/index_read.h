@@ -67,6 +67,9 @@ static inline __attribute__((always_inline)) ar_slot ar_probe_step(ar_probe *p, 
 {
 	while (p->n <= p->mask) {
 		uint32_t i = p->i;
+		if (!locked) {
+			AR_HOOK("probe.load");
+		}
 		ar_slot s = locked ? p->t[i] : __atomic_load_n(&p->t[i], __ATOMIC_ACQUIRE);
 		p->at = i;
 		p->i = (i + 1) & p->mask;
@@ -98,6 +101,7 @@ static inline __attribute__((always_inline)) bool ar_probe_miss_final(ar_probe *
 	if (!(p->seq & 1) && __atomic_load_n(p->mseq, __ATOMIC_RELAXED) == p->seq) {
 		return true;
 	}
+	AR_HOOK_ON("probe.retry", p);
 	ar_cpu_relax();
 	ar_probe_restart(p);
 	return false;

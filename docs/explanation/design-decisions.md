@@ -280,6 +280,16 @@ third of the arena was dead. `bench/hitratio.php` 32M / 64M, 20% rewrites 87.4 -
 `ab.sh` ttl churn stores 2.37 -> 2.17 M/s, stores > 50 us 1.3k -> 3.6k, the slowest unchanged; other writes and fetches unchanged.
 Up to 1/2 live: +1 / +4 points; up to 7/8: +1 more point than 3/4 for twice the copying.
 
+**A segment is compacted alone only for its dead bytes** (`3 * dead >= live`; was: at most 3/4 live, which counted its unused tail as
+reclaimable). In a full segment both say the same (3/4 live, 1/4 dead); a segment of two values of a third of a segment each is 2/3 live
+with nothing dead, so compacting it filled a new segment the same way, counted as progress, and the alloc loop copied such segments in
+circles and never evicted: stores failed for good. 600 puts of distinct keys with values of `segment_size / 3`, 4M / 32M: failed 494 / 158 -> 0,
+evicted 0 -> 496 / 160, moved 2,341 / 1,550 MB -> 0, 148 / 120 -> 1 / 6 us per put (test 107; found by `tests/c/sched.c`'s setup).
+`bench/hitratio.php` 32M / 64M, old -> new: zipf 93.8 -> 93.8 / 93.3 -> 93.2, + 0.5 one-hit wonders 89.6 -> 89.6 / 91.1 -> 91.1,
+20% rewrites 90.6 -> 90.6 / 90.1 -> 90.1, 50% rewrites 89.9 -> 89.9 / 89.4 -> 89.4 (moved 1,921 -> 1,879 / 3,494 -> 3,437 MB),
+loop 1.5x 25.1 -> 25.1 / 40.2 -> 40.2, loop 1.1x at 64M 69.3 -> 69.2 and at 32M 50.1-52.9 -> 50.5-52.3 over four runs each,
+6 x 3 MB 83.5 -> 83.6 / 91.1 -> 91.2, with 20% rewrites 77.6-77.8 -> 77.5-77.8 / 87.7 -> 87.7. Not measured: `./dev ab` (one comparison per merge).
+
 **A segment holding one entry over half a segment is not compacted.** Such an entry gets a segment of its own; compacting it
 needed another whole segment, freed nothing and counted as progress, so the alloc loop copied it up to 2x the shard's share per store
 and never evicted: stores failed instead and readers kept the old value. `amp` scratch script (random overwrites, half reads),

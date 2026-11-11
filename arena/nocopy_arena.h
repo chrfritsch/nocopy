@@ -84,10 +84,12 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 		ar_slot s;
 		while ((s = ar_probe_next(&p))) {
 			nocopy_entry *e = (nocopy_entry *) ar_at8(ar_slot_off8(s));
+			AR_HOOK("find.slot");
 			if (ar_pin(&c->pins, e) && !ar_probe_still(&p, s)) {
 				ar_probe_restart(&p); /* unlinked while we were pinning: the memory may be reused */
 				continue;
 			}
+			AR_HOOK("find.checked");
 			if (e->h == h && e->klen == klen && nocopy_key_eq(nocopy_key(e), k, klen)) {
 				if (nocopy_expired(e)) {
 					return stale && nocopy_stale_ok(e) ? e : NULL;

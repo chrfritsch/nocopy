@@ -4,7 +4,7 @@
 
 #define MERGE_N 4 /* segments merged into at most one segment's worth of survivors */
 #define PICK_N 32 /* eviction chooses among this many oldest segments */
-#define COMPACT_MAX (ar_seg_size / 4 * 3) /* a segment this full or less is compacted alone rather than evicting */
+#define COMPACT_MAX (ar_seg_size / 4 * 3) /* a segment with more live bytes is no compaction victim */
 
 static uint64_t *expunges;
 static uint32_t ghost_mask;
@@ -66,7 +66,10 @@ static bool mergeable(uint32_t s)
 /* Holds one entry over half a segment (open segments take none): moving it takes a whole segment again, so compacting frees nothing. */
 static bool seg_big(uint32_t s) { return nocopy_entry_size((const nocopy_entry *) ar_seg_start(s)) > ar_seg_size / 2; }
 
-/* Compaction victims: the sparsest sealed segments, together <= one segment (*live), or the sparsest alone up to COMPACT_MAX. */
+/* Alone, s frees only its dead bytes (the copy has a tail too): at most 3 bytes copied per byte freed, as a full segment at COMPACT_MAX. */
+static bool worth_alone(uint32_t s) { return 3 * (ar_segs[s].used - ar_segs[s].live) >= ar_segs[s].live; }
+
+/* Compaction victims: the sparsest sealed segments, together <= one segment (*live), or the sparsest alone if that frees enough. */
 static uint32_t pick_sparse(const ar_log *lg, uint32_t *v, size_t *live)
 {
 	uint32_t nv = 0;
@@ -80,7 +83,7 @@ static uint32_t pick_sparse(const ar_log *lg, uint32_t *v, size_t *live)
 	for (; n < nv && *live + ar_segs[v[n]].live <= ar_seg_size; n++) {
 		*live += ar_segs[v[n]].live;
 	}
-	return n >= 2 || (n && *live <= COMPACT_MAX) ? n : 0;
+	return n >= 2 || (n && worth_alone(v[0])) ? n : 0;
 }
 
 /* The K oldest sealed segments, oldest first, or the oldest big entry's run alone if it is older.

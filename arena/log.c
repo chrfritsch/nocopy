@@ -114,6 +114,7 @@ void ar_log_reclaim(ar_log *lg)
 		}
 	}
 	ar_pool_pinned(dead, held, nocopy_now());
+	AR_HOOK("reclaim.pinned");
 	bool blocked = false;
 	AR_LOG_SEGS(lg, s) {
 		if (!ar_segs_has(dead, s)) {
