@@ -235,6 +235,13 @@ payload's absolute second only bounds a reader's local copy; it no longer turns 
 Test 100 (a writer an hour behind or ahead, libfaketime) and 101 (the same against Valkey) fail on the wall clock.
 Processes in different time namespaces (`unshare --time`, CRIU) must not share an arena.
 
+**Integers read from Valkey take their expiry from `PTTL`.** They are stored bare (decimal, so `INCRBY` works), with no
+header and so no expiry second; their local copy never expired and outlived the key until an invalidation for Valkey's
+expiry arrived (Drupal's `testFlood` passed 1 of 6 runs). A read that got integers pipelines one `PTTL` each (relative,
+like `PX`) and keeps the copy to the last whole second the key still lives, or keeps none. Costs one round trip more on
+an integer's local miss; reads without integers send nothing more. Rejected: `PTTL` with every `MGET` (a command per key
+on every miss) and a header on integers (`INCRBY` needs the bare number). Test 105.
+
 **Coarse clock** (`CLOCK_REALTIME_COARSE` where it exists, before the monotonic one above): TTLs are seconds, the coarse clock is a tick (1-4 ms) behind at most and costs 3.5 ns
 vs `CLOCK_REALTIME` 11.2 ns (perf: half of a store's samples were in `clock_gettime`). `ab.sh` best of 5, copy / zero: store int +9 / +9%,
 store string +9 / +9%, failing add +6 / +4%. `seq` carries the shard in its low 3 bits, so it is unique across shards without the nanoseconds.

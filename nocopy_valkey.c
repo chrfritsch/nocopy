@@ -774,7 +774,38 @@ static valkeyReply *vk_cmd(smart_str *s)
 	return vk_call(v, s);
 }
 
-static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
+/* Integers are stored bare (decimal, for INCRBY): their expiry is only in Valkey. */
+static bool vk_is_int(const zend_string *raw) { return raw && ZSTR_LEN(raw) && ZSTR_VAL(raw)[0] != 0; }
+
+/* PTTL of the integers among vals, one pipeline; ttl[i]: -1 none, -2 gone or unknown. */
+static void vk_pttl(uint32_t n, zend_string *const *keys, zend_string *const *vals, int64_t *ttl)
+{
+	smart_str s = {0};
+	for (uint32_t i = 0; i < n; i++) {
+		ttl[i] = vk_is_int(vals[i]) ? -2 : -1;
+		if (ttl[i] == -2) {
+			head(&s, 2), ARG(&s, "PTTL"), key_arg(&s, ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
+		}
+	}
+	nocopy_vk *v = s.s ? vk_conn() : NULL;
+	if (!v || !vk_send(v, &s)) {
+		smart_str_free(&s);
+		return;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		if (ttl[i] != -2) {
+			continue;
+		}
+		valkeyReply *r = vk_get(v);
+		if (!r) {
+			return;
+		}
+		ttl[i] = r->type == VALKEY_REPLY_INTEGER ? r->integer : -2;
+		freeReplyObject(r);
+	}
+}
+
+static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals, int64_t *ttl)
 {
 	smart_str s = {0};
 	keys_cmd(&s, ZEND_STRL("MGET"), n, keys);
@@ -785,6 +816,9 @@ static int vk_mget(uint32_t n, zend_string *const *keys, zend_string **vals)
 		vals[i] = c->type == VALKEY_REPLY_STRING ? zend_string_init(c->str, c->len, 0) : NULL;
 	}
 	freeReplyObject(r);
+	if (ok) {
+		vk_pttl(n, keys, vals, ttl);
+	}
 	return ok ? 1 : -1;
 }
 
@@ -991,15 +1025,29 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[1] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
 }
 
+/* An integer's last whole second in Valkey from its PTTL, so our copy never outlives it. 0: never; -1: keep no copy. */
+static time_t vk_pttl_expires(int64_t ttl)
+{
+	if (ttl < 0) {
+		return ttl == -1 ? 0 : -1;
+	}
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (time_t) (((int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + ttl) / 1000 - 1);
+}
+
 /* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
-static bool vk_fill(zend_string *key, const zend_string *raw, zval *rv, time_t *exp, uint32_t *delta)
+static bool vk_fill(zend_string *key, const zend_string *raw, int64_t ttl, zval *rv, time_t *exp, uint32_t *delta)
 {
 	time_t expires;
 	uint32_t user;
 	if (!vk_decode(raw, rv, &expires, &user)) {
 		return false;
 	}
-	const nocopy_opts o = {.expires = nocopy_from_wall(expires), .add_only = true};
+	if (vk_is_int(raw)) {
+		expires = vk_pttl_expires(ttl);
+	}
+	const nocopy_opts o = {.expires = expires > 0 ? nocopy_from_wall(expires) : 0, .add_only = true};
 	if (!expires || expires >= time(NULL)) { /* Valkey's PX decides it lives; the writer's second only bounds our copy */
 		nocopy_put_local(key, rv, &o, user);
 	}
@@ -1022,10 +1070,11 @@ static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *d
 	}
 	uint64_t gen = vk_gen();
 	zend_string *raw = NULL;
-	if (vk_mget(1, &key, &raw) != 1 || !raw) {
+	int64_t ttl;
+	if (vk_mget(1, &key, &raw, &ttl) != 1 || !raw) {
 		return false;
 	}
-	bool ok = vk_fill(key, raw, rv, exp, delta);
+	bool ok = vk_fill(key, raw, ttl, rv, exp, delta);
 	zend_string_release(raw);
 	if (ok && vk_gen() != gen) {
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
@@ -1136,10 +1185,11 @@ static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 	} ZEND_HASH_FOREACH_END();
 	if (n) {
 		zend_string **raw = ecalloc(n, sizeof *raw);
+		int64_t *ttl = safe_emalloc(n, sizeof *ttl, 0);
 		uint64_t gen = vk_gen();
-		bool got = vk_mget(n, miss, raw) == 1;
+		bool got = vk_mget(n, miss, raw, ttl) == 1;
 		for (uint32_t i = 0; i < n; i++) {
-			if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], &t, NULL, NULL)) {
+			if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], ttl[i], &t, NULL, NULL)) {
 				zend_symtable_update(out, miss[i], &t);
 			} else {
 				zend_symtable_del(out, miss[i]);
@@ -1153,7 +1203,7 @@ static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 				nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
 			}
 		}
-		efree(raw);
+		efree(ttl), efree(raw);
 	}
 	efree(miss);
 }
