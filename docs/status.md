@@ -5,7 +5,7 @@
 Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licensed, free, no paid edition.
 
 - **Platforms:** Linux, amd64 and arm64. Builds on macOS, untested there. No Windows.
-- **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM).
+- **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM; mod_php prefork tested by `./dev shm`).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
   [`symfony/`](../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../drupal) (all bins, cache tags, locks, flood), [`cli/`](../cli) (console, `chrfritsch/nocopy-cli`).
 - **Distribution:** [github.com/chrfritsch/nocopy](https://github.com/chrfritsch/nocopy), tag 0.0.1, on [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
@@ -16,6 +16,7 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 
 | Check | Result |
 |---|---|
+| Apache mod_php as root (2026-11-11, local Docker, arm64): the arena opens in each child's first request (`pthread_once`), as with a root php-fpm master; before, Apache's root parent created it and a CLI as `www-data` could not open it | `./dev shm` passed (fpm, then `php:8.5-apache`: CLI and Apache share, graceful and full restart, owner `www-data`, churn 0 misses; failed before the fix); `./dev test` 93 passed; `./dev zts` 80 passed; `./dev ci` all passed, apcu 13 known failures |
 | Value layer contract (2026-11-10, local Docker, arm64; [decision](explanation/design-decisions.md)): tagged ops for every non-scalar slot, writer checks them in release builds and refuses the store on a mismatch, string table reset inside `nc_plan_walk`, rebase descends only through moved pointers and is block-checked, atom fill callback returns `bool`; test 103 | `./dev ci` all passed; test 091 fails under asan with the old zeroing rule put back. `./dev ab HEAD 7 write`, copy / zero: arrays -0.8 to -2.6%, object -5.3 / -5.1%, int +6%, string 100B +7 to +10%, fetches within noise |
 | Drupal `get()` (2026-11-11, local Docker, arm64; [decision](explanation/design-decisions.md)): a path of its own, checksum fast path, tag preload only with Valkey; no C change; `./dev drupal-get` | hit with 3 tags 1,572 -> 533 ns, miss 499 -> 127 ns. `./dev drupal`: shared mode 35 tests and no shared cache 5 passed in all 6 runs; Valkey mode passed 1 of 6, else 34 of 35: `NocopyLockFloodTest::testFlood` is flaky there, with and without this change (open: an integer read from Valkey carries no expiry, so its local copy outlives the TTL until Valkey's active expiry sends the invalidation) |
 | Drupal locks and flood control (2026-11-10, local Docker, arm64): `NocopyLockBackend` (`lock`, `lock.persistent`; expiry and owner in one integer, changed only by `nocopy_add`/`nocopy_cas`) and `NocopyFlood` (`nocopy_inc`, fixed window) in `example.services.yml`; no C change | `./dev drupal` all 3 modes passed (35 tests shared and Valkey, 5 without). 8 processes x 300 acquire / file read-modify-write / release: counter 2400 of 2400, both arena and Valkey |

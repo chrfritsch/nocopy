@@ -59,7 +59,7 @@ Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays conta
 
 Each process checks on its first cache access that it shares the cache with the rest of the site (`nocopy_shared_with()` is `host` or
 `valkey`) and throws otherwise, naming the cause, instead of serving what other processes already changed. php-fpm and the CLI usually
-read different php.ini files, so set it in both. Run Drush and cron as the user that starts php-fpm (the shared memory object is readable
+read different php.ini files, so set it in both. Run Drush and cron as the user php-fpm's or Apache's workers run as (the shared memory object is readable
 by its creator only). Writes and invalidations by Drush and cron then reach web requests directly, and the cache
 survives php-fpm restarts.
 

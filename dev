@@ -17,7 +17,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   stress [loops=30]           concurrency tests in a loop, stops at first failure
   c [seconds=3]               arena alone from 8 threads, plain + ThreadSanitizer
   fuzz [iterations=20000] [seed]  random values round-tripped under ASan, copy + zero-copy (seed printed: replays the run)
-  shm                         CLI + php-fpm share one cache by name, then with Valkey
+  shm                         CLI + php-fpm, then CLI + Apache mod_php share one cache by name (fpm also with Valkey)
   frankenphp                  FrankenPHP classic + worker mode, and shm with it
   pie                         pie install from the committed tree, with and without each configure option
   symfony [version=8.*]       Symfony bundle smoke test (alone and next to APCu)
@@ -70,7 +70,7 @@ case $cmd in
   stress)     img; run "nocopy-linux:$PHP" /src/docker/stress.sh "${1:-30}" ;;
   c)          img; run "nocopy-linux:$PHP" /src/tests/c/run.sh "${1:-3}" ;;
   fuzz)       img; run -e FUZZ_VALUE "nocopy-linux:$PHP" /src/docker/fuzz.sh "$@" ;;
-  shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh ;;
+  shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh && run "php:$PHP-apache" sh /src/docker/shm-name.sh ;;
   pie)        img; p=.cache/pie-1.5.5  # fetched once: a binary rewritten just before the mount sometimes shows as not found
               [ -x $p ] || { mkdir -p .cache; c=$(docker create ghcr.io/php/pie:1.5.5-bin x) && docker cp -q "$c":/pie $p.tmp && docker rm "$c" >/dev/null && mv $p.tmp $p; } || exit 1
               run -v "$PWD/$p":/usr/local/bin/pie:ro "nocopy-linux:$PHP" /src/docker/pie.sh ;;

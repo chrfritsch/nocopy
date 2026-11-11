@@ -47,7 +47,8 @@ static const nocopy_detour_ops *proc_route = &nocopy_no_arena; /* this process's
 static const char no_slot[] = "no worker slot: 1024 processes and threads use this cache, or this process had no file descriptor left for its liveness lock";
 static bool sapi_zero_copy;
 static zend_long zero_copy_seconds = 3; /* a zero-copy request older than this copies: a slow backend must not pin the cache away */
-static bool open_deferred; /* fpm master as root: each worker opens the arena on its first request */
+static bool open_deferred; /* fpm master or Apache parent as root: each worker opens the arena on its first request */
+static pthread_once_t open_once = PTHREAD_ONCE_INIT; /* once per worker process: mod_php may be threaded */
 static bool want_igbinary; /* nocopy.serializer=igbinary: in effect if igbinary is loaded (MINIT) */
 static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_request, wrapped */
 
@@ -636,6 +637,12 @@ static void atfork_child(void)
 	nocopy_vk_close(&NOCOPY_G(vk));
 }
 
+static void open_late(void)
+{
+	arena_open(true);
+	route();
+}
+
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
@@ -646,8 +653,8 @@ PHP_MINIT_FUNCTION(nocopy)
 	}
 	resolve_serializer();
 
-	/* fpm as root: workers would share root's mapping, and root would read what they wrote; open it in the worker */
-	open_deferred = strcmp(sapi_module.name, "fpm-fcgi") == 0 && geteuid() == 0;
+	/* fpm or Apache as root: workers would share root's mapping, and the CLI as their user could not open it; open it in the worker */
+	open_deferred = geteuid() == 0 && (strcmp(sapi_module.name, "fpm-fcgi") == 0 || strncmp(sapi_module.name, "apache2", 7) == 0);
 	if (!open_deferred) {
 		arena_open(false);
 	}
@@ -684,9 +691,7 @@ PHP_RINIT_FUNCTION(nocopy)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 	if (UNEXPECTED(open_deferred)) {
-		open_deferred = false;
-		arena_open(true);
-		route();
+		pthread_once(&open_once, open_late);
 	}
 	if (nocopy_ctx_slot(&NOCOPY_G(ctx)) < 0) {
 		claim();

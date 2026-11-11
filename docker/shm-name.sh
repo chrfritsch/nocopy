@@ -48,7 +48,27 @@ valkey_pass() { start_vk=$1 stop_vk=$2
 
 logcheck() { if grep -E 'segfault|SIGSEGV|exited on signal|panic|PHP (Warning|Fatal)|"level":"error"' "$1"; then bad=1; else echo "server log clean"; fi; }
 
-if command -v php-fpm >/dev/null; then
+if command -v apache2ctl >/dev/null; then
+  # mod_php: the parent (root) runs MINIT, the children are www-data
+  cp /app/app.php /var/www/html/
+  AS=www-data
+  start() { apache2ctl start >>/tmp/apache.log 2>&1; for i in $(seq 50); do curl -sf '127.0.0.1/app.php?op=get&k=x' >/dev/null 2>&1 && break; sleep 0.2; done; }
+  stop() { apache2ctl stop >>/tmp/apache.log 2>&1; while pgrep -x apache2 >/dev/null; do sleep 0.1; done; }
+  web() { curl -s "127.0.0.1/app.php?op=$1&k=$2"; }
+  start
+  check "cli put" "$(cli put a)" cli false
+  check "apache get" "$(web get a)" cli true
+  check "apache put" "$(web put b)" apache2handler true
+  check "cli get" "$(cli get b)" apache2handler false
+  apache2ctl graceful; sleep 1
+  check "after graceful" "$(web get a)" cli true
+  stop; start
+  check "after restart" "$(web get b)" apache2handler true
+  [ "$(stat -c %U /dev/shm/nocopy.*)" = www-data ] && echo "owner            www-data" || { echo "owner: FAIL"; ls -l /dev/shm; bad=1; }
+  churn
+  stop
+  logcheck /tmp/apache.log
+elif command -v php-fpm >/dev/null; then
   rm -f /etc/nginx/sites-enabled/default /dev/shm/nocopy-b.*
   echo 'server { listen 8099; location / { fastcgi_pass 127.0.0.1:9001; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/app.php; } }' > /etc/nginx/conf.d/t.conf
   echo 'server { listen 8098; location / { fastcgi_pass 127.0.0.1:9002; include fastcgi_params; fastcgi_param SCRIPT_FILENAME /app/app.php; } }' >> /etc/nginx/conf.d/t.conf
