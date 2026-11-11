@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Drupal\nocopy\Flood;
 
 use Drupal\Core\Flood\FloodInterface;
-use Drupal\Core\Site\Settings;
 use Drupal\nocopy\Cache\NocopyBackend;
 use Symfony\Component\HttpFoundation\RequestStack;
 
@@ -18,7 +17,7 @@ class NocopyFlood implements FloodInterface {
 
   public function __construct(protected RequestStack $requestStack, string $root, string $sitePath) {
     NocopyBackend::requireShared();
-    $this->prefix = (Settings::get('nocopy_prefix') ?: hash('xxh128', $root . '/' . $sitePath)) . '.flood::';
+    $this->prefix = NocopyBackend::sitePrefix($root, $sitePath) . '.flood::';
   }
 
   // ponytail: a fixed window from the first event (as Laravel's limiter), so up to 2x $threshold across its edge; time buckets if that matters.

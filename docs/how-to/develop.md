@@ -41,7 +41,8 @@ Add `tests/0NN_what_it_checks.phpt` (next free number). Rules:
 - Tests that need memory pressure use a small `nocopy.shm_size` (2M-4M, one shard).
 - Valkey tests require `valkey_skip.inc` in `--SKIPIF--` (they skip without a server) and set `nocopy.valkey=127.0.0.1:6379`
   with their own `nocopy.valkey_prefix=tNNN:`; `valkey.inc` has helpers. Add `--CONFLICTS--` `valkey`: they share one server, so they run one at a time.
-- Forked processes: `pcntl_fork()`; threads (ZTS only): ext-parallel.
+- Forked processes: `pcntl_fork()`; threads (ZTS only): ext-parallel. Another PHP process with this build (its own arena, another user, other settings):
+  `require_once __DIR__ . '/php.inc'`, then `php_run($code, ['nocopy.shm_name' => '/nocopy-tNNN-other'])`, or `php_cmd()` / `php_argv()` for `exec` and `proc_open`.
 
 ## Try things by hand
 

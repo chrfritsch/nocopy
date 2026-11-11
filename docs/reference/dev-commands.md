@@ -71,4 +71,5 @@ usage in their headers and in [Develop, test and benchmark](../how-to/develop.md
 | `docker/Dockerfile.zts` | `nocopy-zts`: `php:8.4-zts` + ext-parallel |
 | `docker/Dockerfile.drupal` | `nocopy-drupal`: `nocopy-linux:8.5` + Drupal's extensions, MariaDB, composer |
 | `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` with `-Wall -Wextra -Werror` (`NOCOPY_CONFIGURE` for configure flags, `NOCOPY_ASAN=1` for sanitizers and `NOCOPY_DEBUG`) |
+| `docker/lib.sh` | sourced by the in-container scripts: the module's path (`SO`), `nocopy_flags <name> [setting=value …]` (php flags for nocopy on the arena `/nocopy-<name>`), `shm_rm <name>`, `apcu_so`, `valkey_up`, `asan_env`, `run_tests` (`TIMEOUT` seconds) |
 | `docker/*.sh` | the in-container scripts the commands above run |

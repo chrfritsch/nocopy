@@ -9,6 +9,7 @@ use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Cache\CacheTagsChecksumInterface;
 use Drupal\Core\Cache\CacheTagsChecksumPreloadInterface;
+use Drupal\Core\Site\Settings;
 
 /**
  * Cache bin in nocopy shared memory. Items are plain arrays, so object-free data is read without a copy.
@@ -62,6 +63,11 @@ class NocopyBackend implements CacheBackendInterface {
       throw new \RuntimeException(sprintf('nocopy: this %s process does not share the cache with the rest of the site (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this site, and run Drush and cron as the user that starts php-fpm.', PHP_SAPI, $with));
     }
     self::$shared = TRUE;
+  }
+
+  // The site's key prefix without a deployment identifier (locks, flood): old and new code share them during a rolling deploy.
+  public static function sitePrefix(string $root, string $sitePath): string {
+    return Settings::get('nocopy_prefix') ?: hash('xxh128', $root . '/' . $sitePath);
   }
 
   protected function key(string $cid): string {

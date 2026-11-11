@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Drupal\nocopy\Lock;
 
 use Drupal\Core\Lock\LockBackendAbstract;
-use Drupal\Core\Site\Settings;
 use Drupal\nocopy\Cache\NocopyBackend;
 
 /**
@@ -24,8 +23,7 @@ class NocopyLockBackend extends LockBackendAbstract {
 
   public function __construct(string $root, string $sitePath, bool $persistent = FALSE) {
     NocopyBackend::requireShared();
-    // No deployment identifier: old and new code share locks during a rolling deploy.
-    $this->prefix = (Settings::get('nocopy_prefix') ?: hash('xxh128', $root . '/' . $sitePath)) . '.lock::';
+    $this->prefix = NocopyBackend::sitePrefix($root, $sitePath) . '.lock::';
     if ($persistent) {
       // Like core's persistent backend: one lock id across requests, nothing released at shutdown.
       $this->lockId = 'persistent';
