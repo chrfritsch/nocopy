@@ -104,7 +104,7 @@ and `nocopy_find` reads `mseq` before probing and treats a miss as real only if 
 ## Writes
 
 A write is a `nocopy_put`: `nocopy_put_begin` locks the key's shard, allocates (bump-allocate in the shard's open segment for the entry's TTL bucket, or take a fresh one / a run), sets the header and the segment's atom bits;
-the caller (`nocopy_value_put()`: plan the value, `nc_write`) fills key and payload; `nocopy_put_commit` locates the slot, publishes with a release store, marks the old entry dead and unlocks. `nocopy_value_put` releases what planning kept only after the commit (it may run destructors).
+the caller (`nocopy_value_put()`: plan the value, `nc_write`; a scalar or a string alone has no plan, `put_flat`) fills key and payload; `nocopy_put_commit` locates the slot, publishes with a release store, marks the old entry dead and unlocks. `nocopy_value_put` releases what planning kept only after the commit (it may run destructors).
 Blocks up to `NOCOPY_INLINE_PUT` (2 KB) are filled under the lock (one critical section); larger ones are filled with the lock dropped and recorded as the worker's `wip` meanwhile (see Locks). The caller never sees the lock.
 Per segment: `used` (bytes appended), `live`, `pending` (allocated, unpublished). A sealed segment with `live==0 && pending==0` becomes DEAD (`ar_log_check`); `reclaim()` frees DEAD segments no worker pins, under the shard lock.
 TTL buckets (Segcache): one open segment per bucket (ttl 0, < 8 s, < 64 s, < 512 s, < 4096 s, < 32768 s, longer); each segment keeps `max_exp`. Every write runs `ar_log_expire_step()` on its shard: a cursor walks the entries of

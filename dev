@@ -113,7 +113,7 @@ case $cmd in
   trace)      PHP=8.5; img; docker build -q -t nocopy-trace -f docker/Dockerfile.trace docker >/dev/null
               run -e SIZES -e ALGOS -e N nocopy-trace /src/docker/trace.sh "$@" ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
-              run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e MEM_ONLY -e ROWS_ONLY -e REPLAY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
+              run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e NOCOPY_CFLAGS -e MEM_ONLY -e ROWS_ONLY -e REPLAY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it --shm-size=1g -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \
                 '/src/docker/build.sh && printf "extension=/build/modules/nocopy.so\nnocopy.shm_name=/nocopy-shell\n" > /usr/local/etc/php/conf.d/zz-nocopy.ini && cd /src && exec bash' ;;
   stub)       img; docker run --rm -v "$PWD":/src -w /src "nocopy-linux:$PHP" php /usr/local/lib/php/build/gen_stub.php nocopy.stub.php ;;

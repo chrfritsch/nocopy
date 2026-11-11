@@ -135,9 +135,29 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 	return r;
 }
 
-/* Arrays and objects see the atoms: a view announced from planning until the commit. Anything else: a tail call. */
+/* A scalar or a string alone: nothing to plan or release. */
+static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req *q, const zval *val, bool add_only)
+{
+	q->size = KEY_OFF + SALIGN(q->klen) + (Z_TYPE_P(val) == IS_STRING ? str_size(Z_STRLEN_P(val)) : 0);
+	q->koff = KEY_OFF;
+	q->flags = NOCOPY_FMT_PLAIN;
+	q->deps = 0;
+	nocopy_put p;
+	nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
+	if (!e) {
+		return NOCOPY_NO_ROOM;
+	}
+	nc_write_flat(e, (char *) e + KEY_OFF + SALIGN(q->klen), val);
+	nocopy_put_result c = nocopy_put_commit(&p, add_only);
+	return c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+}
+
+/* Arrays and objects see the atoms: a view announced from planning until the commit. */
 nocopy_status nocopy_value_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only)
 {
+	if (Z_TYPE_P(val) <= IS_STRING) {
+		return put_flat(ctx, q, val, add_only);
+	}
 	nocopy_atom_view av;
 	if ((Z_TYPE_P(val) != IS_ARRAY && Z_TYPE_P(val) != IS_OBJECT) || !nocopy_atom_begin(ctx, &av)) {
 		return put(env, ctx, q, val, add_only, NULL);

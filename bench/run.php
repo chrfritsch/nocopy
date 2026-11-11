@@ -95,6 +95,9 @@ if ($group === 'write') {
     bench('store array 10 rows', function ($n) use ($a10) { for ($i = 0; $i < $n; $i++) apcu_store('w_a10', $a10); });
     bench('store array 1k rows', function ($n) use ($a1k) { for ($i = 0; $i < $n; $i++) apcu_store('w_a1k', $a1k); });
     bench('store array 1k rows, unserialized keys', function ($n) use ($a1ku) { for ($i = 0; $i < $n; $i++) apcu_store('w_a1ku', $a1ku); });
+    // every row new to the arena (the store after a miss); the times include the loop that renumbers the rows
+    bench('store array 10 rows, new values', function ($n) use ($a10) { $u = 0; $ks = array_keys($a10); for ($i = 0; $i < $n; $i++) { foreach ($ks as $k) $a10[$k]['id'] = ++$u; apcu_store('w_n10', $a10); } });
+    bench('store array 1k rows, new values', function ($n) use ($a1k) { $u = 0; $ks = array_keys($a1k); for ($i = 0; $i < $n; $i++) { foreach ($ks as $k) $a1k[$k]['id'] = ++$u; apcu_store('w_n1k', $a1k); } });
     $o = new Obj; $o->child = new Obj;
     bench('store object', function ($n) use ($o) { for ($i = 0; $i < $n; $i++) apcu_store('w_obj', $o); });
     bench('store+delete int', function ($n) { for ($i = 0; $i < $n; $i++) { apcu_store('w_k', $i); apcu_delete('w_k'); } });

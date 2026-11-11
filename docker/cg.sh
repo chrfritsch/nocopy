@@ -5,7 +5,7 @@ set -e
 /src/docker/build.sh
 C="-n -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-cg -d nocopy.shm_size=128M -d nocopy.entries_hint=200000"
 n=${N:-20000}
-O="${OPS:-get_int get_hit get_ttl get_str get_arr get_miss get_multi get_obj get_prods remember remember_miss put_int put_ttl put_str put_arr put_obj put_prods put_multi put_del add_fail add_del inc inc_ttl dec cas_ok cas_fail delete_miss delete_multi_miss putdel_multi keys stats shared_with}"
+O="${OPS:-get_int get_hit get_ttl get_str get_arr get_miss get_multi get_obj get_prods remember remember_miss put_int put_ttl put_str put_arr put_new put_obj put_prods put_multi put_del add_fail add_del inc inc_ttl dec cas_ok cas_fail delete_miss delete_multi_miss putdel_multi keys stats shared_with}"
 for op in $O; do
   for k in 1 2; do
     rm -f /dev/shm/nocopy-cg*

@@ -352,6 +352,23 @@ typedef struct {
 } encoding;
 
 static zend_always_inline size_t encoding_size(const encoding *x, size_t klen) { return SALIGN(sizeof(nocopy_block)) + SALIGN(klen) + x->z.n; }
+
+/* A scalar, or a string alone at p (str_size bytes): no tape. */
+static zend_always_inline void nc_write_flat(nocopy_entry *e, char *p, const zval *val)
+{
+	zval *v = block_val(e);
+	if (Z_TYPE_P(val) != IS_STRING) {
+		ZVAL_COPY_VALUE(v, val);
+		return;
+	}
+	const zend_string *s = Z_STR_P(val);
+	zend_string *r = (zend_string *) p;
+	memcpy(r, s, _ZSTR_STRUCT_SIZE(ZSTR_LEN(s)));
+	GC_SET_REFCOUNT(r, 2);
+	GC_TYPE_INFO(r) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+	ZVAL_STR(v, r);
+	Z_TYPE_FLAGS_P(v) = 0;
+}
 bool nc_write(encoding *x, nocopy_entry *e); /* fills e after its header and key: exactly encoding_size bytes */
 bool nc_write_array(const plan *z, const zend_array *src, void *dst); /* a shared array at dst: exactly z->n bytes */
 

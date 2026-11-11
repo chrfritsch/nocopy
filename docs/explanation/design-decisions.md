@@ -129,6 +129,26 @@ its result up front**: no rehash, 10 keys 122 -> 109 ns.
 10 rows 713 -> 625 ns (+14%), 1k rows 67.9 -> 60.5 µs (+12%), 1k unserialized keys +4%; int, string, object within noise.
 Next in the cachegrind profile: `hash_array` (~200 Ir/op, ~60 per 3-element row). Rejected: an `if` chain instead of the `switch` in `hash_zval` (perf put 15% of its samples on the dispatch): 199 -> 207 Ir/op, array stores -2 to -5% (`ab.sh write`, best of 7).
 
+**Scalars and a string alone skip planning** (`put_flat`: no plan, tape buffers or release; cachegrind had 40 of a store's 652 Ir
+zeroing the plan). `./dev cg`: put int 652 -> 583 Ir, string 100 B 700 -> 629, `put_multiple` of 10 5632 -> 4966. `./dev ab HEAD 7 write`,
+copy / zero: store int +11.3 / +12.2% (25.6 -> 23.0 ns), string 100B +14.3 / +13.1%, failing add +14.1 / +14.5%, store+delete int +5.4 / +4.1%.
+**`nc_same_array` compares strings up to 16 bytes inline** (`nocopy_key_eq`, was a `memcmp` call per key and string): `./dev cg` 1k rows
+778.3k -> 750.0k Ir; `ONLY='store (array|object)' ./dev ab HEAD 9 write`, copy / zero: 10 rows +15.9 / +15.7% (628 -> 542 ns), 1k rows
++7.2 / +6.7%, 1k unserialized keys +4.1 / +7.9%, object within noise. Rejected: `map_mask` from `__builtin_clz` instead of its loop
+(one iteration for small maps): put array 10 rows 8924 -> 8995 Ir, 1k rows 778.3k -> 779.8k.
+
+**Array stores are benched both ways**: the old rows re-store one value, so every row is already shared and nothing is written.
+`store array 10 / 1k rows, new values` (`bench/run.php`) and `put_new` / `put_newbig` (`bench/prof.php`) give every row a new `id`
+first, the store after a miss (their figures include that loop). `./dev cg`, re-store -> new: 10 rows 8786 -> 15108 Ir, 1k rows
+750k -> 1286k (`write_zval` 352k, `hash_array` 228k, `plan_array` 204k, `plan_zval` 175k); `ab.sh write` 10 rows 544 vs 1368 ns,
+1k rows 56.6 vs 131.5 µs; HEAD against the two changes above on the new rows: -4.2 / +0.4% and +0.6 / +5.4% (noise: neither is on that path).
+Which of the two real stores resemble (`NOCOPY_CFLAGS=-DNOCOPY_SHARE_STATS ROWS_ONLY=1 CONFIGS=stock ./dev drupal-bench`, counters in
+`nocopy_plan.c`, a fresh arena filled row by row): of 6,402 array and object stores, 3,443 (54%) found at least 75% of their hashed bytes
+shared, 835 50-75%, 1,730 25-50%, 174 under 25%, 194 (3%) nothing; 20.5 of 39.6 MB hashed and 71,023 of 109,752 arrays were not planned
+or written, 35,647 of 65,245 lookups hit; all 6,487 puts 47.4 ms. So hashing first pays on nearly every store. Not built for that reason:
+hashing only every Nth store while nothing is shared (would fire on 3%), hashing inside the planning walk with a rollback on a hit
+(estimated -12% on new values, +30% on shared ones), sharing at merge time instead of at the store (every store would write the half it skips now).
+
 **Cost of every API call** (`./dev cg` instructions per call, `./dev perf` ns, copy mode, PHP 8.5 arm64, `bench/prof.php`; the loop itself is ~41 Ir, ~3 ns):
 get int 270 Ir / 12.4 ns (`nocopy_fetch` 162), miss 207 / 9.3, ttl 304 / 16.2, 100 B string 471 / 22.6, by-ref `$hit` 394 / 17.2, `get_multiple` of 10 2957 / 127;
 put int 652 Ir / 31.8 ns (`put` 403), ttl 698 / 34.3, add (fails) 626 / 33.9, put+delete 967 / 39.2, `put_multiple` of 10 5644 / 270; `inc` 291 / 12.5, with ttl 366 / 21.9,

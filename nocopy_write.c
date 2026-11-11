@@ -444,24 +444,10 @@ bool nc_write(encoding *x, nocopy_entry *e)
 	char *p = (char *) e + SALIGN(sizeof(nocopy_block)) + SALIGN(nocopy_entry_klen(e)), *end = (char *) e + nocopy_entry_size(e); /* the key's bytes: nocopy_put_begin copied them */
 	zval *v = block_val(e);
 	if (x->fmt != NOCOPY_FMT_GRAPH && Z_TYPE_P(x->val) <= IS_STRING) { /* no tape: a scalar, or a string alone (not through the table, as planned) */
-		if (Z_TYPE_P(x->val) == IS_STRING) {
-			const zend_string *s = Z_STR_P(x->val);
-			size_t size = _ZSTR_STRUCT_SIZE(ZSTR_LEN(s));
-			if (UNEXPECTED((size_t) (end - p) != SALIGN(size))) {
-				return false;
-			}
-			zend_string *r = (zend_string *) p;
-			memcpy(r, s, size);
-			GC_SET_REFCOUNT(r, 2);
-			GC_TYPE_INFO(r) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
-			ZVAL_STR(v, r);
-			Z_TYPE_FLAGS_P(v) = 0;
-		} else {
-			if (UNEXPECTED(p != end)) {
-				return false;
-			}
-			ZVAL_COPY_VALUE(v, x->val);
+		if (UNEXPECTED((size_t) (end - p) != (Z_TYPE_P(x->val) == IS_STRING ? str_size(Z_STRLEN_P(x->val)) : 0))) {
+			return false;
 		}
+		nc_write_flat(e, p, x->val);
 	} else {
 		writer w = {.cursor = p, .end = end, .tape = x->z.tape, .nt = x->z.nt, .ns = x->z.ns, .narr = x->z.sh ? x->z.sh->narr : 0,
 			.str = x->z.str, .g = &x->g, .arr = x->z.sh ? x->z.sh->arr : NULL};

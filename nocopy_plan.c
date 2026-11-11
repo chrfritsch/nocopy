@@ -9,6 +9,31 @@
 #include "zend_enum.h"
 #include "zend_exceptions.h"
 
+#ifdef NOCOPY_SHARE_STATS /* bench only (NOCOPY_CFLAGS): how much of what stores hash is shared, to stderr at exit */
+static struct { uint64_t arrays, bytes, lookups, hits, hit_arrays, hit_bytes; } sst_put, sst;
+static uint64_t sst_puts, sst_by[6]; /* stores by bytes found shared: none hashed, 0%, <25, <50, <75, more */
+# define SST(x) (x)
+static void sst_end(void)
+{
+	sst.arrays += sst_put.arrays, sst.bytes += sst_put.bytes, sst.lookups += sst_put.lookups;
+	sst.hits += sst_put.hits, sst.hit_arrays += sst_put.hit_arrays, sst.hit_bytes += sst_put.hit_bytes;
+	sst_puts++;
+	sst_by[!sst_put.bytes ? 0 : !sst_put.hit_bytes ? 1 : MIN(5, 2 + 4 * sst_put.hit_bytes / sst_put.bytes)]++;
+}
+__attribute__((destructor)) static void sst_print(void)
+{
+	if (sst_puts) {
+		fprintf(stderr, "share\tstores\t%llu\thashed_arrays\t%llu\thashed_bytes\t%llu\tlookups\t%llu\thits\t%llu\thit_arrays\t%llu\thit_bytes\t%llu\t"
+			"stores_unhashed\t%llu\tshared_0\t%llu\tlt25\t%llu\tlt50\t%llu\tlt75\t%llu\tge75\t%llu\n",
+			(unsigned long long) sst_puts, (unsigned long long) sst.arrays, (unsigned long long) sst.bytes, (unsigned long long) sst.lookups,
+			(unsigned long long) sst.hits, (unsigned long long) sst.hit_arrays, (unsigned long long) sst.hit_bytes, (unsigned long long) sst_by[0],
+			(unsigned long long) sst_by[1], (unsigned long long) sst_by[2], (unsigned long long) sst_by[3], (unsigned long long) sst_by[4], (unsigned long long) sst_by[5]);
+	}
+}
+#else
+# define SST(x) ((void) 0)
+#endif
+
 /* ---- the tape and the strings ---- */
 
 static __attribute__((noinline)) void tape_grow(plan *z)
@@ -193,6 +218,7 @@ static plan_status plan_array(plan *z, zend_array *a, int depth)
 		}
 		const hnode *e = &z->sh->hv[z->sh->hc++];
 		if (e->h && e->up >= NC_SHARE_MIN && share_try(z, a, e)) {
+			SST((sst_put.hits++, sst_put.hit_arrays += e->n, sst_put.hit_bytes += e->up));
 			z->sh->hc += e->n - 1; /* its arrays: not planned */
 			return PLAN_OK;
 		}
@@ -228,6 +254,7 @@ static __attribute__((noinline)) plan_status plan_region(plan *z, zend_array *a,
 	uint32_t hc = z->sh->hc, hend = z->sh->hend, base = z->sh->hn;
 	size_t up = 0;
 	hash_array(z, a, depth, &up);
+	SST((sst_put.arrays += z->sh->hn - base, sst_put.bytes += up));
 	z->sh->hc = base;
 	z->sh->hend = z->sh->hn;
 	plan_status st = plan_array(z, a, depth);
@@ -367,6 +394,12 @@ static zend_always_inline bool next_elem(const zend_array *a, uint32_t *i, zend_
 	return false;
 }
 
+/* Short strings without a memcmp call. */
+static zend_always_inline bool same_str(const zend_string *a, const zend_string *b)
+{
+	return a == b || (ZSTR_LEN(a) == ZSTR_LEN(b) && nocopy_key_eq(ZSTR_VAL(a), ZSTR_VAL(b), (uint32_t) ZSTR_LEN(a)));
+}
+
 static zend_always_inline bool same_val(const zval *va, const zval *vb, int depth)
 {
 	if (Z_TYPE_P(va) != Z_TYPE_P(vb)) {
@@ -376,7 +409,7 @@ static zend_always_inline bool same_val(const zval *va, const zval *vb, int dept
 		case IS_LONG: case IS_DOUBLE: /* bitwise: -0.0 is not 0.0 */
 			return Z_LVAL_P(va) == Z_LVAL_P(vb);
 		case IS_STRING:
-			return zend_string_equals(Z_STR_P(va), Z_STR_P(vb));
+			return same_str(Z_STR_P(va), Z_STR_P(vb));
 		case IS_ARRAY:
 			return nc_same_array(Z_ARR_P(va), Z_ARR_P(vb), depth + 1);
 		case IS_NULL: case IS_FALSE: case IS_TRUE:
@@ -405,7 +438,7 @@ bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
 		} else {
 			for (uint32_t i = 0; i < n; i++) {
 				const Bucket *x = &a->arData[i], *y = &b->arData[i];
-				if (x->h != y->h || (x->key == NULL) != (y->key == NULL) || (x->key && !zend_string_equals(x->key, y->key))
+				if (x->h != y->h || (x->key == NULL) != (y->key == NULL) || (x->key && !same_str(x->key, y->key))
 					|| !same_val(&x->val, &y->val, depth)) {
 					return false;
 				}
@@ -418,7 +451,7 @@ bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
 	zend_ulong ha, hb;
 	zval *va, *vb;
 	while (next_elem(a, &i, &ka, &ha, &va)) {
-		if (!next_elem(b, &j, &kb, &hb, &vb) || ha != hb || (ka == NULL) != (kb == NULL) || (ka && !zend_string_equals(ka, kb))
+		if (!next_elem(b, &j, &kb, &hb, &vb) || ha != hb || (ka == NULL) != (kb == NULL) || (ka && !same_str(ka, kb))
 			|| !same_val(va, vb, depth)) {
 			return false;
 		}
@@ -431,6 +464,7 @@ static __attribute__((noinline)) bool share_try(plan *z, zend_array *a, const hn
 {
 	nc_share *sh = z->sh;
 	uint64_t h = e->h;
+	SST(sst_put.lookups++);
 	zend_array *s = nocopy_atom_find(z->av, h, (const char *) &h, sizeof h | NOCOPY_ATOM_ARRAY);
 	if (s && nc_same_array(a, s, 0)) {
 		if (UNEXPECTED(sh->narr == sh->acap)) {
@@ -896,6 +930,10 @@ plan_status nc_plan_walk(plan *z, zval *val)
 {
 	strtab_reset(&z->env->strs); /* here, not in the callers: whatever reaches the table starts with an empty one */
 	z->strs = z->env->strs;
+#ifdef NOCOPY_SHARE_STATS
+	bool sst_top = z->sight; /* a store, not an admission */
+	memset(&sst_put, 0, sizeof sst_put);
+#endif
 	plan_status st = plan_zval(z, val, 0);
 	z->sight = false; /* a later pass meets the same strings again */
 	for (int pass = 0; st == PLAN_OK && z->g->on && z->g->nrun < z->g->nres; pass++) {
@@ -908,6 +946,7 @@ plan_status nc_plan_walk(plan *z, zval *val)
 		z->n = 0;
 		z->atoms = false;
 		z->nt = z->ns = 0;
+		SST(memset(&sst_put, 0, sizeof sst_put));
 		if (z->sh) {
 			share_reset(z->sh); /* the last pass's arrays may be gone (a node's own data) */
 		}
@@ -918,6 +957,11 @@ plan_status nc_plan_walk(plan *z, zval *val)
 	if (st == PLAN_OK && graph_b_used(z->g)) {
 		z->n += SALIGN(graph_head(z->g->cls.n, z->g->nref, z->g->objs.n, z->g->nh));
 	}
+#ifdef NOCOPY_SHARE_STATS
+	if (sst_top) {
+		sst_end();
+	}
+#endif
 	return st;
 }
 
