@@ -209,7 +209,7 @@ nocopy in copy mode (CLI); 2026-11-07, Docker on arm64 (11 cores), second of two
 - APCu's puts wait behind its write lock while readers run: p99 of 1.6-3.8 ms. nocopy's stay under 50 µs at p99.
 - **Eviction** costs nocopy's gets nothing visible (p99.9 8 -> 10 µs) and its puts 0.2 -> 0.6 ms at p99.99.
 - **Contention** is where nocopy is no better at the far tail: 1-1.8 ms at p99.99 for both ops, as APCu's reads. With
-  4 workers instead of 8 it drops to 0.15-0.2 ms (APCu 0.3 ms); likely the shard lock's spin-then-yield (not profiled yet).
+  4 workers instead of 8 it drops to 0.15-0.2 ms (APCu 0.3 ms); not the shard lock: readers take none, and 8 processes timing a pure-PHP op without any cache show the same tail in this VM (p99.99 1.42 ms at 8 workers, 0.14 ms at 4; 2026-11-11).
 - Max is 2-30 ms for everyone in every scenario: VM scheduling, not the store. Bare metal is still to come.
 - Zero-copy (one `php -S` request per run) gives the same get percentiles but evicts even in **fit**: each 10 s request keeps
   up to `nsegs/4` segments pinned until it ends ([pins](../explanation/architecture.md#reads-lock-free-and-pins)), 8 of them pin the arena. php-fpm requests are short.

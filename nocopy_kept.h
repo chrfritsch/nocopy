@@ -29,7 +29,8 @@ typedef struct {
 
 extern size_t nocopy_kept_size; /* nocopy.local_size */
 
-void nocopy_kept_put(nocopy_kept_cache *k, nocopy_kept *way, const nocopy_entry *e, const zval *copy); /* a copy, or a graph template (IS_PTR) */
+/* A copy, or a graph template (IS_PTR, taken over), of `size` heap bytes: an entry pointing at shared arrays is far smaller than its copy. */
+void nocopy_kept_put(nocopy_kept_cache *k, nocopy_kept *way, const nocopy_entry *e, const zval *copy, size_t size);
 void nocopy_kept_rinit(nocopy_kept_cache *k);
 void nocopy_kept_rshutdown(nocopy_kept_cache *k); /* later fetches (session's RSHUTDOWN) copy without keeping */
 
@@ -101,12 +102,13 @@ static inline bool nocopy_kept_graph(nocopy_kept_cache *k, nocopy_env *env, cons
 	if (kz) {
 		return nocopy_tpl_read(env, Z_PTR_P(kz), rv);
 	}
+	size_t m = w ? zend_memory_usage(0) : 0;
 	nocopy_tpl *t = w ? nocopy_tpl_make(env, e) : NULL;
 	if (t) {
 		zval z;
 		ZVAL_PTR(&z, t);
-		nocopy_kept_put(k, w, e, &z);
-		return nocopy_tpl_read(env, t, rv);
+		nocopy_kept_put(k, w, e, &z, zend_memory_usage(0) - m);
+		return w->e == e ? nocopy_tpl_read(env, t, rv) : nocopy_value_read(env, e, true, rv) & NOCOPY_HIT;
 	}
 	return nocopy_value_read(env, e, true, rv) & NOCOPY_HIT;
 }
@@ -128,9 +130,10 @@ static zend_always_inline bool nocopy_kept_read(nocopy_kept_cache *k, nocopy_env
 		ZVAL_COPY(rv, kz);
 		return true;
 	}
+	size_t m = w ? zend_memory_usage(0) : 0;
 	nocopy_value_copy(env, rv, v);
 	if (w) {
-		nocopy_kept_put(k, w, e, rv);
+		nocopy_kept_put(k, w, e, rv, zend_memory_usage(0) - m);
 	}
 	return true;
 }
