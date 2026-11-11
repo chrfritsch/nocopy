@@ -3,5 +3,8 @@
 #   docker run --rm -v "$PWD":/src:ro nocopy-zts:8.4 /src/docker/test.sh
 ARG PHP=8.4
 FROM php:${PHP}-zts
+# PECL releases as tarballs pinned by checksum (no pecl, no PIE): bump version and sha256 together
+ADD --checksum=sha256:27c4b2ca4bfa67efebe84541ac4d25547ba75b603139c8f0e136780d080fb924 https://pecl.php.net/get/parallel-1.2.15.tgz /tmp/
 RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config && rm -rf /var/lib/apt/lists/* \
- && docker-php-ext-install pcntl && pecl install parallel && docker-php-ext-enable parallel
+ && docker-php-ext-install pcntl \
+ && cd /tmp && tar xzf parallel-1.2.15.tgz && docker-php-ext-install /tmp/parallel-1.2.15 && rm -rf /tmp/parallel-* /tmp/package*.xml

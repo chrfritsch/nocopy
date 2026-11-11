@@ -3,10 +3,12 @@
 #   docker build --build-arg PHP=8.5 -f docker/Dockerfile.debug -t nocopy-debug:8.5 docker   (needs nocopy-linux:8.5: ./dev image)
 ARG PHP=8.5
 FROM nocopy-linux:${PHP}
+# PECL releases as tarballs pinned by checksum (no pecl, no PIE): bump version and sha256 together
+ADD --checksum=sha256:91da821443db125282a6aea039f24588dd28ff5d71e8187f6ecc41165bceafbc https://pecl.php.net/get/igbinary-3.2.17RC1.tgz /tmp/
 RUN docker-php-source extract && cd /usr/src/php \
  && ./configure --prefix=/opt/php-debug --enable-debug --disable-all --disable-cgi --disable-phpdbg --enable-pcntl --enable-posix --enable-session >/dev/null \
  && make -j"$(nproc)" >/dev/null && make install >/dev/null && docker-php-source delete \
- && cd /tmp && pecl download igbinary >/dev/null && tar xzf igbinary-*.tgz && cd igbinary-*/ \
+ && cd /tmp && tar xzf igbinary-3.2.17RC1.tgz && cd igbinary-*/ \
  && /opt/php-debug/bin/phpize >/dev/null && ./configure --with-php-config=/opt/php-debug/bin/php-config >/dev/null && make -j"$(nproc)" >/dev/null && make install >/dev/null \
  && rm -rf /tmp/igbinary* /tmp/package.xml
 ENV PATH=/opt/php-debug/bin:$PATH

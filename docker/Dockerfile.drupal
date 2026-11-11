@@ -1,10 +1,12 @@
 # Drupal test + bench image: nocopy-linux plus Drupal's PHP extensions, MariaDB and composer. phpredis only for the bench's drupal/redis baseline.
 #   docker build --build-arg PHP=8.5 -t nocopy-linux:8.5 docker && docker build -t nocopy-drupal -f docker/Dockerfile.drupal docker
 FROM nocopy-linux:8.5
+# PECL releases as tarballs pinned by checksum (no pecl, no PIE): bump version and sha256 together
+ADD --checksum=sha256:0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5 https://pecl.php.net/get/redis-6.3.0.tgz /tmp/
 RUN apt-get update && apt-get install -y --no-install-recommends libpng-dev libjpeg-dev libfreetype-dev libzip-dev unzip git mariadb-server \
  && rm -rf /var/lib/apt/lists/* \
  && docker-php-ext-configure gd --with-jpeg --with-freetype && docker-php-ext-install gd zip pdo_mysql \
- && pecl install redis </dev/null && rm -f /usr/local/etc/php/conf.d/*redis* \
+ && cd /tmp && tar xzf redis-6.3.0.tgz && docker-php-ext-install /tmp/redis-6.3.0 && rm -rf /tmp/redis-* /tmp/package*.xml && rm -f /usr/local/etc/php/conf.d/*redis* \
  && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 # perf and strace for drupal-bench.sh PERF_ONLY=1 / TRACE_ONLY=1
 RUN apt-get update && apt-get install -y --no-install-recommends linux-perf strace && rm -rf /var/lib/apt/lists/*

@@ -3,7 +3,9 @@
 # Same pages and OPcache settings as fpm-bench.sh; nocopy runs in copy mode here (kept copies, nocopy.local_size). Run via ./dev fpbench.
 set -e
 command -v ab >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS apache2-utils >/dev/null 2>&1; }
-[ -f "$(php-config --extension-dir)/apcu.so" ] || { pecl install apcu >/dev/null 2>&1 || { echo "apcu build failed"; exit 1; }; }
+[ -f "$(php-config --extension-dir)/apcu.so" ] || (cd /tmp && curl -fsSLO https://pecl.php.net/get/apcu-5.1.28.tgz \
+  && echo "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf  apcu-5.1.28.tgz" | sha256sum -c - >/dev/null \
+  && tar xzf apcu-5.1.28.tgz && cd apcu-5.1.28 && phpize && ./configure && make -j"$(nproc)" install) >/dev/null 2>&1 || { echo "apcu build failed"; exit 1; }
 rm -rf /build && mkdir /build && cp -R /src/*.c /src/*.h /src/config.m4 /src/arena /src/third_party /build/
 cd /build && phpize >/dev/null && ./configure >/dev/null && make -j"$(nproc)" >/dev/null 2>make.err || { cat make.err; exit 1; }
 W=${WORKERS:-8}; N=${REQS:-20000}; C=${CONC:-8}
