@@ -129,6 +129,13 @@ its result up front**: no rehash, 10 keys 122 -> 109 ns.
 10 rows 713 -> 625 ns (+14%), 1k rows 67.9 -> 60.5 µs (+12%), 1k unserialized keys +4%; int, string, object within noise.
 Next in the cachegrind profile: `hash_array` (~200 Ir/op, ~60 per 3-element row). Rejected: an `if` chain instead of the `switch` in `hash_zval` (perf put 15% of its samples on the dispatch): 199 -> 207 Ir/op, array stores -2 to -5% (`ab.sh write`, best of 7).
 
+**Cost of every API call** (`./dev cg` instructions per call, `./dev perf` ns, copy mode, PHP 8.5 arm64, `bench/prof.php`; the loop itself is ~41 Ir, ~3 ns):
+get int 270 Ir / 12.4 ns (`nocopy_fetch` 162), miss 207 / 9.3, ttl 304 / 16.2, 100 B string 471 / 22.6, by-ref `$hit` 394 / 17.2, `get_multiple` of 10 2957 / 127;
+put int 652 Ir / 31.8 ns (`put` 403), ttl 698 / 34.3, add (fails) 626 / 33.9, put+delete 967 / 39.2, `put_multiple` of 10 5644 / 270; `inc` 291 / 12.5, with ttl 366 / 21.9,
+`cas` 370 / 16.8, `delete` miss 218 / 9.7, `delete_multiple` of 10 misses 1152 / 47.6, `remember` hit 383 / 21.5, miss 2447 / 160, `shared_with` 272 / 11.2;
+`stats` 15570 -> 14777 Ir (array pre-sized: 824 ns before), `keys('m')` over 100k entries 8.9M Ir (89 per entry walked). Nothing but arrays and objects
+(see Writes) stands out: every scalar call is within ~3 ns of PHP's own call overhead, so no change was made to them.
+
 **Short value strings are deduped and map hashes sized to their elements**, for the arena's size: Drupal's cache values took
 3.3x igbinary's bytes once objects became graph nodes (bench arena 11.1 -> 19.7 MB). Every row of Drupal's database bins after
 a warmed `./dev drupal-bench` (786 values), put one by one: serialize 6.26 MB, igbinary 3.80 MB, nocopy 12.62 -> 10.77 MB (-15%).

@@ -103,9 +103,9 @@ case $cmd in
               run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro dunglas/frankenphp:1-php8.5 sh /src/docker/fp-bench.sh ;;
   stampede)   img; run "nocopy-linux:$PHP" /src/docker/stampede.sh "$@" ;;
   cg)         img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
-              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -e TOP -e ANNOTATE -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
+              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
   cg)         img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
-              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -e TOP -e ANNOTATE -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
+              run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e N -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/cg.sh ;;
   perf)       img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.perf -t "nocopy-perf:$PHP" docker >/dev/null; mkdir -p .cache/perf
               run --privileged --shm-size=1g -e OPS="${*:-$OPS}" -e MODES -e ANNOTATE -e TOP -v "$PWD/.cache/perf":/out "nocopy-perf:$PHP" /src/docker/perf.sh ;;
   hitratio)   PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null

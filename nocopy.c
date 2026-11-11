@@ -307,7 +307,7 @@ PHP_FUNCTION(nocopy_stats)
 	if (nocopy_attached()) {
 		nocopy_stats(&s);
 	}
-	array_init(return_value);
+	array_init_size(return_value, 32);
 	add_assoc_long(return_value, "size", (zend_long) nocopy_arena_size());
 	add_assoc_long(return_value, "used", s.used);
 	add_assoc_long(return_value, "segment_size", s.segment_size);
