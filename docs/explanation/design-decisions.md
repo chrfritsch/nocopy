@@ -292,6 +292,18 @@ loads and all hits on scans.
 
 **No `nocopy.ttl` default:** it expired Drupal's cache tag tokens. Callers pass `$ttl`.
 
+**Drupal `get()` has a path of its own, and tags are preloaded only with `nocopy.valkey`:** `get()` went through
+`getMultiple()` (key maps, `array_diff`, a tag preload whose tags `isValid()` asks for right away), and the checksum trait's
+`isValid()` copies and merges arrays even when every tag is loaded. Now: one `nocopy_get_multiple` of version key and item
+(still one round trip on a Valkey miss; two `nocopy_get` would be two), prefix and version key built once, the item object
+cast from an array, `isValid()` in `NocopyCacheTagsChecksum` summing the loaded tokens itself and falling back to the trait
+when a tag is missing, delayed or waiting for preload. `getMultiple()` preloads tags only with Valkey, where one lookup saves
+round trips; locally it cost more than the lookups. `./dev drupal-get`, ns per call, best of 5 x 20k, CLI (copy mode),
+bare `nocopy_get` 34: miss 499 -> 127, hit without tags 935 -> 335, 3 tags 1,572 -> 533, 20 tags 3,447 -> 1,170,
+3 tags expiring 1,684 -> 600, `getMultiple` of 10 per item 929 -> 510, of 10 misses 130 -> 99. A miss no longer creates a
+missing bin version (the next `set()` does). What is left of a hit: the copy of the item (zero-copy under fpm), the object,
+and `explode()` of the tags (stored as one string). Not measured per page.
+
 **Drupal bin version in the item, not the key:** a versioned key orphaned every item on `deleteAll()`, and with
 `nocopy.valkey` the TTL-less small bins (config, discovery, ...) then stayed in Valkey for good after each `drush cr`.
 Not Redis's `last_delete_all` timestamp: that compares clocks of different servers. `invalidateAll()` deletes (as Redis

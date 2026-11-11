@@ -36,6 +36,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   big [sizes="1G 4G"] [secs=20]  large arenas: create/attach time, fill, eviction pauses (needs RAM for the arena)
   soak [minutes=60] [workers=8] [interval_s=30]  long mixed workload, one line per interval to spot drift
   tail [workers=8] [secs=10] [scenarios]  get/put latency percentiles (p50..p99.99, max) under eviction and contention, vs APCu
+  drupal-get                  Drupal backend's get()/getMultiple() in ns per call (bench/drupal/get.php; after ./dev drupal)
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, ROWS_ONLY=1 its DB cache rows in an arena, PERF_ONLY=1 perf profile; CONFIGS=...)
   cg [ops...]                 cachegrind instructions per op of bench/prof.php (N, TOP, ANNOTATE=1; .cache/perf)
   cg [ops...]                 cachegrind instructions per op of bench/prof.php (N, TOP, ANNOTATE=1; .cache/perf)
@@ -112,6 +113,8 @@ case $cmd in
               run --shm-size=1g nocopy-drupal /src/docker/hitratio-compare.sh ;;
   trace)      PHP=8.5; img; docker build -q -t nocopy-trace -f docker/Dockerfile.trace docker >/dev/null
               run -e SIZES -e ALGOS -e N nocopy-trace /src/docker/trace.sh "$@" ;;
+  drupal-get) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
+              run -v nocopy-drupal-test:/drupal nocopy-drupal sh -c '/src/docker/build.sh >/dev/null && php -d extension=/build/modules/nocopy.so -d nocopy.shm_name=/nocopy-drupal-get -d opcache.enable_cli=1 /src/bench/drupal/get.php /drupal "${1:-/src/drupal}"; rc=$?; rm -f /dev/shm/nocopy-drupal-get.*; exit $rc' drupal-get "$@" ;;
   drupal-bench) PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run --shm-size=1g --cap-add=SYS_PTRACE ${PERF_ONLY:+--privileged} -e NOCOPY_CFLAGS -e MEM_ONLY -e ROWS_ONLY -e REPLAY -e PERF_ONLY -e TRACE_ONLY -e PERF_N -e CONFIGS -v nocopy-drupal-bench:/site -v "$PWD/bench/results-drupal":/out nocopy-drupal /src/docker/drupal-bench.sh ;;
   shell)      img; docker run --rm -it --shm-size=1g -v "$PWD":/src:ro "nocopy-linux:$PHP" sh -c \

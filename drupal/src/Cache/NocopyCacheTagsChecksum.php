@@ -18,13 +18,30 @@ use Drupal\Core\Site\Settings;
  */
 class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsInvalidatorInterface, CacheTagsChecksumPreloadInterface {
 
-  use CacheTagsChecksumTrait;
+  use CacheTagsChecksumTrait {
+    isValid as private traitIsValid;
+  }
 
   protected string $prefix;
 
   public function __construct(string $root, string $sitePath) {
     NocopyBackend::requireShared();
     $this->prefix = ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.tags' : Settings::getApcuPrefix('nocopy_tags', $root, $sitePath);
+  }
+
+  // Tags all loaded, nothing delayed or to preload: just the sum.
+  public function isValid($checksum, array $tags) {
+    if ($this->delayedTags || $this->preloadTags) {
+      return $this->traitIsValid($checksum, $tags);
+    }
+    $sum = 0;
+    foreach ($tags as $tag) {
+      if (!isset($this->tagCache[$tag])) {
+        return $this->traitIsValid($checksum, $tags);
+      }
+      $sum += $this->tagCache[$tag];
+    }
+    return $checksum == $sum;
   }
 
   public function getTagKey(string $tag): string {

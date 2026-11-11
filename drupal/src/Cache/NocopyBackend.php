@@ -31,6 +31,9 @@ class NocopyBackend implements CacheBackendInterface {
   // cid => TRUE: deleted inside a transaction, removed after the commit (a concurrent request could refill them from uncommitted data).
   protected array $delayedDeletions = [];
 
+  // "<site>::<bin>::", and the bin's version key.
+  private string $prefix, $versionKey;
+
   public function __construct(
     protected string $bin,
     protected string $sitePrefix,
@@ -42,6 +45,9 @@ class NocopyBackend implements CacheBackendInterface {
     if ($requireShared) {
       self::requireShared();
     }
+    $this->prefix = $sitePrefix . '::' . $bin . '::';
+    // One colon: no cid key can match it.
+    $this->versionKey = $sitePrefix . '::' . $bin . ':version';
   }
 
   private static bool $shared = FALSE;
@@ -59,7 +65,7 @@ class NocopyBackend implements CacheBackendInterface {
   }
 
   protected function key(string $cid): string {
-    return $this->sitePrefix . '::' . $this->bin . '::' . $cid;
+    return $this->prefix . $cid;
   }
 
   protected function keys(array $cids): array {
@@ -70,19 +76,19 @@ class NocopyBackend implements CacheBackendInterface {
   // Lost (new bin, eviction): a fresh version. That only costs misses, a default could revive deleted items.
   // $found: a nocopy_get_multiple() result that asked for versionKey() too.
   protected function version(?array $found = NULL): string {
-    $version = $found === NULL ? nocopy_get($this->versionKey()) : $found[$this->versionKey()] ?? NULL;
+    $version = $found === NULL ? nocopy_get($this->versionKey) : $found[$this->versionKey] ?? NULL;
     return is_string($version) ? $version : $this->newVersion();
   }
 
   private function newVersion(): string {
     $version = bin2hex(random_bytes(6));
-    nocopy_put($this->versionKey(), $version);
+    nocopy_put($this->versionKey, $version);
     return $version;
   }
 
   // key => stored item, for the keys written under the bin's current version. With nocopy.valkey every local miss in one round trip.
   protected function fetchCurrent(array $keys): array {
-    $found = nocopy_get_multiple([$this->versionKey(), ...$keys]);
+    $found = nocopy_get_multiple([$this->versionKey, ...$keys]);
     $version = $this->version($found);
     $items = [];
     foreach ($keys as $key) {
@@ -93,14 +99,19 @@ class NocopyBackend implements CacheBackendInterface {
     return $items;
   }
 
-  // One colon: no cid key can match it.
   public function versionKey(): string {
-    return $this->sitePrefix . '::' . $this->bin . ':version';
+    return $this->versionKey;
   }
 
+  // The hot path: no maps, and no tag preload (its tags are checked right away).
   public function get($cid, $allow_invalid = FALSE) {
-    $cids = [$cid];
-    return $this->getMultiple($cids, $allow_invalid)[$cid] ?? FALSE;
+    $key = $this->prefix . $cid;
+    $found = nocopy_get_multiple([$this->versionKey, $key]);
+    $item = $found[$key] ?? NULL;
+    if ($item === NULL || ($item[self::VERSION] ?? NULL) !== $this->version($found) || isset($this->delayedDeletions[$cid])) {
+      return FALSE;
+    }
+    return $this->prepareItem($cid, $item, $allow_invalid);
   }
 
   public function getMultiple(&$cids, $allow_invalid = FALSE) {
@@ -114,7 +125,8 @@ class NocopyBackend implements CacheBackendInterface {
         $raw[$keys[$key]] = $item;
       }
     }
-    if ($raw && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
+    // One lookup for every item's tags saves round trips to Valkey; locally it costs more than it saves.
+    if (count($raw) > 1 && nocopy_shared_with() === 'valkey' && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
       $tags = [];
       foreach ($raw as $item) {
         if ($item[self::TAGS] !== '') {
@@ -123,27 +135,28 @@ class NocopyBackend implements CacheBackendInterface {
       }
       $this->checksumProvider->registerCacheTagsForPreload(array_merge(...$tags));
     }
-    $cache = [];
-    foreach ($raw as $cid => $item) {
-      if ($prepared = $this->prepareItem($cid, $item, $allow_invalid)) {
+    $cache = $missing = [];
+    foreach ($cids as $cid) {
+      if (isset($raw[$cid]) && ($prepared = $this->prepareItem($cid, $raw[$cid], $allow_invalid))) {
         $cache[$cid] = $prepared;
       }
+      else {
+        $missing[] = $cid;
+      }
     }
-    $cids = array_values(array_diff($cids, array_keys($cache)));
+    $cids = $missing;
     return $cache;
   }
 
   protected function prepareItem(string|int $cid, array $item, bool $allow_invalid): object|false {
-    $cache = new \stdClass();
-    $cache->cid = $cid;
-    $cache->data = $item[self::DATA];
-    $cache->created = $item[self::CREATED];
-    $cache->expire = $item[self::EXPIRE];
-    $cache->tags = $item[self::TAGS] === '' ? [] : explode(' ', $item[self::TAGS]);
-    $cache->checksum = $item[self::CHECKSUM];
-    $cache->valid = ($cache->expire == CacheBackendInterface::CACHE_PERMANENT || $cache->expire >= $this->time->getRequestTime())
-      && $this->checksumProvider->isValid($cache->checksum, $cache->tags);
-    return $allow_invalid || $cache->valid ? $cache : FALSE;
+    [$data, $created, $expire, $tags, $checksum] = $item;
+    $tags = $tags === '' ? [] : explode(' ', $tags);
+    $valid = ($expire == CacheBackendInterface::CACHE_PERMANENT || $expire >= $this->time->getRequestTime())
+      && (!$tags || $this->checksumProvider->isValid($checksum, $tags));
+    if (!$valid && !$allow_invalid) {
+      return FALSE;
+    }
+    return (object) ['cid' => $cid, 'data' => $data, 'created' => $created, 'expire' => $expire, 'tags' => $tags, 'checksum' => $checksum, 'valid' => $valid];
   }
 
   public function set($cid, $data, $expire = CacheBackendInterface::CACHE_PERMANENT, array $tags = []) {
