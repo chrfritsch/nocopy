@@ -4,9 +4,9 @@
 // apc.enabled/apc.enable_cli come from the extension and only feed apcu_enabled(), as callers check them.
 // ponytail: no apcu_key_info or other apc.* INI; cache_info/sma_info are summaries without entry lists.
 
-if (!function_exists('nocopy_get') || extension_loaded('apcu')) {
-    return;
-}
+// conditional: top-level functions are bound at compile time, so a guard with return cannot stop a second include
+// (php -S runs auto_prepend_file for the router and again for the script it routes to)
+if (function_exists('nocopy_get') && !extension_loaded('apcu') && !function_exists('apcu_fetch')) {
 
 function apcu_enabled(): bool
 {
@@ -140,24 +140,23 @@ function apcu_sma_info(bool $limited = false): array|false
     return $limited ? $info : $info + ['block_lists' => [[]]];
 }
 
-const APC_LIST_ACTIVE = 1;
-const APC_LIST_DELETED = 2;
-const APC_ITER_TYPE = 1;
-const APC_ITER_KEY = 2;
-const APC_ITER_VALUE = 4;
-const APC_ITER_NUM_HITS = 8;
-const APC_ITER_MTIME = 16;
-const APC_ITER_CTIME = 32;
-const APC_ITER_DTIME = 64;
-const APC_ITER_ATIME = 128;
-const APC_ITER_REFCOUNT = 256;
-const APC_ITER_MEM_SIZE = 512;
-const APC_ITER_TTL = 1024;
-const APC_ITER_NONE = 0;
-const APC_ITER_ALL = 0xffffffff;
+define('APC_LIST_ACTIVE', 1);
+define('APC_LIST_DELETED', 2);
+define('APC_ITER_TYPE', 1);
+define('APC_ITER_KEY', 2);
+define('APC_ITER_VALUE', 4);
+define('APC_ITER_NUM_HITS', 8);
+define('APC_ITER_MTIME', 16);
+define('APC_ITER_CTIME', 32);
+define('APC_ITER_DTIME', 64);
+define('APC_ITER_ATIME', 128);
+define('APC_ITER_REFCOUNT', 256);
+define('APC_ITER_MEM_SIZE', 512);
+define('APC_ITER_TTL', 1024);
+define('APC_ITER_NONE', 0);
+define('APC_ITER_ALL', 0xffffffff);
 
 /** Entries of nocopy_keys(), taken at the first use or rewind; values fetched as current() reaches them. No hit counts (0). */
-// conditional: a plain declaration would be bound at compile time, before the return above
 if (!class_exists('APCUIterator', false)) {
 class APCUIterator implements Iterator
 {
@@ -270,5 +269,6 @@ class APCUIterator implements Iterator
     {
         return count($this->keys());
     }
+}
 }
 }
