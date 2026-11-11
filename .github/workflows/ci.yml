@@ -35,6 +35,9 @@ jobs:
       # PHP built with --enable-debug: the engine's own assertions (immutable refcounts, hash tables)
       - run: ./dev debug
       - run: ./dev debug fuzz
+      # same PHP, Zend allocator on: memory a request leaks fails
+      - run: ./dev leaks
+      - run: ./dev leaks fuzz
       - run: ./dev clang
       - run: ./dev apcu
   zts:

@@ -12,6 +12,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   novalkey [tests ...]        same, built with --disable-nocopy-valkey
   asan [tests ...]            same, built with ASan + UBSan and nocopy's own assertions
   debug [tests ...]           same as asan, on a debug build of PHP (the engine's assertions; built once, cached); debug fuzz [...]: the fuzzer there
+  leaks [tests ...]           suite on the debug PHP without ASan, Zend allocator on: memory a request leaks fails the test; leaks fuzz [...]: the fuzzer there
   clang [tests ...]           same, built with clang
   zts [tests ...]             suite on thread-safe PHP 8.4 (ext-parallel)
   stress [loops=30]           concurrency tests in a loop, stops at first failure
@@ -62,6 +63,9 @@ case $cmd in
   debug)      img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.debug -t "nocopy-debug:$PHP" docker >/dev/null
               if [ "$1" = fuzz ]; then shift; run -e FUZZ_VALUE "nocopy-debug:$PHP" /src/docker/fuzz.sh "$@"
               else run -e NOCOPY_ASAN=1 "nocopy-debug:$PHP" /src/docker/test.sh "$@"; fi ;;
+  leaks)      img; docker build -q --build-arg PHP="$PHP" -f docker/Dockerfile.debug -t "nocopy-debug:$PHP" docker >/dev/null
+              if [ "$1" = fuzz ]; then shift; run -e FUZZ_VALUE -e NOCOPY_LEAKS=1 "nocopy-debug:$PHP" /src/docker/fuzz.sh "$@"
+              else run -e NOCOPY_CFLAGS=-DNOCOPY_DEBUG "nocopy-debug:$PHP" /src/docker/test.sh "$@"; fi ;;
   zts)        docker build -q --build-arg PHP=8.4 -f docker/Dockerfile.zts -t nocopy-zts:8.4 docker >/dev/null
               run nocopy-zts:8.4 /src/docker/test.sh "$@" ;;
   clang)      img; run -e CC=clang "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
@@ -85,7 +89,7 @@ case $cmd in
   apcu)       img; run "nocopy-linux:$PHP" sh -c '/src/docker/build.sh >/dev/null && /src/scripts/apcu-suite.sh' ;;
   drupal)     PHP=8.5; img; docker build -q -t nocopy-drupal -f docker/Dockerfile.drupal docker >/dev/null
               run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
-  ci)         for c in layers tidy test novalkey asan debug clang stress c fuzz "debug fuzz" shm pie zts frankenphp symfony apcu; do
+  ci)         for c in layers tidy test novalkey asan debug leaks clang stress c fuzz "debug fuzz" "leaks fuzz" shm pie zts frankenphp symfony apcu; do
                 echo "== $c"; ./dev $c || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;

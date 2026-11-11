@@ -323,6 +323,15 @@ int main(int argc, char **argv)
 		failures++;
 	}
 	nocopy_release(&mc);
+	nocopy_stats_t z; /* every thread released: a clear gives every segment back */
+	nocopy_clear();
+	nocopy_stats(&z);
+	if (z.entries || z.used || z.dead_segments || z.pinned_segments || z.kept_segments || z.leases || z.free_segments != z.segments) {
+		fprintf(stderr, "FAIL leftovers after clear: entries %llu, used %llu, dead %u, pinned %u, kept %u, leases %llu, free %u of %u\n",
+			(unsigned long long) z.entries, (unsigned long long) z.used, z.dead_segments, z.pinned_segments, z.kept_segments,
+			(unsigned long long) z.leases, z.free_segments, z.segments);
+		failures++;
+	}
 	printf("%zu MB, %d threads, %ds: %llu entries, %u shards, %llu expunges, %llu MB moved, %llu bumps (%d/%d counters kept), %llu atoms, %llu rotations, failures %llu\n",
 		mb, nthreads, seconds, (unsigned long long) s.entries, s.shards, (unsigned long long) s.expunges, (unsigned long long) (s.evacuated >> 20),
 		(unsigned long long) bumps, found, CTRS, (unsigned long long) s.atoms, (unsigned long long) s.atom_rotations, (unsigned long long) failures);
