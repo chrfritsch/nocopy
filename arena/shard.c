@@ -48,6 +48,13 @@ static void shard_lock(ar_shard *sh)
 
 static void shard_unlock(ar_shard *sh) { ar_lock_release(&sh->lock); }
 
+/* A reader stuck behind an odd mseq: its delete's holder may have died mid-shift; taking the lock steals and repairs. */
+__attribute__((cold, noinline)) void ar_shard_unstick(uint32_t i)
+{
+	shard_lock(&ar_shards[i]);
+	shard_unlock(&ar_shards[i]);
+}
+
 static ar_index *ix_of(const ar_shard *sh) { return &ar_ix[sh->idx]; }
 static nocopy_entry *slot_entry(ar_slot s) { return ar_at8(ar_slot_off8(s)); }
 static ar_slot slot_for(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
@@ -275,7 +282,7 @@ static nocopy_entry *alloc_relocking(ar_shard *sh, size_t total, time_t exp, tim
 	if (total > (size_t) (fair_segs - 1) << ar_seg_shift) {
 		return NULL; /* bigger than a shard's share */
 	}
-	int b = ar_log_bucket(exp ? exp - now : 0);
+	int b = ar_log_bucket(exp ? (exp > now ? exp - now : 1) : 0); /* exp == now is not bucket 0, which never expires */
 	if (sh->log.exp_idle != now) { /* the common case: nothing left to expire this second */
 		expire_step(sh, now, 64);
 	}

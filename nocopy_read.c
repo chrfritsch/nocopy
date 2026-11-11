@@ -242,13 +242,13 @@ static void graph_dyn(gout *o, zend_object *obj, const zval *src)
 /* The slots, NC_DEFAULT ones (left out by __sleep()) from the class defaults as unserialize() leaves them; then the dynamic properties. */
 static void graph_slots(gout *o, zend_object *obj, const nc_obj *n, uint32_t np)
 {
-	zval *dst = obj->properties_table, *def = obj->ce->default_properties_table;
+	zval *dst = obj->properties_table, *def = CE_DEFAULT_PROPERTIES_TABLE(obj->ce); /* evaluated: the raw table of an immutable (opcache) class keeps constant ASTs */
 	for (uint32_t k = 0; k < np; k++) {
-		if (UNEXPECTED(Z_TYPE(n->props[k]) == NC_DEFAULT)) {
-			ZVAL_COPY_OR_DUP_PROP(&dst[k], &def[k]);
+		if (UNEXPECTED(Z_TYPE(n->props[k]) == NC_DEFAULT || Z_TYPE(n->props[k]) == IS_UNDEF)) {
+			ZVAL_COPY_OR_DUP_PROP(&dst[k], &def[k]); /* unset too: unserialize() brings back the default */
 		} else {
 			graph_zval(o, &dst[k], &n->props[k]);
-			Z_PROP_FLAG_P(&dst[k]) = Z_TYPE(dst[k]) == IS_UNDEF ? (Z_PROP_FLAG_P(&def[k]) & IS_PROP_UNINIT) : 0; /* as unserialize(): uninitialized, not unset */
+			Z_PROP_FLAG_P(&dst[k]) = 0;
 		}
 	}
 	if (n->dyn) {

@@ -621,7 +621,7 @@ static ZEND_NORETURN void vk_listen(void)
 	}
 }
 
-/* Nothing of the worker stays open in the listener: a server's listening socket would block its restart. */
+/* Nothing of the worker stays open in the listener (a server's listening socket would block its restart), but its liveness lock. */
 static void close_inherited(void)
 {
 	DIR *d = opendir("/proc/self/fd");
@@ -632,14 +632,16 @@ static void close_inherited(void)
 		struct dirent *e;
 		while ((e = readdir(d))) {
 			int fd = atoi(e->d_name);
-			if (fd > 2 && fd != dirfd(d)) {
+			if (fd > 2 && fd != dirfd(d) && fd != nocopy_live_fd()) {
 				close(fd);
 			}
 		}
 		closedir(d);
 	} else {
 		for (int fd = 3; fd < 4096; fd++) {
-			close(fd);
+			if (fd != nocopy_live_fd()) {
+				close(fd);
+			}
 		}
 	}
 	int null = open("/dev/null", O_RDWR);
@@ -675,6 +677,7 @@ static void vk_spawn(void)
 	prctl(PR_SET_NAME, "nocopy-valkey");
 #endif
 	nocopy_arena_unhold();
+	nocopy_request_end(&NOCOPY_G(ctx)); /* the spawner's pins: the listener reads no values */
 	close_inherited();
 	__atomic_store_n(&NOCOPY_SHARED->vk.vk_pid, (uint32_t) getpid(), __ATOMIC_RELEASE);
 	vk_listen();
@@ -1098,6 +1101,7 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 		return NOCOPY_REFUSED;
 	}
+	uint64_t gen = vk_gen(); /* add: an invalidation before our local copy may have been another writer's */
 	int r = vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_px(expires), o->add_only);
 	zend_string_release(enc);
 	if (r != 1) {
@@ -1108,6 +1112,9 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 	if (o->add_only && nocopy_put_local(key, val, &local, user) == NOCOPY_REFUSED) {
 		vk_unlink_n(1, &key, &gone); /* a resource: APCu refuses it */
 		return NOCOPY_REFUSED;
+	}
+	if (o->add_only && vk_gen() != gen) {
+		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
 	}
 	return NOCOPY_OK;
 }

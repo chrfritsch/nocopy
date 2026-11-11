@@ -114,6 +114,8 @@ bool ar_owner_dead(uint64_t id)
 }
 #endif
 
+int nocopy_live_fd(void) { return live_fd; }
+
 void ar_proc_detach(void)
 {
 	if (live_fd >= 0) {

@@ -467,7 +467,12 @@ static bool short_lived_sapi(void)
 /* A byte size (K, M, G) into the size_t at mh_arg1. */
 static ZEND_INI_MH(OnSize)
 {
-	*(size_t *) mh_arg1 = (size_t) zend_ini_parse_quantity_warn(new_value, entry->name);
+	zend_long v = zend_ini_parse_quantity_warn(new_value, entry->name);
+	if (v < 0) {
+		php_error_docref(NULL, E_CORE_WARNING, "nocopy: %s must not be negative, using the default", ZSTR_VAL(entry->name));
+		return FAILURE;
+	}
+	*(size_t *) mh_arg1 = (size_t) v;
 	return SUCCESS;
 }
 
@@ -479,7 +484,7 @@ static ZEND_INI_MH(OnHint)
 
 static ZEND_INI_MH(OnZeroCopySeconds)
 {
-	zero_copy_seconds = ZEND_STRTOL(ZSTR_VAL(new_value), NULL, 10);
+	zero_copy_seconds = MIN(ZEND_STRTOL(ZSTR_VAL(new_value), NULL, 10), 1000000000); /* * 1000 must not overflow */
 	return SUCCESS;
 }
 

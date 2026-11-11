@@ -76,8 +76,8 @@ bool nocopy_serialize(zval *val, zval *out, nocopy_fmt *fmt)
 bool nocopy_unserialize(zval *rv, const char *buf, size_t len, nocopy_fmt fmt)
 {
 	bool ok;
+	ZVAL_NULL(rv); /* a rejected input may leave it unwritten: the failure path frees it */
 	if (fmt == NOCOPY_FMT_IGB) {
-		ZVAL_NULL(rv);
 		ok = igb_unser && igb_unser((const uint8_t *) buf, len, rv) == 0;
 	} else {
 		const unsigned char *p = (const unsigned char *) buf;

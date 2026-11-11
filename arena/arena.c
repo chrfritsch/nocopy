@@ -94,7 +94,7 @@ bool nocopy_after_fork(nocopy_ctx *c)
 void nocopy_request_end(nocopy_ctx *c)
 {
 	if (c->atom.anest) { /* a write bailed out between nocopy_atom_begin and _end */
-		c->atom.anest = 1;
+		c->atom.anest = c->pins.slot >= 0; /* a fork that got no slot has no view of its own */
 		ar_atom_end(&c->atom, c->pins.slot);
 	}
 	c->pin_refs = 0;

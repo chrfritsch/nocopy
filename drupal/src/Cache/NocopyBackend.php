@@ -172,7 +172,7 @@ class NocopyBackend implements CacheBackendInterface {
     if ($expire == CacheBackendInterface::CACHE_PERMANENT) {
       return nocopy_shared_with() === 'valkey' && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
     }
-    return max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
+    return (int) max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }
 
   // One nocopy_put_multiple() per TTL: with nocopy.valkey one pipeline each. Tags first, in one lookup.

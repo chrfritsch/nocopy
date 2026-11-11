@@ -79,6 +79,7 @@ nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 void nocopy_put_abort(nocopy_put *p); /* the block is dropped, unpublished */
 
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen); /* true if it was live */
+void ar_shard_unstick(uint32_t i); /* lock-free readers: takes and drops shard i's lock */
 #define NOCOPY_GONE (-1)
 /* fn(e, arg) on h's live entry under its shard lock; NOCOPY_GONE: none, else fn's result.
  * fn changes the payload in place only, with atomics (readers copy without the lock); no allocation, no arena calls, no user code. */

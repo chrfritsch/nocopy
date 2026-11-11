@@ -130,9 +130,38 @@ static void huge_hint(void)
 	assert(ar_layout_plan(&l, 32 << 20, 4096).code == NOCOPY_ERR_NONE);
 }
 
+static time_t clk = 1700000000;
+static time_t fake(void) { return clk; }
+
+/* An entry expiring this very second joins bucket 0's segment, whose expiry walk then dropped the never-expiring ones. */
+static void expires_now(void)
+{
+	char name[48];
+	nocopy_named nm;
+	snprintf(name, sizeof name, "/nocopy-expnow-%d", (int) getpid());
+	assert(nocopy_arena_open(&(nocopy_config) {.name = name, .size = 4 << 20, .abi = 1, .rebase = rebase}, &nm).code == NOCOPY_ERR_NONE);
+	shm_unlink(nm.name);
+	nocopy_set_clock(fake);
+	nocopy_ctx c;
+	nocopy_ctx_init(&c);
+	assert(nocopy_claim(&c));
+	const char *ks[] = {"forever", "edge", "later"};
+	for (int i = 0; i < 3; i++) {
+		nocopy_put_req q = {.h = hash(ks[i]), .key = ks[i], .klen = (uint32_t) strlen(ks[i]), .koff = HDR, .size = HDR + 64, .expires = i == 1 ? clk : 0};
+		nocopy_put p;
+		assert(nocopy_put_begin(&p, &c, &q) && nocopy_put_commit(&p, false) == NOCOPY_PUT_OK);
+		clk += i == 1 ? 2 : 0;
+	}
+	assert(found(&c, "forever") && found(&c, "later") && !found(&c, "edge"));
+	nocopy_set_clock(NULL);
+	nocopy_release(&c);
+	nocopy_arena_close();
+}
+
 int main(void)
 {
 	huge_hint();
+	expires_now();
 	random_base();
 	char base[32];
 	nocopy_named nm;
@@ -183,7 +212,8 @@ int main(void)
 	ar_seg_owner[orphan] = sh->log.tenant;
 	sh->lock.holder = dead_owner(); /* the holder dies */
 
-	assert(!nocopy_delete(hash("none"), "none", 4)); /* takes the lock: steals and repairs */
+	assert(!found(&c, "none")); /* a miss behind the odd mseq takes the lock: steals and repairs */
+	assert(!nocopy_delete(hash("none"), "none", 4));
 	assert(ar_proc->lock_steals == 1);
 	assert(!(ix->hdr->mseq & 1));
 	assert(ar_index_find(ix, slot_of(moved)) && !victim->live);

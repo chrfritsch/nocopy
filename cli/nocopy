@@ -37,7 +37,7 @@ function secs(int $s): string
 
 function out(mixed $data, bool $json, callable $text): void
 {
-    $json ? print(json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n") : $text($data);
+    $json ? print(json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR) . "\n") : $text($data);
 }
 
 $args = array_slice($argv, 1);

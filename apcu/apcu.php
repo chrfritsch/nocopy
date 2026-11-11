@@ -108,7 +108,7 @@ function apcu_clear_cache(): bool
 
 function apcu_entry(string $key, callable $callback, int $ttl = 0): mixed
 {
-    return nocopy_remember($key, $callback, $ttl, 0.0);
+    return nocopy_remember($key, static fn (string $key) => $callback($key), $ttl, 0.0); // APCu passes the key alone
 }
 
 function apcu_cache_info(bool $limited = false): array|false

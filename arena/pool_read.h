@@ -101,7 +101,7 @@ static inline void ar_pins_drop_idle(ar_pins_t *r)
 /* Every pin goes, kept ones too: no earlier zero-copy result is used again. */
 static inline void ar_pins_drop_all(ar_pins_t *r)
 {
-	for (uint32_t w = 0; r->nkeep && w < ar_seg_words; w++) {
+	for (uint32_t w = 0; r->slot >= 0 && r->nkeep && w < ar_seg_words; w++) { /* a fork that got no slot: nothing published */
 		if (r->keep[w]) {
 			__atomic_store_n(&ar_keeps_of(r->slot)[w], 0, __ATOMIC_RELAXED);
 		}

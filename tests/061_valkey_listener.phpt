@@ -32,7 +32,7 @@ for ($i = 0; $i < 3; $i++) {
     $seen[] = (int) run('nocopy_get("k"); echo nocopy_stats()["valkey_listener"];');
 }
 var_dump($pid > 0, array_unique($seen) === [$pid], substr_count(vk('CLIENT', 'LIST'), 'name=nocopy-listener'));
-echo trim(file_get_contents("/proc/$pid/comm")), ' ', count(scandir("/proc/$pid/fd")) - 2, "\n"; // stdio on /dev/null, the Valkey socket
+echo trim(file_get_contents("/proc/$pid/comm")), ' ', count(scandir("/proc/$pid/fd")) - 2, "\n"; // stdio on /dev/null, the Valkey socket, the liveness lock
 
 // a change elsewhere reaches the arena without a call here
 vk('SET', 't061:k', '5');
@@ -58,7 +58,7 @@ var_dump(alive($pid2));
 bool(true)
 bool(true)
 int(1)
-nocopy-valkey 4
+nocopy-valkey 5
 int(5)
 int(6)
 %d

@@ -29,7 +29,7 @@ var_dump($st === false || (bool) preg_match('/^\d+ \(.*\) Z/', $st));
 <?php array_map('unlink', glob('/dev/shm/nocopy-t062*')); ?>
 --EXPECT--
 bool(true)
-int(4)
+int(5)
 int(1)
 int(3)
 bool(true)

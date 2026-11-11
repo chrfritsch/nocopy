@@ -44,6 +44,7 @@ void nocopy_set_clock(nocopy_clock_fn fn);
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
 void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
 bool nocopy_after_fork(nocopy_ctx *c); /* false: no worker slot (or no owner id) in the child */
+int nocopy_live_fd(void); /* holds this process's liveness lock: keep it open; -1: none */
 void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailout left open */
 
 /* Reads happen between borrow_begin and borrow_end; what they found stays pinned until then (or longer: nocopy_keep). */
@@ -80,7 +81,7 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 {
 	ar_probe p;
 	ar_probe_start(&p, &ar_ix[ar_shard_idx(h)], h);
-	for (;;) {
+	for (uint32_t tries = 0;; tries++) {
 		ar_slot s;
 		while ((s = ar_probe_next(&p))) {
 			nocopy_entry *e = (nocopy_entry *) ar_at8(ar_slot_off8(s));
@@ -100,6 +101,9 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 		}
 		if (ar_probe_miss_final(&p)) {
 			return NULL;
+		}
+		if (__builtin_expect(tries == 1u << 16, 0)) {
+			ar_shard_unstick(ar_shard_idx(h));
 		}
 	}
 }

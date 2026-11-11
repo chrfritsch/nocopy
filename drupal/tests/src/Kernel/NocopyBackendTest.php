@@ -52,6 +52,12 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
     $this->assertSame([1], $item->data['o']->a);
   }
 
+  public function testFloatExpire(): void {
+    $b = $this->getCacheBackend();
+    $b->set('f', 'v', \Drupal::time()->getRequestTime() + 0.5 * 3600);
+    $this->assertSame('v', $b->get('f')->data);
+  }
+
   public function testDeleteAllIsolatedAndSeenByNewInstance(): void {
     $a = $this->getCacheBackend('bin_a');
     $b = $this->getCacheBackend('bin_b');
