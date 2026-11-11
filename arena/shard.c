@@ -231,9 +231,37 @@ static void unlock_all(void)
 	}
 }
 
+/* Every shard locked: open segments with nothing left in them (no live or pending entry) that no live worker pins hold no
+ * dependency; their bits would otherwise stay until a write fills them (a rarely used TTL bucket: never). */
+static void drop_idle_deps(uint8_t bits)
+{
+	uint64_t idle[NOCOPY_SEG_WORDS] = {0}, held[NOCOPY_SEG_WORDS];
+	bool any = false;
+	for (uint32_t s = 0; s < ar_nsegs; s++) {
+		const ar_seg *g = &ar_segs[s];
+		if ((ar_seg_deps(s) & bits) && g->state == SEG_OPEN && !g->live && !g->pending) {
+			ar_segs_add(idle, s);
+			any = true;
+		}
+	}
+	if (!any) {
+		return;
+	}
+	ar_pool_pinned(idle, held, nocopy_now()); /* a reader may still hold a dead entry's pointers into the atoms */
+	for (uint32_t s = 0; s < ar_nsegs; s++) {
+		if (ar_segs_has(idle, s) && !ar_segs_has(held, s)) {
+			ar_seg_deps_drop(s, bits);
+		}
+	}
+}
+
 bool ar_shards_deps(uint8_t bits)
 {
 	lock_all();
+	for (uint32_t i = 0; i < nshards; i++) {
+		ar_log_reclaim(&ar_shards[i].log); /* dead segments no longer pinned: a shard nobody writes to would keep them */
+	}
+	drop_idle_deps(bits);
 	bool used = ar_pool_any_deps(bits);
 	unlock_all();
 	return used;
