@@ -9,7 +9,7 @@ nocopy.shm_name=/nocopy-t100
 --FILE--
 <?php
 require __DIR__ . '/clock_step.inc';
-$ini = '-d nocopy.shm_name=/nocopy-t100';
+$ini = ['nocopy.shm_name' => '/nocopy-t100'];
 echo faked('-1h', 'nocopy_put("behind", "v", 100); echo time() < ' . time() . ' - 3000 ? "behind" : "not faked";', $ini), "\n";
 echo faked('+1h', 'nocopy_put("ahead", "v", 1); echo time() > ' . time() . ' + 3000 ? "ahead" : "not faked";', $ini), "\n";
 var_dump(nocopy_get('behind'), nocopy_get('ahead'));

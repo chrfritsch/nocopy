@@ -16,8 +16,7 @@ require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/valkey.inc';
 function run(string $code): string
 {
-    return trim((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-        . ' -d nocopy.valkey=127.0.0.1:6379 -d nocopy.valkey_prefix=t061: -d nocopy.shm_name=/nocopy-t061 -r ' . escapeshellarg($code) . ' 2>&1'));
+    return trim(php_run($code, ['nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => 't061:', 'nocopy.shm_name' => '/nocopy-t061']));
 }
 function alive(int $pid): bool
 {

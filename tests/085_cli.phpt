@@ -8,10 +8,10 @@ nocopy
 nocopy.shm_name=/nocopy-t085
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 function cli(string $args, string $name = '/nocopy-t085'): string
 {
-    exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-        . " -d nocopy.shm_name=$name " . escapeshellarg(__DIR__ . '/../cli/nocopy') . " $args 2>&1", $out, $rc);
+    exec(php_cmd(['nocopy.shm_name' => $name], [__DIR__ . '/../cli/nocopy']) . " $args 2>&1", $out, $rc);
     return implode("\n", $out) . " [$rc]\n";
 }
 nocopy_put('a.1', ['x' => 1], 60);

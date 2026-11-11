@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php.inc';
 // Runs $code as one request under php -S (short-lived SAPI: zero-copy) with this test's nocopy.* INI plus $ini; returns the response.
 // An array of codes: one request each, in order, on the same server process; the responses joined.
 function serve(string|array $code, array $ini = []): string
@@ -12,11 +13,7 @@ function serve(string|array $code, array $ini = []): string
     $s = stream_socket_server('tcp://127.0.0.1:0');
     $addr = stream_socket_get_name($s, false);
     fclose($s);
-    $cmd = [PHP_BINARY, '-n', '-d', 'extension=' . getenv('NOCOPY_SO'), '-d', 'max_execution_time=0'];
-    foreach (ini_get_all('nocopy', false) + $ini as $k => $v) {
-        array_push($cmd, '-d', "$k=$v");
-    }
-    array_push($cmd, '-S', $addr, '-t', $dir);
+    $cmd = php_argv(['max_execution_time' => 0] + ini_get_all('nocopy', false) + $ini, ['-S', $addr, '-t', $dir]);
     $p = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', "$dir/err", 'w']], $pipes);
     $ctx = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 3600]]);
     for ($i = 0; $i < 500 && ($out = @file_get_contents("http://$addr/0.php", false, $ctx)) === false; $i++) {

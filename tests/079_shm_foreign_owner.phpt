@@ -11,10 +11,10 @@ if (!function_exists('posix_getuid') || posix_getuid() !== 0 || !is_executable('
 nocopy.shm_name=/nocopy-t079-self
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 function run(string $code, bool $nobody = false): void
 {
-    $php = escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d nocopy.shm_name=/nocopy-t079';
-    echo shell_exec(($nobody ? '/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' : '') . $php . ' -r ' . escapeshellarg($code) . ' 2>&1');
+    echo php_run($code, ['nocopy.shm_name' => '/nocopy-t079'], $nobody ? '/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' : '');
 }
 $probe = 'var_dump(nocopy_shared_with(), nocopy_get("is_admin"));';
 

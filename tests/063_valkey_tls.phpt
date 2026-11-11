@@ -6,7 +6,8 @@ nocopy
 <?php
 require __DIR__ . '/valkey_skip.inc';
 if (!is_executable('/usr/bin/openssl') || !($vs = trim((string) shell_exec('command -v valkey-server || command -v redis-server')))) die('skip needs openssl and valkey-server');
-if (str_contains((string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d nocopy.valkey=tls://localhost:1 -r "nocopy_get(1);" 2>&1'), 'no TLS')) die('skip built without OpenSSL');
+require __DIR__ . '/php.inc';
+if (str_contains(php_run('nocopy_get(1);', ['nocopy.valkey' => 'tls://localhost:1']), 'no TLS')) die('skip built without OpenSSL');
 ?>
 --INI--
 nocopy.shm_name=/nocopy-t063
@@ -14,6 +15,7 @@ nocopy.shm_name=/nocopy-t063
 valkey
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 $d = sys_get_temp_dir() . '/nocopy-t063';
 @mkdir($d);
 $ssl = fn (string $args) => shell_exec("cd $d && /usr/bin/openssl $args 2>/dev/null");
@@ -34,12 +36,9 @@ function child(string $url, array $ini, string $code): string
 {
     $ini += ['nocopy.valkey_tls_ca_file' => "$GLOBALS[d]/ca.crt", 'nocopy.valkey_tls_cert_file' => "$GLOBALS[d]/client.crt", 'nocopy.valkey_tls_key_file' => "$GLOBALS[d]/client.key"];
     static $n = 0;
-    $args = ' -d nocopy.shm_name=/nocopy-t063-' . ++$n; // one arena per child: its listener keeps that child's settings
-    foreach ($ini + ['nocopy.valkey' => $url, 'nocopy.valkey_prefix' => 't063:'] as $k => $v) {
-        $args .= ' -d ' . escapeshellarg("$k=$v");
-    }
+    $ini = ['nocopy.shm_name' => '/nocopy-t063-' . ++$n] + $ini + ['nocopy.valkey' => $url, 'nocopy.valkey_prefix' => 't063:']; // one arena per child: its listener keeps that child's settings
     $code = '$GLOBALS["VK_PORT"] = 6391; require ' . var_export(__DIR__ . '/valkey.inc', true) . '; ' . $code;
-    return trim(preg_replace('/ in Command line code on line \d+/', '', (string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . $args . ' -r ' . escapeshellarg($code) . ' 2>&1')));
+    return trim(preg_replace('/ in Command line code on line \d+/', '', php_run($code, $ini)));
 }
 $use = 'var_dump(nocopy_put("k", "v"));';
 echo "verified, client cert:\n", child('tls://localhost:6390', [], 'nocopy_put("k", "v"); vk("SET", "t063:k", "7"); settle(); var_dump(nocopy_get("k"), nocopy_shared_with(), nocopy_stats()["valkey_listener"] > 0);'), "\n";

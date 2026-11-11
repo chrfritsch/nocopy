@@ -54,7 +54,7 @@ CODE;
 $code = str_replace('debug_zval_refcount: ', '', $code);
 echo serve($code);
 file_put_contents($f = sys_get_temp_dir() . '/nocopy-t093.php', $code);
-passthru(PHP_BINARY . ' -n -d extension=' . getenv('NOCOPY_SO') . ' -d nocopy.shm_name=/nocopy-t093 ' . $f);
+passthru(php_cmd(['nocopy.shm_name' => '/nocopy-t093'], [$f]));
 unlink($f);
 ?>
 --CLEAN--

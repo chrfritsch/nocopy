@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php.inc';
 // Minimal RESP2 client for the Valkey tests: another connection than nocopy's.
 function vk(string ...$a)
 {
@@ -49,7 +50,6 @@ function settle(): void
 // A PHP process with its own nocopy memory: another web server on the same Valkey.
 function other_server(string $prefix, string $code): string
 {
-    return (string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-        . ' -d nocopy.shm_name=/nocopy-' . rtrim($prefix, ':') . '-other' // its own arena, as on another server
-        . " -d nocopy.valkey=127.0.0.1:6379 -d nocopy.valkey_prefix=$prefix -r " . escapeshellarg($code));
+    // its own arena, as on another server
+    return php_run($code, ['nocopy.shm_name' => '/nocopy-' . rtrim($prefix, ':') . '-other', 'nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => $prefix]);
 }

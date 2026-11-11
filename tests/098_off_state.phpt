@@ -9,6 +9,7 @@ nocopy.shm_name=/nocopy-t098
 nocopy.shm_size=16M
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 nocopy_put('k', 'v');
 var_dump(nocopy_stats()['off']);
 $fds = [];
@@ -26,7 +27,7 @@ pcntl_waitpid($p, $st);
 $fds = [];
 echo "parent: ", nocopy_shared_with(), ", ", nocopy_get('k'), "\n";
 // another process with other settings attaches to this arena: they are ignored, and it says so
-echo shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO')) . ' -d nocopy.shm_name=/nocopy-t098 -d nocopy.shm_size=64M -r ' . escapeshellarg('echo nocopy_stats()["size"] >> 20, "M\n";') . ' 2>&1');
+echo php_run('echo nocopy_stats()["size"] >> 20, "M\n";', ['nocopy.shm_name' => '/nocopy-t098', 'nocopy.shm_size' => '64M']);
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t098*')); ?>

@@ -8,10 +8,10 @@ nocopy
 nocopy.shm_name=/nocopy-t059-parent
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 function child(string $base, string $code): string
 {
-    return (string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-        . " -d nocopy.shm_name=$base -r " . escapeshellarg($code) . ' 2>&1');
+    return php_run($code, ['nocopy.shm_name' => $base]);
 }
 // this build's suffix (it does not depend on the base)
 $probe = trim(child('/nocopy-t059p', 'echo nocopy_stats()["shm_name"];'));

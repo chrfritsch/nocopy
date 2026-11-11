@@ -8,8 +8,8 @@ nocopy
 nocopy.shm_name=/nocopy-t060-parent
 --FILE--
 <?php
-$cmd = fn (string $code) => escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-    . ' -d nocopy.shm_name=/nocopy-t060 -r ' . escapeshellarg($code) . ' 2>&1';
+require_once __DIR__ . '/php.inc';
+$cmd = fn (string $code) => php_cmd(['nocopy.shm_name' => '/nocopy-t060'], ['-r', $code]) . ' 2>&1';
 $probe = trim(shell_exec($cmd('echo nocopy_stats()["shm_name"];')));
 $file = '/dev/shm/' . substr($probe, 1);
 for ($round = 0; $round < 5; $round++) {

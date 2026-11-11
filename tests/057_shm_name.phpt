@@ -12,8 +12,7 @@ require __DIR__ . '/../apcu/apcu.php';
 require __DIR__ . '/serve.inc';
 function other(string $code, string $name = '/nocopy-t057'): string
 {
-    return (string) shell_exec(escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-        . " -d nocopy.shm_name=$name -r " . escapeshellarg($code) . ' 2>&1');
+    return php_run($code, ['nocopy.shm_name' => $name]);
 }
 apcu_clear_cache();
 nocopy_put('k', ['s' => str_repeat('x', 40), 'e' => [], 'n' => [[], ['a' => []]], 'i' => 7]);

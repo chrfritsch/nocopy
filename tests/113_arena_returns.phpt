@@ -34,9 +34,7 @@ CODE;
 echo serve([$work, '<?php require ' . var_export(__DIR__ . '/empty.inc', true) . '; var_dump(arena_leftovers());']), "\n";
 $f = tempnam(sys_get_temp_dir(), 'nc113');
 file_put_contents($f, $work);
-$cmd = [PHP_BINARY, '-n', '-d', 'extension=' . getenv('NOCOPY_SO')];
-foreach (ini_get_all('nocopy', false) as $k => $v) array_push($cmd, '-d', "$k=$v");
-$p = proc_open([...$cmd, $f], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+$p = proc_open(php_argv(ini_get_all('nocopy', false), [$f]), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
 echo stream_get_contents($pipes[1]), stream_get_contents($pipes[2]); // copy mode: kept copies, until the process ends
 proc_close($p);
 unlink($f);

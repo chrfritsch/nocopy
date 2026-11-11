@@ -11,6 +11,7 @@ if (!function_exists('posix_getuid') || posix_getuid() !== 0 || !is_executable('
 nocopy.shm_name=/nocopy-t058
 --FILE--
 <?php
+require_once __DIR__ . '/php.inc';
 nocopy_put('mine', 'root');
 $code = <<<'PHP'
 var_dump(nocopy_shared_with());
@@ -23,8 +24,7 @@ var_dump(nocopy_remember('r', $f), nocopy_remember('r', $f));
 var_dump(nocopy_put('o', new stdClass));
 var_dump(nocopy_stats()['size'], nocopy_stats()['shm_name'], nocopy_clear()); // off: a clear that reaches nothing fails
 PHP;
-echo shell_exec('/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ' . escapeshellarg(PHP_BINARY) . ' -n -d extension=' . escapeshellarg(getenv('NOCOPY_SO'))
-    . ' -d nocopy.shm_name=/nocopy-t058 -r ' . escapeshellarg($code) . ' 2>&1');
+echo php_run($code, ['nocopy.shm_name' => '/nocopy-t058'], '/usr/bin/setpriv --reuid=nobody --regid=nogroup --clear-groups ');
 var_dump(nocopy_get('mine'), nocopy_get('a'), nocopy_get('b'));
 ?>
 --CLEAN--

@@ -12,7 +12,7 @@ valkey
 <?php
 require __DIR__ . '/valkey.inc';
 require __DIR__ . '/clock_step.inc';
-$vk = fn($host) => "-d nocopy.shm_name=/nocopy-t101$host -d nocopy.valkey=127.0.0.1:6379 -d nocopy.valkey_prefix=t101:";
+$vk = fn($host) => ['nocopy.shm_name' => "/nocopy-t101$host", 'nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => 't101:'];
 vk('DEL', 't101:v');
 faked('-1h', 'nocopy_put("v", "from behind", 100);', $vk('w'));
 var_dump(vk('PTTL', 't101:v') > 90000);

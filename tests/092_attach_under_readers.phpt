@@ -12,7 +12,7 @@ nocopy_put('e', []);
 nocopy_put('n', ['a' => [], 'b' => 1]);
 $secs = 4;
 if (!pcntl_fork()) { // other binaries' instances (their own ASLR) attach while the request below reads
-    $cmd = [PHP_BINARY, '-n', '-d', 'extension=' . getenv('NOCOPY_SO'), '-d', 'nocopy.shm_name=/nocopy-t092', '-r', ''];
+    $cmd = php_argv(['nocopy.shm_name' => '/nocopy-t092'], ['-r', '']);
     for ($end = microtime(true) + $secs + 0.5; microtime(true) < $end;) {
         $ps = [];
         for ($i = 0; $i < 3; $i++) $ps[] = proc_open($cmd, [], $p);

@@ -32,7 +32,7 @@ foreach (['c', 'l'] as $k) {
 CODE;
 echo serve($reader);
 file_put_contents($f = sys_get_temp_dir() . '/nocopy-t090.php', $reader);
-passthru(PHP_BINARY . ' -n -d extension=' . getenv('NOCOPY_SO') . ' -d nocopy.shm_name=/nocopy-t090 ' . $f);
+passthru(php_cmd(['nocopy.shm_name' => '/nocopy-t090'], [$f]));
 unlink($f);
 ?>
 --CLEAN--
