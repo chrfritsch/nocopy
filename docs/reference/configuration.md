@@ -22,7 +22,7 @@ Only in builds with the Valkey tier (default; absent with `--disable-nocopy-valk
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port`, `host:port`, `unix:///path`, or TLS: `tls://…` / `rediss://…`. `phpinfo()` hides the credentials |
+| `nocopy.valkey` | (off) | `tcp://[user:pass@]host:port` (or `redis://`; `:pass@` alone: the `default` user), `host:port`, `unix:///path`, or TLS: `tls://…` / `rediss://…`. `phpinfo()` hides the credentials |
 | `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey; servers with the same prefix share one cache |
 | `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connect or reply before treating Valkey as down |
 | `nocopy.valkey_tls_ca_file` | (system store) | PEM file of the CAs that may sign the server certificate |

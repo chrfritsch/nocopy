@@ -59,7 +59,7 @@ static void pfree(char **p)
 	}
 }
 
-/* tcp://[user:pass@]host:port, tls://.. or rediss://.. (TLS), host:port, [::1]:port, unix:///path */
+/* tcp:// or redis://[user:pass@]host:port, tls://.. or rediss://.. (TLS), host:port, [::1]:port, unix:///path */
 static ZEND_INI_MH(on_url)
 {
 	pfree(&vk_host), pfree(&vk_path), pfree(&vk_user), pfree(&vk_pass);
@@ -73,8 +73,8 @@ static ZEND_INI_MH(on_url)
 		vk_path = pdup(s + 7, strlen(s + 7));
 		return SUCCESS;
 	}
-	if (strncmp(s, "tcp://", 6) == 0) {
-		s += 6;
+	if (strncmp(s, "tcp://", 6) == 0 || strncmp(s, "redis://", 8) == 0) {
+		s = strstr(s, "://") + 3;
 	} else if (strncmp(s, "tls://", 6) == 0 || strncmp(s, "rediss://", 9) == 0) {
 		s = strstr(s, "://") + 3;
 		vk_tls = true;
@@ -82,7 +82,7 @@ static ZEND_INI_MH(on_url)
 	const char *at = strrchr(s, '@');
 	if (at) {
 		const char *colon = memchr(s, ':', at - s);
-		vk_user = colon ? pdup(s, colon - s) : pdup("default", 7);
+		vk_user = colon && colon > s ? pdup(s, colon - s) : pdup("default", 7); /* :pass@: the default user */
 		vk_pass = colon ? pdup(colon + 1, at - colon - 1) : pdup(s, at - s);
 		s = at + 1;
 	}
@@ -141,7 +141,7 @@ static ZEND_INI_MH(on_verify)
 static ZEND_INI_MH(on_timeout)
 {
 	double t = zend_strtod(ZSTR_VAL(new_value), NULL);
-	vk_timeout_ms = t > 0 ? (int) (t * 1000) : 500;
+	vk_timeout_ms = t > 0 ? (int) MIN(t * 1000, INT_MAX) : 500;
 	return SUCCESS;
 }
 
