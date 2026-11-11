@@ -44,6 +44,7 @@ static char *shm_name; /* nocopy.shm_name: required, the arena every process att
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_attached() false: unavailable) */
 static char off_why[400] = "the module is not started"; /* why this process has no arena */
 static const nocopy_detour_ops *proc_route = &nocopy_no_arena; /* this process's: the local store (NULL), Valkey, or off */
+#define OFF_NOTE "The cache is off in this process: fetches miss, writes and clears fail"
 static const char no_slot[] = "no worker slot: 1024 processes and threads use this cache, or this process had no file descriptor left for its liveness lock";
 static bool sapi_zero_copy;
 static zend_long zero_copy_seconds = 3; /* a zero-copy request older than this copies: a slow backend must not pin the cache away */
@@ -301,6 +302,15 @@ PHP_FUNCTION(nocopy_shared_with)
 	RETURN_STRING(NOCOPY_G(detour) ? NOCOPY_G(detour)->name : "host");
 }
 
+static void add_str_or_null(zval *a, const char *key, const char *v)
+{
+	if (v) {
+		add_assoc_string(a, key, v);
+	} else {
+		add_assoc_null(a, key);
+	}
+}
+
 PHP_FUNCTION(nocopy_stats)
 {
 	ZEND_PARSE_PARAMETERS_NONE();
@@ -335,17 +345,9 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "shared_strings_rotations", s.atom_rotations);
 	add_assoc_long(return_value, "shared_arrays", s.shared_arrays);
 	add_assoc_long(return_value, "shared_arrays_used", s.shared_arrays_used);
-	if (shm_attached[0]) {
-		add_assoc_string(return_value, "shm_name", shm_attached);
-	} else {
-		add_assoc_null(return_value, "shm_name");
-	}
+	add_str_or_null(return_value, "shm_name", shm_attached[0] ? shm_attached : NULL);
 	add_assoc_long(return_value, "valkey_listener", nocopy_vk_listener());
-	if (NOCOPY_G(off)) {
-		add_assoc_string(return_value, "off", (char *) NOCOPY_G(off));
-	} else {
-		add_assoc_null(return_value, "off");
-	}
+	add_str_or_null(return_value, "off", NOCOPY_G(off));
 }
 
 /* ---- FrankenPHP worker mode ---- */
@@ -588,7 +590,7 @@ static void arena_open(bool late)
 		}
 	}
 	if (off_why[0]) {
-		snprintf(msg, sizeof msg, "nocopy: %s. The cache is off in this process: fetches miss, writes and clears fail", off_why);
+		snprintf(msg, sizeof msg, "nocopy: %s. " OFF_NOTE, off_why);
 	}
 	if (msg[0]) {
 		if (late) {
@@ -617,28 +619,23 @@ static void route(void)
 	route_thread();
 }
 
-static void log_no_slot(void)
+/* Routes this thread after a try for its worker slot; one log line when there is none. */
+static void route_claimed(bool slot)
 {
-	char msg[300];
-	snprintf(msg, sizeof msg, "nocopy: %s. The cache is off in this process: fetches miss, writes and clears fail", no_slot);
-	php_log_err_with_severity(msg, LOG_WARNING);
-}
-
-/* A worker slot for this thread, tried again each request; one log line when there is none. */
-static void claim(void)
-{
-	if (nocopy_attached() && !nocopy_claim(&NOCOPY_G(ctx)) && NOCOPY_G(off) != no_slot) {
-		log_no_slot();
+	if (!slot && NOCOPY_G(off) != no_slot) {
+		char msg[300];
+		snprintf(msg, sizeof msg, "nocopy: %s. " OFF_NOTE, no_slot);
+		php_log_err_with_severity(msg, LOG_WARNING);
 	}
 	route_thread();
 }
+
+/* A worker slot for this thread, tried again each request. */
+static void claim(void) { route_claimed(!nocopy_attached() || nocopy_claim(&NOCOPY_G(ctx))); }
 
 static void atfork_child(void)
 {
-	if (nocopy_attached() && !nocopy_after_fork(&NOCOPY_G(ctx)) && NOCOPY_G(off) != no_slot) {
-		log_no_slot();
-	}
-	route_thread();
+	route_claimed(!nocopy_attached() || nocopy_after_fork(&NOCOPY_G(ctx)));
 	nocopy_vk_close(&NOCOPY_G(vk));
 }
 

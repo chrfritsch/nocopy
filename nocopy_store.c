@@ -50,11 +50,9 @@ zend_long nocopy_drop_multi(HashTable *keys)
 		return NOCOPY_G(detour)->drop_multi(keys);
 	}
 	zend_long n = 0;
-	zval *k;
-	ZEND_HASH_FOREACH_VAL(keys, k) {
-		ZVAL_DEREF(k);
-		n += Z_TYPE_P(k) == IS_STRING && drop_local(Z_STRVAL_P(k), Z_STRLEN_P(k), zend_string_hash_val(Z_STR_P(k)));
-	} ZEND_HASH_FOREACH_END();
+	NOCOPY_KEYS_FOREACH(keys, k) {
+		n += drop_local(ZSTR_VAL(k), ZSTR_LEN(k), zend_string_hash_val(k));
+	} NOCOPY_KEYS_FOREACH_END();
 	return n;
 }
 
@@ -177,14 +175,13 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 		NOCOPY_G(detour)->fetch_multi(keys, out);
 		return;
 	}
-	zval *k, t;
+	zval t;
 	nocopy_borrow_begin(&NOCOPY_G(ctx)); /* idle pins checked once per call, not per key */
-	ZEND_HASH_FOREACH_VAL(keys, k) {
-		ZVAL_DEREF(k);
-		if (Z_TYPE_P(k) == IS_STRING && local_fetch(Z_STR_P(k), &t, NULL, NULL, false)) {
-			zend_symtable_update(out, Z_STR_P(k), &t);
+	NOCOPY_KEYS_FOREACH(keys, k) {
+		if (local_fetch(k, &t, NULL, NULL, false)) {
+			zend_symtable_update(out, k, &t);
 		}
-	} ZEND_HASH_FOREACH_END();
+	} NOCOPY_KEYS_FOREACH_END();
 	nocopy_borrow_end(&NOCOPY_G(ctx));
 }
 

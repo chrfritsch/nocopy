@@ -67,6 +67,16 @@ nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
 bool nocopy_drop_local(const char *k, size_t len); /* needs an arena */
 bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as one store per key */
+/* Each string of a list of keys as zend_string *key (borrowed); other types are skipped. */
+#define NOCOPY_KEYS_FOREACH(keys, key) do { \
+	zval *key##_z; \
+	ZEND_HASH_FOREACH_VAL(keys, key##_z) { \
+		ZVAL_DEREF(key##_z); \
+		if (Z_TYPE_P(key##_z) != IS_STRING) { \
+			continue; \
+		} \
+		zend_string *key = Z_STR_P(key##_z);
+#define NOCOPY_KEYS_FOREACH_END() } ZEND_HASH_FOREACH_END(); } while (0)
 /* A HashTable key as a string (release it). */
 static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
 

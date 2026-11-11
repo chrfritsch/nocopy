@@ -393,29 +393,28 @@ static bool vk_drain(nocopy_vk *v)
 	return true;
 }
 
-static void arg(smart_str *s, const char *a, size_t n)
+/* RESP's length line: type, count. */
+static void len_line(smart_str *s, char type, size_t n)
 {
-	smart_str_appendc(s, '$');
+	smart_str_appendc(s, type);
 	smart_str_append_unsigned(s, n);
 	smart_str_appendl(s, "\r\n", 2);
+}
+
+static void head(smart_str *s, int argc) { len_line(s, '*', (size_t) argc); }
+
+static void arg(smart_str *s, const char *a, size_t n)
+{
+	len_line(s, '$', n);
 	smart_str_appendl(s, a, n);
 	smart_str_appendl(s, "\r\n", 2);
 }
 
 static void key_arg(smart_str *s, const char *k, size_t n)
 {
-	smart_str_appendc(s, '$');
-	smart_str_append_unsigned(s, vk_plen + n);
-	smart_str_appendl(s, "\r\n", 2);
+	len_line(s, '$', vk_plen + n);
 	smart_str_appendl(s, vk_prefix, vk_plen);
 	smart_str_appendl(s, k, n);
-	smart_str_appendl(s, "\r\n", 2);
-}
-
-static void head(smart_str *s, int argc)
-{
-	smart_str_appendc(s, '*');
-	smart_str_append_unsigned(s, argc);
 	smart_str_appendl(s, "\r\n", 2);
 }
 
@@ -958,11 +957,20 @@ static int vk_clear(void)
 
 /* ---- the tier: the arena holds local copies of what Valkey holds ---- */
 
+static void vk_uncopy(zend_string *key) { nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key)); }
+
 /* After a change in Valkey: a sibling's fill that read the old value sees the guard move and drops its copy. */
 static void vk_forget(zend_string *key)
 {
 	vk_bump(); /* before the drop */
-	nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+	vk_uncopy(key);
+}
+
+static int64_t wall_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 /* A ttl as the last unix second it lives (0: never; the payload's, other hosts compare it), and the ms to that second's end for SET PX. */
@@ -972,9 +980,7 @@ static int64_t vk_px(time_t expires)
 	if (!expires) {
 		return 0;
 	}
-	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts);
-	int64_t ms = ((int64_t) expires + 1 - ts.tv_sec) * 1000 - ts.tv_nsec / 1000000;
+	int64_t ms = ((int64_t) expires + 1) * 1000 - wall_ms();
 	return ms > 0 ? ms : 1;
 }
 
@@ -1034,9 +1040,7 @@ static time_t vk_pttl_expires(int64_t ttl)
 	if (ttl < 0) {
 		return ttl == -1 ? 0 : -1;
 	}
-	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts);
-	return (time_t) (((int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + ttl) / 1000 - 1);
+	return (time_t) ((wall_ms() + ttl) / 1000 - 1);
 }
 
 /* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
@@ -1080,7 +1084,7 @@ static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *d
 	bool ok = vk_fill(key, raw, ttl, rv, exp, delta);
 	zend_string_release(raw);
 	if (ok && vk_gen() != gen) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_uncopy(key);
 	}
 	return ok;
 }
@@ -1098,14 +1102,14 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 	time_t expires = vk_expires(o->ttl);
 	zend_string *enc = vk_encode(val, expires, user);
 	if (!enc) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_uncopy(key);
 		return NOCOPY_REFUSED;
 	}
 	uint64_t gen = vk_gen(); /* add: an invalidation before our local copy may have been another writer's */
 	int r = vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_px(expires), o->add_only);
 	zend_string_release(enc);
 	if (r != 1) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_uncopy(key);
 		return r == 0 ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
 	int64_t gone;
@@ -1114,7 +1118,7 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 		return NOCOPY_REFUSED;
 	}
 	if (o->add_only && vk_gen() != gen) {
-		nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+		vk_uncopy(key);
 	}
 	return NOCOPY_OK;
 }
@@ -1140,7 +1144,7 @@ static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 		zend_string *key = nocopy_key_of(k, h);
 		zend_string *e = nocopy_put_local(key, v, o, 0) == NOCOPY_REFUSED ? NULL : vk_encode(v, expires, 0);
 		if (!e) {
-			nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key));
+			vk_uncopy(key);
 			all = false;
 			zend_string_release(key);
 			if (EG(exception)) {
@@ -1159,7 +1163,7 @@ static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 	}
 	for (uint32_t i = 0; i < m; i++) {
 		if (res[i] != 1) {
-			nocopy_drop_local(ZSTR_VAL(keys[i]), ZSTR_LEN(keys[i]));
+			vk_uncopy(keys[i]);
 			all = false;
 		}
 		zend_string_release(keys[i]);
@@ -1174,22 +1178,16 @@ static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 	if (!vk_ready()) {
 		return;
 	}
-	zval *k, t;
+	zval t;
 	zend_string **miss = safe_emalloc(zend_hash_num_elements(keys), sizeof *miss, 0);
 	uint32_t n = 0;
-	ZEND_HASH_FOREACH_VAL(keys, k) {
-		ZVAL_DEREF(k);
-		if (Z_TYPE_P(k) != IS_STRING) {
-			continue;
+	NOCOPY_KEYS_FOREACH(keys, k) {
+		if (!nocopy_fetch_local(k, &t, NULL, NULL)) {
+			miss[n++] = k; /* borrowed: keys outlives this call */
+			ZVAL_NULL(&t); /* keeps the requested order; removed if not found */
 		}
-		if (nocopy_fetch_local(Z_STR_P(k), &t, NULL, NULL)) {
-			zend_symtable_update(out, Z_STR_P(k), &t);
-		} else {
-			miss[n++] = Z_STR_P(k); /* borrowed: keys outlives this call */
-			ZVAL_NULL(&t);
-			zend_symtable_update(out, Z_STR_P(k), &t); /* keeps the requested order; removed if not found */
-		}
-	} ZEND_HASH_FOREACH_END();
+		zend_symtable_update(out, k, &t);
+	} NOCOPY_KEYS_FOREACH_END();
 	if (n) {
 		zend_string **raw = ecalloc(n, sizeof *raw);
 		int64_t *ttl = safe_emalloc(n, sizeof *ttl, 0);
@@ -1207,7 +1205,7 @@ static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 		}
 		if (got && vk_gen() != gen) {
 			for (uint32_t i = 0; i < n; i++) {
-				nocopy_drop_local(ZSTR_VAL(miss[i]), ZSTR_LEN(miss[i]));
+				vk_uncopy(miss[i]);
 			}
 		}
 		efree(ttl), efree(raw);
@@ -1227,13 +1225,9 @@ static zend_long nocopy_vk_drop_multi(HashTable *keys)
 {
 	zend_string **ks = safe_emalloc(zend_hash_num_elements(keys), sizeof *ks, 0);
 	uint32_t n = 0;
-	zval *k;
-	ZEND_HASH_FOREACH_VAL(keys, k) {
-		ZVAL_DEREF(k);
-		if (Z_TYPE_P(k) == IS_STRING) {
-			ks[n++] = Z_STR_P(k);
-		}
-	} ZEND_HASH_FOREACH_END();
+	NOCOPY_KEYS_FOREACH(keys, k) {
+		ks[n++] = k;
+	} NOCOPY_KEYS_FOREACH_END();
 	int64_t gone = 0;
 	if (n && vk_ready()) {
 		vk_unlink_n(n, ks, &gone);
