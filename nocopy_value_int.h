@@ -55,6 +55,27 @@ static zend_always_inline uint32_t map_mask(const zend_array *a)
 
 static zend_always_inline size_t map_size(const zend_array *a) { return HT_HASH_SIZE(map_mask(a)) + a->nNumUsed * sizeof(Bucket); }
 
+/* More holes than elements: written as a map of its elements only (a packed one too, its indices as keys), as unserialize() would build it. */
+static zend_always_inline bool sparse(const zend_array *a) { return a->nNumUsed - a->nNumOfElements > 8 && a->nNumUsed > 2 * a->nNumOfElements; }
+
+static zend_always_inline uint32_t sparse_mask(const zend_array *a)
+{
+	uint32_t slots = 4;
+	while (slots < 2 * a->nNumOfElements) {
+		slots <<= 1;
+	}
+	return (uint32_t) -(int32_t) slots;
+}
+
+/* The bytes of a's data in the block. */
+static zend_always_inline size_t data_size(const zend_array *a)
+{
+	if (UNEXPECTED(sparse(a))) {
+		return HT_HASH_SIZE(sparse_mask(a)) + a->nNumOfElements * sizeof(Bucket);
+	}
+	return HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a);
+}
+
 /* ---- the string table: equal strings stored once per value ---- */
 
 #define NC_STRTAB 256

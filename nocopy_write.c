@@ -93,8 +93,44 @@ static zend_always_inline zend_string *write_str(writer *w, const zend_string *s
 /* ---- plain values ---- */
 
 /* The table's data into the block; a map's hash shrunk to map_mask, its buckets rechained as opcache compacts. */
+/* A sparse table's elements alone, in order, as a map. */
+static __attribute__((noinline)) void write_sparse(writer *w, zend_array *ht, const zend_array *src)
+{
+	uint32_t n = src->nNumOfElements, size = HT_MIN_SIZE, mask = sparse_mask(src);
+	while (size < n) {
+		size <<= 1;
+	}
+	ht->nTableMask = mask;
+	ht->nTableSize = size;
+	ht->nNumUsed = n;
+	HT_FLAGS(ht) &= ~HASH_FLAG_PACKED;
+	if (HT_IS_PACKED(src)) {
+		HT_FLAGS(ht) |= HASH_FLAG_STATIC_KEYS;
+	}
+	HT_SET_DATA_ADDR(ht, take(w, HT_HASH_SIZE(mask) + n * sizeof(Bucket)));
+	Bucket *d = ht->arData;
+	for (uint32_t *h = (uint32_t *) d - (uint32_t) -(int32_t) mask; h < (uint32_t *) d; h++) {
+		*h = HT_INVALID_IDX;
+	}
+	uint32_t i = 0;
+	zend_ulong k;
+	zend_string *key;
+	zval *v;
+	ZEND_HASH_FOREACH_KEY_VAL((zend_array *) src, k, key, v) {
+		d[i] = (Bucket) {.val = *v, .h = key ? ZSTR_H(key) : k, .key = key};
+		uint32_t ni = (uint32_t) d[i].h | mask;
+		Z_NEXT(d[i].val) = HT_HASH_EX(d, ni);
+		HT_HASH_EX(d, ni) = HT_IDX_TO_HASH(i);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+}
+
 static void write_data(writer *w, zend_array *ht, const zend_array *src)
 {
+	if (UNEXPECTED(sparse(src))) {
+		write_sparse(w, ht, src);
+		return;
+	}
 	if (HT_IS_PACKED(src) || (ht->nTableMask = map_mask(src)) == src->nTableMask) {
 		size_t size = HT_IS_PACKED(src) ? HT_PACKED_USED_SIZE(src) : HT_USED_SIZE(src);
 		void *data = take(w, size);

@@ -157,7 +157,7 @@ static uint64_t hash_array(plan *z, zend_array *a, int depth, size_t *up)
 		hv_grow(z);
 	}
 	uint32_t i = z->sh->hn++;
-	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
+	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(data_size(a));
 	uint64_t h = H_SEED, c;
 	if (HT_IS_PACKED(a)) {
 		for (uint32_t k = 0; k < a->nNumUsed; k++) {
@@ -185,7 +185,7 @@ static uint64_t hash_array(plan *z, zend_array *a, int depth, size_t *up)
 /* Too small to share: under NC_SHARE_MIN bytes with its keys, and only scalars in it. */
 static zend_always_inline bool unshareable(const zend_array *a)
 {
-	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
+	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(data_size(a));
 	if (n >= NC_SHARE_MIN) {
 		return false;
 	}
@@ -225,7 +225,7 @@ static plan_status plan_array(plan *z, zend_array *a, int depth)
 	}
 plan:
 	tape_push(z, OP(OP_ARR, a->nNumUsed & NC_OP_MAX));
-	z->n += SALIGN(sizeof(zend_array)) + SALIGN(HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a));
+	z->n += SALIGN(sizeof(zend_array)) + SALIGN(data_size(a));
 	plan_status st;
 	if (HT_IS_PACKED(a)) {
 		zval *v;
