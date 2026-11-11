@@ -7,12 +7,12 @@ cd "$(dirname "$0")/../.."
 out=${TMPDIR:-/tmp}/nocopy-c; mkdir -p "$out"
 CC=${CC:-cc}
 ARENA=$(ls arena/*.c)
-$CC -O2 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/stress" tests/c/stress.c $ARENA -lpthread
-$CC -O1 -g -fsanitize=thread -Wno-tsan -DNOCOPY_POISON -o "$out/stress-tsan" tests/c/stress.c $ARENA -lpthread
+# build <binary> <test> <flags...>: tests/c/<test>.c with the arena units
+build() { bin=$1 src=$2; shift 2; $CC -g -DNOCOPY_POISON "$@" -o "$out/$bin" "tests/c/$src.c" $ARENA -lpthread; }
+build stress stress -O2 -Wall -Wextra
+build stress-tsan stress -O1 -fsanitize=thread -Wno-tsan
 s=${1:-3}
 for mb in 4 64; do "$out/stress" $mb 8 "$s"; done
 for mb in 4 64; do TSAN_OPTIONS=halt_on_error=1 "$out/stress-tsan" $mb 8 "$s"; done
-$CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/repair" tests/c/repair.c $ARENA -lpthread && "$out/repair"
-$CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -o "$out/atoms" tests/c/atoms.c $ARENA -lpthread && "$out/atoms"
-$CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -DNOCOPY_HOOKS -o "$out/crash" tests/c/crash.c $ARENA -lpthread && "$out/crash"
-$CC -O1 -g -Wall -Wextra -DNOCOPY_POISON -DNOCOPY_HOOKS -o "$out/sched" tests/c/sched.c $ARENA -lpthread && "$out/sched"
+for t in repair atoms; do build $t $t -O1 -Wall -Wextra && "$out/$t"; done
+for t in crash sched; do build $t $t -O1 -Wall -Wextra -DNOCOPY_HOOKS && "$out/$t"; done
