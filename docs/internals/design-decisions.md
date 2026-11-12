@@ -520,7 +520,7 @@ needs either a sink of callbacks (two indirect calls on a ~27 ns store) or the p
 it needs PHP, so it cannot be built or tested alone. Measured on the way (`./dev ab main 7`, copy / zero): with the root's planning out of line
 (a call per store) the failing add was -8.1 / -6.9% in three runs; forcing `encode` inline while that call remained, store int -6.3 / -6.2% and
 string -10.2 / -7.3%; the root planned inline (scalars and a lone string in the header) and `encode` inline: store int +2.5 / +1.9%, failing add -1.2 / -4.7%.
-A zero-copy scalar fetch through the mode dispatch was -5% (`ab` best of 9: fetch int, `exists`, parallel fetch int x1-x8 -4.5 to -5.7%):
+Since 2026-11-12 the builder runs the whole built write itself (`nc_build_put`): the ordering (admission before release, release after the commit) and its state stay in `nocopy_build.c`; the store-side sink is still not needed. `./dev cg`: Ir per put unchanged (±0.3%). A zero-copy scalar fetch through the mode dispatch was -5% (`ab` best of 9: fetch int, `exists`, parallel fetch int x1-x8 -4.5 to -5.7%):
 `nocopy_value_scalar` first, as the old read path did, brings them to within ±2% (parallel +0.4 to +2.6%).
 
 **The PHP layers' boundaries checked, not agreed.** Kept copies take their state as a parameter (`nocopy_kept_cache`, the value layer's env) and include `nocopy_value.h` only; the RESP tier

@@ -9,6 +9,159 @@
 #include "zend_enum.h"
 #include "zend_exceptions.h"
 
+/* Nonzero key -> uint32, open addressing, at most half full; small graphs stay in inl. */
+typedef struct {
+	uintptr_t k;
+	uint32_t v;
+} pslot;
+
+typedef struct {
+	pslot *s;
+	uint32_t mask, n;
+	pslot inl[32];
+} pmap;
+
+/* What building learned about one object. */
+typedef struct {
+	zend_object *o;       /* held: its handle stays unique while user code runs */
+	uint32_t ck;          /* class index << 3 | kind */
+	uint32_t off;         /* its nc_obj's block offset */
+	bool dyn;             /* dynamic properties stored after the slots */
+	bool own;             /* data is the node's (released with it); else borrowed from its hook result */
+	zval data;            /* __serialize()'s array, else the dynamic properties without the slots; UNDEF: none, or the object's own table (stdClass) */
+	const uint8_t *named; /* __sleep(): 1 per slot it named; NULL: no __sleep() */
+} gnode;
+
+/* A __serialize/__sleep result, kept by object across passes. */
+typedef struct {
+	zend_object *o; /* held, so its handle stays unique */
+	zval data;      /* __serialize()'s array, or the dynamic properties __sleep() named */
+	uint8_t *named;
+	bool ran;
+} ghook;
+
+/* A class of the graph, by index. */
+typedef struct {
+	zend_class_entry *ce;
+	zend_string *lc; /* lowercase name, hashed */
+	uint64_t fp;
+} gclass;
+
+#define GHOOK_INL 4 /* hook results found by a linear search, without a map */
+
+/* One value's objects, classes and shared references, by index in the order building meets them. */
+typedef struct {
+	pmap objs;       /* handle -> index */
+	pmap cls;        /* class entry -> index << 3 | kind */
+	gclass *classes; /* by index */
+	uint32_t ccap;
+	gnode *nodes;    /* by index */
+	uint32_t nn, ncap;
+	uint32_t *hooks; /* indices, inner first */
+	uint32_t nh, hcap;
+	pmap refs;       /* reference (held) -> the pass + 1 that met it, or REF_MULTI | index; outlives a pass */
+	uint32_t nref;   /* held more than once: nodes */
+	zval *refv;      /* their built values */
+	uint8_t *refdone; /* built in this pass */
+	uint32_t vcap;
+	pmap *hk;        /* handle -> index into res, past GHOOK_INL; outlives a pass */
+	ghook *res;
+	uint32_t nres, rcap;
+	bool on;         /* set up: an object or a shared reference was met */
+	bool refs_on;
+	gnode inl[16];
+	gclass cinl[4];
+	ghook rinl[GHOOK_INL];
+} graph_b;
+
+/* The dynamic properties stored after the slots (NULL: none). */
+static zend_always_inline zend_array *node_dyn(const gnode *n, const zend_object *o)
+{
+	return !n->dyn ? NULL : Z_TYPE(n->data) == IS_ARRAY ? Z_ARR(n->data) : o->properties;
+}
+
+/* Not = {0}: zeroing its tables cost every store ~3 ns. */
+static zend_always_inline void graph_b_off(graph_b *g) { g->on = false; }
+static zend_always_inline bool graph_b_used(const graph_b *g) { return g->on && (g->objs.n || g->nref); }
+static void nc_graph_b_free(graph_b *g); /* leaves it off; may run destructors: never under a shard lock */
+static zend_always_inline void graph_b_release(graph_b *g)
+{
+	if (g->on) {
+		nc_graph_b_free(g);
+	}
+}
+
+#define STR_INL 32
+#define HV_INL 16
+
+/* An array of a region, in building's order: its hash (0: not shareable), the arrays of its subtree with itself, bytes at most. */
+typedef struct {
+	uint64_t h;
+	uint32_t n, up;
+} hnode;
+
+/* An array no shared one equals yet: admitted after the commit if the doorkeeper has seen it before. */
+typedef struct {
+	zend_array *a;
+	uint64_t h;
+} nc_cand;
+
+/* Sharing arrays: set up by array and object writes only (scalars do not zero it). */
+typedef struct {
+	hnode *hv;         /* the regions' arrays: the current one [hc, hend), nested ones above it up to hn */
+	uint32_t hn, hc, hend, hcap;
+	nc_cand *cand;
+	uint32_t ncand, ccap;
+	hnode inl[HV_INL];
+} nc_share;
+
+static zend_always_inline nc_share *nc_share_init(nc_share *s)
+{
+	s->hv = s->inl;
+	s->hn = s->hc = s->hend = 0;
+	s->hcap = HV_INL;
+	s->ncand = s->ccap = 0;
+	s->cand = NULL;
+	return s;
+}
+
+typedef enum { BUILD_OK, BUILD_DEEP, BUILD_OBJECT, BUILD_RESOURCE, BUILD_ERROR /* an exception is pending */, BUILD_AGAIN /* internal: a new shared reference */ } build_status;
+
+/* A source array the walk is reading, and whether it holds a reference to it (taken when user code runs). */
+typedef struct {
+	zend_array *a;
+	bool held;
+} nc_open;
+#define NC_OPEN_MAX (NC_MAX_DEPTH + 2)
+
+/* A value built in one walk into a private buffer: pointers into it are block offsets (base: the block offset of buf[0]),
+ * every such pointer's place listed in rel, so placing it is a copy and one add per pointer. */
+typedef struct {
+	nocopy_env *env;
+	nocopy_strtab strs; /* this value's view of the table */
+	graph_b *g;
+	const nocopy_atom_view *av; /* NULL: no atoms */
+	nc_share *sh;      /* NULL: arrays are not shared (no atoms) */
+	bool sight;        /* first pass: strings that are not atoms count towards admission */
+	bool atoms;        /* an atom is used */
+	bool obj;          /* an object or shared reference met since the innermost array began */
+	nocopy_fmt fmt;
+	uint32_t pass;
+	zend_string **str; /* per distinct deduped string: its atom or its copy */
+	uint32_t ns, scap;
+	zend_string **str_inl;
+	size_t base;
+	char *buf;         /* env's, taken while building */
+	size_t bn, bcap;
+	uint32_t *rel;
+	uint32_t rn, rcap;
+	zend_array **held; /* references taken for user code, released at the end */
+	uint32_t nheld, hcap, cheld;
+	uint32_t nopen;
+	nc_open open[NC_OPEN_MAX];
+	zval root;
+} nc_builder;
+
 #ifdef NOCOPY_SHARE_STATS /* bench only (NOCOPY_CFLAGS): how much of what stores hash is shared, to stderr at exit */
 static struct { uint64_t arrays, bytes, lookups, hits, hit_arrays, hit_bytes; } sst_put, sst;
 static uint64_t sst_puts, sst_by[6]; /* stores by bytes found shared: none hashed, 0%, <25, <50, <75, more */
@@ -280,6 +433,8 @@ static zend_always_inline bool same_str(const zend_string *a, const zend_string 
 	return a == b || (ZSTR_LEN(a) == ZSTR_LEN(b) && nocopy_key_eq(ZSTR_VAL(a), ZSTR_VAL(b), (uint32_t) ZSTR_LEN(a)));
 }
 
+static bool nc_same_array(const zend_array *a, const zend_array *b, int depth); /* equal keys, order, types and values (doubles bitwise) */
+
 static zend_always_inline bool same_val(const zval *va, const zval *vb, int depth)
 {
 	if (Z_TYPE_P(va) != Z_TYPE_P(vb)) {
@@ -299,7 +454,7 @@ static zend_always_inline bool same_val(const zval *va, const zval *vb, int dept
 	}
 }
 
-bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
+static bool nc_same_array(const zend_array *a, const zend_array *b, int depth)
 {
 	if (a == b) {
 		return true;
@@ -482,7 +637,7 @@ static void graph_b_end_pass(graph_b *g)
 	}
 }
 
-void nc_graph_b_free(graph_b *g)
+static void nc_graph_b_free(graph_b *g)
 {
 	if (!g->on) {
 		return;
@@ -1182,7 +1337,7 @@ static void build_graph(nc_builder *b)
 	ZVAL_PTR(&b->root, OFFP(hoff));
 }
 
-void nc_build_init(nc_builder *b, nocopy_env *env, const nocopy_atom_view *av, nc_share *ss, graph_b *g, zend_string **str, size_t base)
+static void nc_build_init(nc_builder *b, nocopy_env *env, const nocopy_atom_view *av, nc_share *ss, graph_b *g, zend_string **str, size_t base)
 {
 	graph_b_off(g);
 	b->env = env;
@@ -1204,7 +1359,7 @@ void nc_build_init(nc_builder *b, nocopy_env *env, const nocopy_atom_view *av, n
 	env->bcap = env->rcap = 0;
 }
 
-build_status nc_build(nc_builder *b, zval *val)
+static build_status nc_build(nc_builder *b, zval *val)
 {
 #ifdef NOCOPY_SHARE_STATS
 	bool sst_top = b->sight; /* a store, not an admission */
@@ -1248,7 +1403,7 @@ build_status nc_build(nc_builder *b, zval *val)
 	return st;
 }
 
-void nc_build_bufs_back(nc_builder *b)
+static void nc_build_bufs_back(nc_builder *b)
 {
 	nocopy_env *env = b->env;
 	if (!b->buf && !b->rel) {
@@ -1268,7 +1423,7 @@ void nc_build_bufs_back(nc_builder *b)
 	b->rel = NULL;
 }
 
-void nc_build_free(nc_builder *b)
+static void nc_build_free(nc_builder *b)
 {
 	nc_build_bufs_back(b);
 	graph_b_release(b->g);
@@ -1292,6 +1447,8 @@ void nc_build_free(nc_builder *b)
 	}
 }
 
+static zend_always_inline nc_built built(const nc_builder *b) { return (nc_built) {b->buf, b->base, b->bn, b->rel, b->rn, b->root, b->av && b->atoms ? nocopy_atom_bit(b->av) : 0}; }
+
 /* After the commit, still in the view: each candidate the doorkeeper has seen before, built alone and placed into the atoms.
  * Listed outer first; admitted inner first, so outer ones point at them. */
 static bool admit_fill(void *dst, void *arg)
@@ -1303,7 +1460,7 @@ static bool admit_fill(void *dst, void *arg)
 	return true;
 }
 
-void nc_share_admit(nocopy_env *env, const nc_builder *outer, const nocopy_atom_view *av)
+static void nc_share_admit(nocopy_env *env, const nc_builder *outer, const nocopy_atom_view *av)
 {
 	for (uint32_t i = outer->sh->ncand; i-- > 0;) {
 		const nc_cand *c = &outer->sh->cand[i];
@@ -1320,8 +1477,86 @@ void nc_share_admit(nocopy_env *env, const nc_builder *outer, const nocopy_atom_
 		ZVAL_ARR(&v, c->a);
 		/* root not built here: an equal one came in meanwhile and replaced it */
 		if (nc_build(&b, &v) == BUILD_OK && b.fmt == NOCOPY_FMT_PLAIN && NC_IS_OFF(Z_ARR(b.root)) && b.bn <= NC_SHARE_MAX) {
-			nocopy_atom_add_array(av, c->h, (uint32_t) b.bn, admit_fill, &b, (const char *) &c->h, sizeof c->h);
+			nc_built out = built(&b);
+			nocopy_atom_add_array(av, c->h, (uint32_t) b.bn, admit_fill, &out, (const char *) &c->h, sizeof c->h);
 		}
 		nc_build_free(&b);
 	}
+}
+
+/* What building could not take: REFUSED, or the value serialized (NOCOPY_OK, ser to release). */
+static nocopy_status not_built(build_status st, zval *val, zval *ser, nocopy_fmt *fmt)
+{
+	if (st == BUILD_ERROR) {
+		return NOCOPY_REFUSED;
+	}
+	if (st == BUILD_RESOURCE) {
+		php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
+		return NOCOPY_REFUSED;
+	}
+	return nocopy_serialize(val, ser, fmt) ? NOCOPY_OK : NOCOPY_REFUSED;
+}
+
+nocopy_status nc_build_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only, const nocopy_atom_view *av)
+{
+	zend_string *str[STR_INL];
+	nc_share ss;
+	graph_b g;
+	nc_builder b;
+	nc_build_init(&b, env, av, &ss, &g, str, val_off(q->klen));
+	build_status st = nc_build(&b, val);
+	nocopy_status r;
+	if (st == BUILD_OK && b.base + b.bn > UINT32_MAX) {
+		nc_build_free(&b); /* offsets and the relocation list are 32-bit */
+		return NOCOPY_NO_ROOM;
+	}
+	if (st == BUILD_OK) {
+		q->size = b.base + b.bn;
+		q->koff = KEY_OFF;
+		q->flags = (uint8_t) b.fmt;
+		q->atoms = b.atoms && av;
+		nocopy_put p;
+		nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
+		r = NOCOPY_NO_ROOM;
+		if (e) {
+			nc_built out = built(&b);
+			nc_place(e, &out);
+			r = nc_put_result(nocopy_put_commit(&p, add_only));
+		}
+		nc_build_bufs_back(&b);
+		if (b.sh && b.sh->ncand) {
+			nc_share_admit(env, &b, av); /* before the release: candidates may be a node's own data */
+		}
+		nc_build_free(&b); /* after the commit: may run destructors */
+		return r;
+	}
+	nc_build_free(&b);
+	zval ser;
+	nocopy_fmt fmt;
+	if ((r = not_built(st, val, &ser, &fmt)) != NOCOPY_OK) {
+		return r;
+	}
+	r = nc_put_flat(ctx, q, &ser, add_only, fmt);
+	zend_string_release(Z_STR(ser));
+	return r;
+}
+
+bool nc_build_check(nocopy_env *env, zval *val)
+{
+	zend_string *str[STR_INL];
+	graph_b g;
+	nc_builder b;
+	nc_build_init(&b, env, NULL, NULL, &g, str, KEY_OFF);
+	build_status st = nc_build(&b, val);
+	nc_build_free(&b);
+	if (st == BUILD_OK) {
+		return true;
+	}
+	zval ser;
+	nocopy_fmt fmt;
+	if (not_built(st, val, &ser, &fmt) != NOCOPY_OK) {
+		return false;
+	}
+	zend_string_release(Z_STR(ser));
+	return true;
 }

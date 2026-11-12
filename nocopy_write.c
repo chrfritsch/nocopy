@@ -109,9 +109,9 @@ static void block_check(nocopy_entry *e, uint8_t atoms)
 	graph_each(g, check_zval, &c);
 }
 
-void nc_share_check(char *p, const nc_builder *b)
+void nc_share_check(char *p, const nc_built *b)
 {
-	checker c = {.base = p, .size = b->bn, .atoms = nocopy_atom_bit(b->av), .shared = true};
+	checker c = {.base = p, .size = b->bn, .atoms = b->atoms, .shared = true};
 	zval v;
 	Z_ARR(v) = (zend_array *) (p + (uintptr_t) Z_ARR(b->root));
 	Z_TYPE_INFO(v) = IS_ARRAY; /* immutable, as a block stores it: ZVAL_ARR would add the refcounted flags */
@@ -190,7 +190,7 @@ static void rebase_graph(zval *v, rebase *r)
 	graph_each(g, rebase_zval, r);
 }
 
-void nc_place_at(char *p, const nc_builder *b)
+void nc_place_at(char *p, const nc_built *b)
 {
 	if (b->bn) {
 		memcpy(p + b->base, b->buf, b->bn);
@@ -200,7 +200,7 @@ void nc_place_at(char *p, const nc_builder *b)
 	}
 }
 
-void nc_place(nocopy_entry *e, const nc_builder *b)
+void nc_place(nocopy_entry *e, const nc_built *b)
 {
 	char *p = (char *) e;
 	nc_place_at(p, b);
@@ -210,7 +210,7 @@ void nc_place(nocopy_entry *e, const nc_builder *b)
 		Z_PTR_P(v) = p + (uintptr_t) Z_PTR_P(v);
 	}
 #if NC_CHECKS
-	block_check(e, b->av && b->atoms ? nocopy_atom_bit(b->av) : 0);
+	block_check(e, b->atoms);
 #endif
 }
 

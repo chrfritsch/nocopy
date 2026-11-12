@@ -44,6 +44,10 @@ for f in *.c *.h; do
 done
 grep -nE '\b(e|pe|safe_e)(m|c|re)alloc|\b(p?efree|estrdup|zend_string_(init|alloc|tolower|concat|dup|release)|smart_str_[a-z]+|zend_new_array|array_init|zend_hash_(add|update|index_add|index_update|str_add|str_update|next_index_insert|init|copy|destroy|extend|rehash)[a-z_]*|zend_call_[a-z_]+|nc_call_magic|zend_throw_[a-z_]+|php_error_docref|zend_error|zval_ptr_dtor|OBJ_RELEASE|object_init_ex|zend_lookup_class|ZVAL_STRINGL?)\b' nocopy_write.c \
 	| sed 's/^/check-layers: nocopy_write.c runs under a shard lock (no allocation, no user code): /' | grep . && bad=1
+# The builder's state is its own (nocopy_build.c): the other units see a built value only as nc_built.
+for f in nocopy_value.c nocopy_write.c nocopy_read.c nocopy_class.c nocopy_serial.c nocopy_value_int.h; do
+	grep -nwE 'nc_builder|graph_b|gnode|ghook|gclass|pmap|pslot|hnode|nc_cand|nc_open|nc_share|build_status|nc_build|nc_build_init|nc_build_free|nc_share_admit' "$f" | sed "s|^|check-layers: $f: builder internal: |" | grep . && bad=1
+done
 # Kept copies (nocopy_kept.h): no module state either, the store passes its cache and env.
 for f in nocopy_kept.c nocopy_kept.h; do
 	grep -nE '#include "nocopy_php\.h"|\bNOCOPY_(G|SHARED)\b' "$f" | sed "s|^|check-layers: $f: module state in the kept copies: |" | grep . && bad=1
