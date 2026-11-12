@@ -13,15 +13,16 @@ a Linux container. Takes about 15 minutes, most of it waiting for builds.
 ```
 
 The first run builds the image (a few minutes). Every run copies the sources into the container, compiles the extension
-from clean and runs the `.phpt` tests in `tests/`. At the end:
+from clean and runs the `.phpt` tests in `tests/`. At the end you see a summary like this (the counts change as the
+suite grows, and tests that need Valkey may be skipped):
 
 ```
-Tests skipped   :     1 (  1.8%) --------
+Tests skipped   :     2 (  1.9%) --------
 Tests failed    :     0 (  0.0%) (  0.0%)
-Tests passed    :    54 ( 98.2%) (100.0%)
+Tests passed    :   106 ( 98.1%) (100.0%)
 ```
 
-This is your baseline. Your checkout is mounted read-only, so the build never leaves files behind.
+What matters is `Tests failed: 0`. This is your baseline. Your checkout is mounted read-only, so the build never leaves files behind.
 
 ## 2. Write a failing test
 

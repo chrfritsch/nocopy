@@ -1,7 +1,9 @@
 # Share one cache between php-fpm and the CLI
 
-Goal: web requests, Drush/artisan/console commands, cron and queue workers on one server all read and write the same cache,
-and the cache survives php-fpm restarts.
+Goal: web requests, CLI commands (Drush, artisan, `bin/console`), cron jobs and queue workers on one server all read and
+write the same cache, and the cache survives php-fpm restarts.
+
+Three things must match: the name, the user and the build.
 
 ## 1. Set the same name everywhere
 
@@ -13,20 +15,24 @@ nocopy.shm_name=/nocopy
 nocopy.shm_size=128M
 ```
 
-Two sites on one server that must not see each other's keys need different names (`/nocopy-shop`, `/nocopy-blog`; per fpm pool, see below).
+Two sites on one server that must not see each other's keys need different names, such as `/nocopy-shop` and
+`/nocopy-blog` (set per php-fpm pool, see below).
 
 ## 2. Run everything as one user
 
-The shared memory is created with mode `0600` by the first process that needs it, so every process must run as that user.
-php-fpm's workers open it as the pool's user (`www-data`): a master running as root never maps it, so a worker cannot
-plant values or pointers that a root process reads. Run CLI commands as the pool's user:
+The first process that needs the cache creates it, readable and writable only by its own user (mode `0600`). Every other
+process must run as that same user. With php-fpm that is the pool's user, for example `www-data`: the workers open the
+cache, not the master (which often runs as root).
+
+So run CLI commands as the pool's user:
 
 ```sh
 sudo -u www-data php bin/console cache:warmup
 ```
 
-A process running as another user, root included, cannot attach: it warns and has no cache. Do not widen the mode: anyone
-who can write the cache controls what php-fpm reads.
+A process running as another user, root included, cannot open the cache: it logs a warning and has no cache.
+Do not try to loosen the permissions: anyone who can write to the cache controls what php-fpm reads
+([why](../explanation/sharing.md#security-one-user-is-one-trust-domain)).
 
 Pools running as different users need different names, set per pool:
 
@@ -37,8 +43,9 @@ php_admin_value[nocopy.shm_name] = /nocopy-shop
 
 ## 3. Load the same build
 
-The object's name includes the build id of the loaded `nocopy.so`. php-fpm and the CLI share only if they load the same
-build: point both at the same path, and restart php-fpm after replacing it (until then it keeps the old build's cache).
+php-fpm and the CLI share the cache only if they load the same `nocopy.so` build (the shared-memory object's name
+includes its build id). Point both at the same file, and restart php-fpm after replacing it: until then, it keeps using the
+old build's cache.
 
 ## 4. Verify
 
@@ -46,16 +53,19 @@ build: point both at the same path, and restart php-fpm after replacing it (unti
 php -r 'var_dump(nocopy_shared_with()); nocopy_put("probe", getmypid());'
 ```
 
-Then fetch `probe` in a web request (`var_dump(nocopy_get('probe'))`): it shows the CLI's pid. Both sides' `nocopy_shared_with()`
-must return `host`, and `nocopy_stats()['shm_name']` the same name.
+Then read `probe` in a web request (`var_dump(nocopy_get('probe'));`): it shows the CLI's pid. On both sides,
+`nocopy_shared_with()` must return `host`, and `nocopy_stats()['shm_name']` the same name.
 
-In deploy scripts, let a clear that reached nothing fail the deploy: run it as the pool's user with the pool's settings.
+In deploy scripts, make a cache clear that reached nothing fail the deploy. Run it as the pool's user with the pool's
+settings:
 
 ```sh
 sudo -u www-data php -r 'exit(nocopy_clear() ? 0 : 1);'   # or: cli/nocopy clear (exits non-zero)
 ```
 
 ## Troubleshooting
+
+The warning in the error log tells you what is wrong:
 
 | Symptom | Cause |
 |---|---|

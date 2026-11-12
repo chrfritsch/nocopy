@@ -1,23 +1,21 @@
 # Use nocopy in Symfony
 
-Symfony's built-in `cache.adapter.apcu` serializes values before they reach the extension, so it cannot be zero-copy. The
-bundle in [`symfony/`](../../symfony) (`chrfritsch/nocopy-bundle`, Symfony 6.4 / 7.x / 8.x) adds `cache.adapter.nocopy`,
-which stores values as they are.
+Symfony's built-in `cache.adapter.apcu` serializes every value before it reaches APCu, so it can never read without a copy.
+The bundle in [`symfony/`](../../symfony) (`chrfritsch/nocopy-bundle`, for Symfony 6.4, 7.x and 8.x) adds a
+`cache.adapter.nocopy` that stores values as they are.
 
-Prerequisite: the extension is [installed](install.md) for php-fpm and the CLI, with the same settings in both:
+**Before you start:** the extension is [installed](install.md) for php-fpm and the CLI, with the same settings in both:
 
 ```ini
 nocopy.shm_name=/nocopy
-;nocopy.serializer=igbinary   ; with the igbinary extension: smaller cached objects
+;nocopy.serializer=igbinary   ; if you have the igbinary extension: smaller cached objects
 ```
 
-The other defaults fit most apps (`shm_size=32M`, `local_size=8M`). Under FrankenPHP worker mode, values fetched repeatedly are kept
-per worker up to `nocopy.local_size`: raise it if the app's hot cache entries add up to more (check `nocopy_stats()['used']` after warm-up
-as an upper bound). It counts against `memory_limit`, per worker.
+The other defaults fit most apps.
 
 ## 1. Install the bundle
 
-Until it is on Packagist, from a checkout:
+The bundle is not on Packagist yet. Require it from a checkout of the nocopy repository:
 
 ```sh
 composer config repositories.nocopy path /path/to/nocopy/symfony
@@ -51,26 +49,47 @@ framework:
                 adapter: cache.adapter.nocopy
 ```
 
-## 3. Verify
+Then use the cache as usual:
+
+```php
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
+
+public function list(CacheInterface $productCache): array
+{
+    return $productCache->get('products.page3', function (ItemInterface $item) {
+        $item->expiresAfter(300);
+        return $this->repository->findPage(3);
+    });
+}
+```
+
+## 3. Check it
 
 ```sh
 php bin/console cache:pool:clear cache.app
 ```
 
-then load a page that uses the cache twice and check `nocopy_stats()['hits']` grows.
+Then load a page that uses the cache twice, and check that `nocopy_stats()['hits']` goes up.
 
-## Notes
+## How the adapter behaves
 
-- The adapter calls `nocopy_*` only, so it works next to a loaded APCu.
-- `clear()` bumps a namespace version instead of deleting keys; old entries leave through eviction (shm) or a one-year TTL
-  given to items without a lifetime (Valkey).
-- The adapter refuses to start in a process that does not share the cache (`nocopy_shared_with()` is `none`): set
-  `nocopy.shm_name` or `nocopy.valkey` for php-fpm and the CLI, and run the console as the php-fpm user.
-- `$pool->get($key, $callback)` runs on `nocopy_remember`: one worker computes a miss while the others wait or get the expired
-  value, and hits refresh early ([XFetch](../reference/functions.md#nocopy_rememberstring-key-callable-callback-int-ttl--0-float-beta--10-mixed)).
-  `expiresAfter()`, `$save = false` and `$beta` work as in Symfony; `setCallbackWrapper()` is not used, and `$metadata` comes back empty.
-- Multi-key reads and writes (`getItems()`, deferred saves) are one call each; with Valkey, one round trip.
-- Symfony's system pools (validator, serializer, property info) get nocopy in front of their PHP files, as Symfony does
-  with APCu; `framework.cache.system` in your config overrides it.
-- Each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
-- Under FrankenPHP worker mode, nocopy switches to copy mode automatically (the kernel keeps values across requests).
+- **Stampede protection:** `$pool->get($key, $callback)` runs on [`nocopy_remember()`](../reference/functions.md#nocopy_remember).
+  One worker computes a missing value while the others wait or get the just-expired one, and popular values are refreshed
+  shortly before they expire. `expiresAfter()`, `$save = false` and `$beta` work as in Symfony. `setCallbackWrapper()` is
+  not used, and `$metadata` comes back empty.
+- **Batches:** `getItems()` and deferred saves are one call each; with Valkey, one round trip.
+- **Clearing:** `clear()` bumps a namespace version instead of deleting keys. Old entries leave through eviction, or, with
+  Valkey, through a one-year TTL given to items without a lifetime.
+- **System pools:** Symfony's system pools (validator, serializer, property info) get nocopy in front of their PHP files,
+  as Symfony does with APCu. Setting `framework.cache.system` in your config overrides this.
+- **Deploys:** each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
+- **Safety:** the adapter refuses to start in a process without a shared cache (`nocopy_shared_with()` returns `none`).
+  Set `nocopy.shm_name` (or `nocopy.valkey`) for php-fpm and the CLI, and run the console as the php-fpm user.
+- **APCu:** the adapter only calls `nocopy_*`, so it works next to a loaded APCu.
+
+## FrankenPHP worker mode
+
+In worker mode the kernel lives across requests, so nocopy switches to copy mode by itself. Values a worker reads often
+are kept per worker, up to `nocopy.local_size` (`8M`, counted against `memory_limit`). Raise it if the app's hot cache
+entries add up to more; `nocopy_stats()['used']` after warm-up is an upper bound.

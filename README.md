@@ -65,8 +65,8 @@ around. Your code never notices.
 Linux, Docker on arm64 (Apple M3 Pro), PHP 8.5; the read ratios hold on AWS Graviton4 (writes not cross-checked yet). How to reproduce: [benchmark results](docs/reference/benchmarks.md).
 
 **The fine print:** the no-copy trick pays off when your requests read big cached arrays (config, routes, translations,
-entity lists). If your pages barely touch the cache, you won't see a difference. Objects are rebuilt from their
-stored properties without unserializing (except `Serializable` and most internal classes: serialized, as in APCu).
+entity lists). If your pages barely touch the cache, you won't see a difference. Most objects are rebuilt from their
+stored properties without unserializing; `Serializable` objects and most internal classes are serialized, as in APCu.
 
 On Drupal, most of the gain comes from something else: because php-fpm, Drush and cron share one cache that survives
 restarts, every cache bin and cache tag can move out of the database. Not copying adds little there
@@ -87,8 +87,8 @@ restarts, every cache bin and cache tag can move out of the database. Not copyin
 | 🔍 **Console** | [`nocopy-cli`](cli) shows stats and keys, reads, deletes and clears entries in the running cache, like cachetool. |
 
 Works with php-fpm, Apache, LiteSpeed, CGI, `php -S` and FrankenPHP. Long-running processes (CLI scripts, queue workers,
-FrankenPHP worker mode) automatically get a safe mode that hands out private copies and reuses them while the entry is
-unchanged.
+FrankenPHP worker mode) automatically get private copies instead, which nocopy reuses while the entry is unchanged. You
+don't configure anything for this.
 
 ## Try it in one minute
 
@@ -153,8 +153,8 @@ Same for `symfony/` (`chrfritsch/nocopy-bundle`), `drupal/` (`chrfritsch/nocopy-
 | New here | Using it | How it works |
 |---|---|---|
 | [Your first cache](docs/tutorials/first-cache.md) (10-minute tutorial) | [Symfony](docs/how-to/symfony.md) · [Drupal](drupal/README.md) · [Migrate from APCu](docs/how-to/migrate-from-apcu.md) | [How nocopy works](docs/explanation/how-it-works.md) |
-| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
-| | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
+| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) · [Kubernetes](docs/how-to/kubernetes.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
+| [Glossary](docs/reference/glossary.md) | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
 
 Everything: [docs/](docs/README.md).
 

@@ -1,5 +1,8 @@
 # How nocopy works
 
+This page explains the ideas behind nocopy, for PHP developers who want to know what happens under the hood. You do
+not need it to use nocopy. Short definitions of the terms: [Glossary](../reference/glossary.md).
+
 ## The problem with APCu
 
 APCu keeps values in shared memory, but every fetch copies the value out into the process: arrays are rebuilt element by
@@ -37,12 +40,15 @@ Pins last until the request ends, which is fine for web requests but not for pro
 script, a queue worker, a FrankenPHP worker script. They could pin memory forever. So nocopy picks the fetch mode from
 the SAPI, then from how the request behaves:
 
-- **Zero-copy** (default under php-fpm, CGI, Apache, LiteSpeed, `php -S`, FrankenPHP classic): the pointer, pinned until the request ends.
-  A request that turns out long copies from then on: once it is older than `nocopy.zero_copy_seconds` (3 s), or once
-  the requests running together keep a quarter of the arena's segments. What it already holds stays pinned until it ends.
-- **Copy** (default for the CLI and FrankenPHP workers): a private copy, made with one `memcpy` for the array structure.
+- **Zero-copy** (php-fpm, CGI, Apache, LiteSpeed, `php -S`, FrankenPHP classic mode): you get the pointer, and the
+  memory stays pinned until the request ends. A request that runs long switches to copying: once it is older than
+  `nocopy.zero_copy_seconds` (3 s), or once the running requests together pin a quarter of the arena's segments. What it
+  already holds stays pinned until it ends.
+- **Copy** (CLI and FrankenPHP workers): you get a private copy, made with one `memcpy` for the array structure.
   Copies of values fetched twice are kept per process (`nocopy.local_size`) and handed out again while the entry is
-  unchanged, so repeated fetches in a worker are nearly as cheap as zero-copy.
+  unchanged, so repeated fetches in a worker cost nearly as little as zero-copy ones.
+
+You don't choose the mode: nocopy picks it, and your code works the same either way.
 
 Objects and shared references cannot be immutable: they are stored as nodes and rebuilt on each fetch (with the arrays that
 hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`Serializable`, most internal classes, ...)
@@ -50,7 +56,7 @@ make the whole value serialized and unserialized on every fetch.
 
 ## Writes, shards and segments
 
-Writes append to **segments** (64 KB-2 MB), grouped by TTL so entries that expire together sit together. A key's hash
+Writes append to **segments** (64 KB-4 MB), grouped by TTL so entries that expire together sit together. A key's hash
 picks one of up to 8 **shards**, each with its own lock and slot table, taking segments from a shared pool: writers to
 different shards never wait for each other, readers never lock, and a busy shard can use what the others leave free
 (and gives it back when they need it). If a writer dies mid-write (kill -9, OOM killer), the next writer

@@ -1,20 +1,25 @@
 # nocopy for Drupal
 
-Cache backend and cache tag checksums on the [nocopy](https://github.com/chrfritsch/nocopy) PHP extension. Every PHP process of the site
-(php-fpm, Drush, cron) shares one cache: `nocopy.shm_name` on a single server, `nocopy.valkey` on several.
-All cache bins, tag checksums, locks and flood control live in shared memory, so cache reads, tag checks, locks and flood checks no longer touch the database. Cached arrays
-(config, the container definition, most bootstrap data) are read without a copy.
+A Drupal cache backend on the [nocopy](https://github.com/chrfritsch/nocopy) PHP extension.
+
+- **All cache bins, cache tag checksums, locks and flood control** move out of the database into shared memory. Cache
+  reads, tag checks, locks and flood checks no longer run a query.
+- **One cache for the whole site:** php-fpm, Drush and cron share it, and it survives php-fpm restarts. On one server
+  through `nocopy.shm_name`, on several through `nocopy.valkey`.
+- **No copying:** cached arrays (config, the container definition, most bootstrap data) are read without a copy.
 
 ## Install
 
-The nocopy extension must be loaded in php-fpm and in the CLI, both with the same shared cache in php.ini:
+[Install the extension](../docs/how-to/install.md) for php-fpm **and** the CLI, with the same settings in both. They
+usually read different php.ini files, so check both:
 
 ```ini
 nocopy.shm_name=/nocopy        ; required: Drush and cron attach to php-fpm's memory
+nocopy.serializer=igbinary     ; recommended, if you have igbinary: render arrays contain objects, stored serialized
 ;nocopy.valkey=host:6379       ; several servers: Valkey is the shared cache, each server keeps local copies
 ```
 
-Then:
+Then require the module and the polyfill (not on Packagist yet, so from a checkout of the nocopy repository) and enable it:
 
 ```sh
 composer config repositories.nocopy path /path/to/nocopy/drupal
@@ -23,11 +28,16 @@ composer require chrfritsch/nocopy-drupal:@dev chrfritsch/nocopy-apcu:@dev
 drush en nocopy
 ```
 
-The module requires nocopy's `apcu_*` polyfill: without APCu, Drupal's class loader and FileCache check `apcu_fetch()` and fall
-back to the file system. Measured (2,000 nodes, 8 workers): 807 `faccessat` per logged-in request without it, 65 with it, and
-logged-in pages +21-31%, anonymous +11-39% (median of 3 interleaved runs).
+Why the `apcu_*` polyfill: without APCu, Drupal's class loader and FileCache look for `apcu_fetch()` and fall back to the
+file system. Measured on 2,000 nodes with 8 workers: 807 `faccessat` calls per logged-in request without the polyfill, 65
+with it; logged-in pages +21-31% faster, anonymous ones +11-39% (median of 3 interleaved runs).
+
+Run Drush and cron as the user php-fpm's (or Apache's) workers run as: only that user can open the cache
+([why](../docs/how-to/share-between-fpm-and-cli.md#2-run-everything-as-one-user)).
 
 ## settings.php
+
+Add this to `settings.php` (adjust the path if the module is not in `modules/contrib/nocopy`):
 
 ```php
 // nocopy for all bins and cache tag checksums.
@@ -55,29 +65,41 @@ $settings['bootstrap_container_definition'] = [
 ];
 ```
 
-Recommended in php.ini: `nocopy.serializer=igbinary` (cached render arrays contain objects, which are stored serialized).
+## Check it
 
-Each process checks on its first cache access that it shares the cache with the rest of the site (`nocopy_shared_with()` is `host` or
-`valkey`) and throws otherwise, naming the cause, instead of serving what other processes already changed. php-fpm and the CLI usually
-read different php.ini files, so set it in both. Run Drush and cron as the user php-fpm's or Apache's workers run as (the shared memory object is readable
-by its creator only). Writes and invalidations by Drush and cron then reach web requests directly, and the cache
-survives php-fpm restarts.
+The status report (`admin/reports/status`) shows whether this PHP process shares the cache, its memory use and evictions.
 
-**Several web servers** (`nocopy.valkey`): all bins and tag checksums are shared through Valkey, each server keeps zero-copy local copies.
-Give Valkey a `maxmemory` and `maxmemory-policy volatile-lfu`: permanent items get a one-year TTL in that mode and can be evicted, while
-cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) have none and stay. Invalidated items are not
-deleted (as in core), so without a limit Valkey only grows.
+Each process also checks, on its first cache access, that it shares the cache with the rest of the site
+(`nocopy_shared_with()` is `host` or `valkey`). If not, it throws an exception that names the cause, rather than serve data
+other processes have already changed.
 
-**Key prefix:** derived like core's APCu prefix, from the app root, `deployment_identifier` and the Drupal version, so it
-changes with each deploy and core update. With `nocopy.valkey` the old tag tokens and small bins then stay in Valkey (no TTL).
-Set a fixed one when every server uses the same docroot: `$settings['nocopy_prefix'] = 'mysite';`.
+## Several web servers
 
-The status report (admin/reports/status) shows whether this PHP shares the cache, its memory use and evictions.
+With `nocopy.valkey`, all bins and tag checksums are shared through Valkey, and each server keeps zero-copy local copies
+([Valkey guide](../docs/how-to/valkey.md)).
 
-**Fast layer only:** to keep the database as the cache of record and only replace APCu in front of it, use
-[`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and [`fast.services.yml`](../bench/drupal/fast.services.yml) instead.
-It uses `cache.backend.nocopy_fast`, which needs no Valkey (chainedfast already checks the database on every request) and falls back to
-the database alone where the extension is not loaded or `nocopy.shm_name` is not set, like core's APCu fast layer. Works on several web servers.
+Give Valkey a `maxmemory` and `maxmemory-policy volatile-lfu`. In this mode, permanent cache items get a one-year TTL, so
+Valkey may evict them; cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) get no
+TTL and stay. Invalidated items are not deleted (as in core), so without a memory limit Valkey only grows.
+
+## Key prefix
+
+The prefix is derived like core's APCu prefix: from the app root, `deployment_identifier` and the Drupal version. So it
+changes with each deploy and core update. With `nocopy.valkey`, the old tag tokens and small bins then stay in Valkey,
+since they have no TTL. If every server uses the same docroot, set a fixed prefix:
+
+```php
+$settings['nocopy_prefix'] = 'mysite';
+```
+
+## Fast layer only
+
+To keep the database as the cache of record and only replace APCu in front of it, use
+[`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and
+[`fast.services.yml`](../bench/drupal/fast.services.yml) instead of the settings above. They use
+`cache.backend.nocopy_fast`, which works on several web servers without Valkey (chainedfast already checks the database on
+every request). Like core's APCu fast layer, it falls back to the database alone where the extension is not loaded or
+`nocopy.shm_name` is not set.
 
 ## Trade-offs
 

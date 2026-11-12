@@ -1,38 +1,74 @@
 # `nocopy_stats()`
 
-Returns an array describing the whole arena (all processes), not just the calling process. Counters run since the arena
-was created. Without a shared cache, every number is `0`, `shm_name` is `null` and `off` says why.
-With `nocopy.valkey`, these describe this server's local copies only.
+Returns an array that describes the whole cache, for all processes together, not just the one calling it. Counters
+count since the cache was created.
+
+- Without a shared cache, every number is `0`, `shm_name` is `null`, and `off` says why.
+- With `nocopy.valkey`, the numbers describe this server's local copies only.
+
+What to watch in production: [Size and monitor the cache](../how-to/size-and-monitor.md).
+Words like segment, shard and slot: [Glossary](glossary.md).
+
+## Is it working?
 
 | Key | Meaning |
 |---|---|
-| `size` | Arena size in bytes (`nocopy.shm_size` of the creator) |
-| `used` | Bytes held by entries (also expired ones not yet removed) |
-| `entries` | Live entries, including expired ones not yet removed (removal runs on writes) |
-| `hits`, `misses` | Fetches that found / did not find their key, by every process |
+| `off` | `null` while this process (or thread) has the cache. Otherwise the reason it does not, for example `nocopy.shm_name is not set (e.g. /nocopy)` or `no worker slot: …`. Then reads miss, and writes and `nocopy_clear()` return `false` |
+| `shm_name` | Name of the shared-memory object in `/dev/shm`: `nocopy.shm_name`, a dot and the build id. `null` without a cache |
+| `valkey_listener` | Pid of this server's Valkey listener process, `0` if there is none |
+| `lock_steals` | Locks taken over from a process that died while holding one (its part of the cache was then repaired). Should be `0` |
+
+## Traffic
+
+| Key | Meaning |
+|---|---|
+| `hits`, `misses` | Reads that found / did not find their key, by every process. Hit rate: `hits / (hits + misses)` |
+| `entries` | Entries in the cache, including expired ones not removed yet (removal happens during writes) |
+| `leases` | `nocopy_remember()` computations running right now |
+
+## Memory
+
+| Key | Meaning |
+|---|---|
+| `size` | Cache size in bytes (the creator's `nocopy.shm_size`) |
+| `used` | Bytes held by entries, including expired ones not removed yet |
+| `slots` | Size of the slot table that finds keys. A shard fills at most 3/4 of its slots |
+| `shards` | Independent parts of the cache, each with its own lock (1-8) |
+
+## Eviction
+
+| Key | Meaning |
+|---|---|
 | `evicted` | Entries removed to make room |
 | `expired` | Entries removed because their TTL passed |
-| `expunges` | Eviction rounds (each merges up to 4 old segments: read entries move forward, the rest go) |
-| `ghost_hits` | New keys recognized as recently evicted, which then get extra protection from eviction |
+| `ghost_hits` | Keys written again shortly after they were evicted. They get extra protection from eviction. Compare with `evicted` to see whether more memory would help |
+| `expunges` | Eviction rounds. Each merges up to 4 old segments: entries that were read move forward, the rest go |
 | `evacuated_bytes` | Bytes moved by compaction and eviction rounds |
-| `segment_size` | Bytes per segment (a power of two, 64 KB-4 MB; arenas over 1G get more segments, not bigger ones) |
-| `segments` | Segments in the arena |
-| `free_segments` | Segments in the shared pool, ready for any shard's writes |
-| `dead_segments` | Segments without live entries, not yet reused (a reader may still pin them) |
-| `pinned_segments` | Segments some process currently reads from |
-| `kept_segments` | Of those, segments zero-copy requests keep until they end. Past a quarter of `segments`, requests copy their further fetches |
-| `shards` | Independent parts with their own lock (1-8) |
-| `slots` | Slot table size; a shard fills at most 3/4 of its slots |
-| `lock_steals` | Locks taken over from a dead process (and its shard repaired). Should be 0 |
-| `leases` | `nocopy_remember()` computations in progress |
-| `shared_strings` | Short strings (up to 64 bytes) stored once for the whole arena, in the current generation; entries point at them instead of holding a copy |
-| `shared_strings_used` | Bytes the shared strings and arrays take, in both generations (the current one and the one before) |
-| `shared_strings_size` | Bytes reserved for them: two halves of `size / 32` |
-| `shared_strings_rotations` | Times a full generation's successor took over the older half (only once no entry or write in progress used that half) |
-| `shared_arrays` | Arrays (128 bytes or more, no objects) stored once for the whole arena, in the current generation; entries holding an equal array point at it |
-| `shared_arrays_used` | Bytes those take, in both generations (part of `shared_strings_used`) |
-| `shm_name` | Name of the attached shared-memory object (`nocopy.shm_name` + `.` + build id), or `null` |
-| `valkey_listener` | Pid of this arena's Valkey listener, `0` if none |
-| `off` | `null` while this process (thread) has the cache; else why not, e.g. `nocopy.shm_name is not set (e.g. /nocopy)` or `no worker slot: …`. Then fetches miss, writes and `nocopy_clear()` return `false` |
 
-Hit rate: `hits / (hits + misses)`. What to watch: [Size and monitor the cache](../how-to/size-and-monitor.md).
+## Segments
+
+The cache stores entries in fixed-size blocks called segments.
+
+| Key | Meaning |
+|---|---|
+| `segment_size` | Bytes per segment: a power of two, 64 KB to 4 MB. Caches over 1G get more segments, not bigger ones |
+| `segments` | Number of segments |
+| `free_segments` | Segments that are empty and ready for any shard |
+| `dead_segments` | Segments without live entries that cannot be reused yet (a reader may still use them) |
+| `pinned_segments` | Segments some process is reading from right now |
+| `kept_segments` | Of those, segments that web requests keep until they end. Above a quarter of `segments`, requests copy what they fetch from then on |
+
+## Shared strings and arrays
+
+Short strings and equal arrays that many entries contain (cache tags, render keys, metadata) are stored once for the whole
+cache, and entries point at them. This space is `size / 16`, split into two halves that take turns: when the current half
+is full, the older half is emptied and reused, but only once no entry still uses it.
+
+| Key | Meaning |
+|---|---|
+| `shared_strings` | Strings (up to 64 bytes) stored once, in the current half |
+| `shared_arrays` | Arrays (128 bytes or more, no objects inside) stored once, in the current half |
+| `shared_strings_used` | Bytes the shared strings and arrays take, in both halves |
+| `shared_arrays_used` | Bytes the shared arrays take, in both halves (included in `shared_strings_used`) |
+| `shared_strings_size` | Bytes reserved for both halves together |
+| `shared_strings_rotations` | How often the halves have switched |

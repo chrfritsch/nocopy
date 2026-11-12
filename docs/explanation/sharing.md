@@ -13,11 +13,16 @@ There is deliberately **no default name**: two sites of one user would silently 
 
 ## All or nothing
 
-A process without `nocopy.shm_name`, one that cannot attach (another user's object, `/dev/shm` full), and one that
-attached but got no worker slot (1024 processes and threads, or no file descriptor left after a fork) is **off**, one state
-with one behaviour: fetches miss, writes and `nocopy_clear()` return `false`, `nocopy_remember()` computes without keeping,
-and nothing throws. It logs one warning, and `nocopy_stats()['off']` says why for as long as it lasts. It never falls back
-to a private cache.
+A process that cannot use the shared cache is **off**. That happens when:
+
+- `nocopy.shm_name` is not set,
+- it cannot attach (the object belongs to another user, or `/dev/shm` is full), or
+- it attached but got no worker slot (1024 processes and threads already have one, or no file descriptor was left after
+  a fork).
+
+All of these behave the same: fetches miss, writes and `nocopy_clear()` return `false`, `nocopy_remember()` computes
+without storing, and nothing throws. The process logs one warning, and `nocopy_stats()['off']` says why for as long as it
+lasts. It never falls back to a private cache.
 
 A private cache would look like it works, but its writes and deletes would not reach anyone else. Picture `drush cr` clearing
 a private cache while php-fpm keeps serving the old data, or a cron job invalidating cache tags nobody else sees. A cache that

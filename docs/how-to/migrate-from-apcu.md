@@ -1,10 +1,15 @@
 # Migrate from APCu
 
-Two routes. Pick by how much code you control.
+There are two ways. Pick by how much of the code you control:
+
+- **Route A:** replace `apcu_*` calls with `nocopy_*`. Full speed. For your own code.
+- **Route B:** keep the `apcu_*` calls and load a polyfill. No code changes, smaller gain. For libraries and legacy code.
+
+You can combine them: the polyfill for code you can't change, `nocopy_*` for the hot paths you own.
 
 ## Route A: switch to `nocopy_*` (full speed)
 
-Replace calls one to one:
+Most calls map one to one:
 
 | APCu | nocopy |
 |---|---|
@@ -15,10 +20,25 @@ Replace calls one to one:
 | `apcu_entry($k, $fn, $ttl)` | `nocopy_remember($k, $fn, $ttl)` (single flight across workers) |
 | `apcu_fetch(array $keys)` / `apcu_store(array)` | `nocopy_get_multiple` / `nocopy_put_multiple` |
 
-Arrays and scalars are never serialized: that is where zero-copy comes from. Most objects aren't either: a fetch rebuilds
-them from their stored properties (or `__serialize()` array, or enum case), whose strings and arrays stay zero-copy, and runs
-`__wakeup`/`__unserialize` as `unserialize()` would, and `__sleep` is called on store as `serialize()` would. Objects with `Serializable`
-(or extending most internal classes) are stored serialized, as in APCu.
+Before and after:
+
+```php
+// APCu
+$rows = apcu_fetch('products', $ok);
+if (!$ok) {
+    $rows = loadProducts();
+    apcu_store('products', $rows, 300);
+}
+
+// nocopy
+$rows = nocopy_remember('products', fn () => loadProducts(), ttl: 300);
+```
+
+Arrays and scalars are never serialized: that is where zero-copy comes from. Most objects are not serialized either. They
+are stored as their properties and rebuilt on fetch, with the same `__sleep()`, `__wakeup()` and `__unserialize()` calls
+`serialize()` and `unserialize()` would make, and the strings and arrays inside them stay zero-copy. Objects that implement
+`Serializable`, or extend most internal classes, are stored serialized, as in APCu
+([details](../reference/functions.md#what-can-be-stored)).
 
 For frameworks: [Symfony bundle](symfony.md), [Drupal module](../../drupal/README.md).
 
@@ -38,20 +58,22 @@ For code that calls `apcu_*` and cannot change yet (libraries, legacy code).
 3. Keep `apc.enabled=1`, and `apc.enable_cli=1` if the CLI uses the cache: callers like Symfony's `ApcuAdapter` and
    Composer check these before calling `apcu_*`.
 
-The polyfill defines `apcu_*` only when nocopy is loaded and APCu is not. Every call goes through one PHP function and
-objects are stored serialized, so the gain is smaller than with `nocopy_*`, and none where the caller serializes first
-(Symfony's `cache.adapter.apcu` hands over strings).
+The polyfill defines `apcu_*` only when nocopy is loaded and APCu is not. Each call goes through a PHP function and objects
+are stored serialized, so the gain is smaller than with `nocopy_*`. Where the caller serializes values itself (Symfony's
+`cache.adapter.apcu` hands over strings), there is no gain: use the [Symfony bundle](symfony.md) instead.
 
 What is missing (`apcu_key_info()`, most `apc.*` settings): [APCu compatibility](../reference/apcu-compatibility.md).
 
 ## Sizing
 
-APCu's `apc.shm_size` and `apc.entries_hint` do nothing; use `nocopy.shm_size` and `nocopy.entries_hint`
+APCu's `apc.shm_size` and `apc.entries_hint` have no effect. Use `nocopy.shm_size` and `nocopy.entries_hint` instead
 ([Size and monitor the cache](size-and-monitor.md)).
 
 ## Behaviour that differs
 
-- **A full cache** evicts its oldest segments and keeps entries that are read; APCu wipes everything.
-- **php-fpm and the CLI share one cache** (APCu: each CLI process has its own), so `apcu_clear_cache()` in a CLI script
-  clears the web cache too.
+- **A full cache** removes old entries that nobody read and keeps the popular ones. APCu wipes everything.
+- **php-fpm and the CLI share one cache.** With APCu each CLI process has its own, so `apcu_clear_cache()` in a CLI script
+  did nothing to the web cache. With nocopy it clears the web cache too.
 - **A process without the shared cache** (no `nocopy.shm_name`) has no cache at all, rather than a private one.
+- **CLI scripts need the right user.** Run them as the php-fpm pool's user, or they cannot open the cache
+  ([details](share-between-fpm-and-cli.md)).

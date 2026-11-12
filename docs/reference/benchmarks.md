@@ -1,5 +1,17 @@
 # Benchmark results
 
+**In short:**
+
+- **Reads cost the same whatever the size.** An int, a 100-byte string and a 1,000-row array each take about 12 ns. APCu
+  needs 28 ns for the int and 200 µs for the array, because it copies every element.
+- **Many workers don't slow it down.** Reads take no lock: 8 workers read 350 M values per second, against 3.7 M with APCu.
+- **Writes are 2-3x faster than APCu**, and writers to different parts of the cache don't wait for each other.
+- **Whole apps:** a cache-heavy Symfony page goes from 25% to about 100% of what the server can do for a page with no cache
+  at all. Drupal 11 gains 1.3-2.6x, mostly because every cache bin leaves the database.
+- **No gain** for pages that barely touch the cache.
+
+The details, with how to reproduce each number, follow.
+
 Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`, `./dev sfbench` and `./dev drupal-bench`
 ([how](../how-to/develop.md#benchmark)). Numbers on a dedicated x86_64 box are still to come ([status](../status.md)).
 
