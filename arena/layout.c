@@ -75,8 +75,7 @@ bool ar_layout_adopt(ar_arena *a, nocopy_rebase_fn rebase)
 	ar_proc_adopt(&a->procs);
 	ar_pool_adopt(&a->pool);
 	ar_log_adopt((ar_seg *) (ar_base + a->segrec_off), n);
-	ar_policy_adopt(&a->expunges, a->slots_per);
-	ar_shards_adopt(a->shards, n, (ar_slot *) (ar_base + a->tables_off), (uint16_t *) (ar_base + a->ghosts_off), a->slots_per, rebase);
+	ar_shards_adopt(a->shards, n, (ar_slot *) (ar_base + a->tables_off), (uint16_t *) (ar_base + a->ghosts_off), a->slots_per, &a->expunges, rebase);
 	ar_leases_adopt(a->leases, n);
 	ar_atoms_adopt(&a->atoms, ar_shards_still_depend);
 	return true;

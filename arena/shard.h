@@ -7,7 +7,14 @@
 
 #include "ctx.h"
 #include "index.h"
-#include "policy.h"
+#include "log.h"
+
+/* Per shard: what making room did (room.c). */
+typedef struct {
+	uint64_t evicted;    /* entries unlinked by merge while unexpired */
+	uint64_t ghost_hits; /* new keys that were evicted recently: they start hot */
+	uint64_t evacuated;  /* bytes moved by merges */
+} ar_policy;
 
 typedef struct {
 	ar_lock lock __attribute__((aligned(64))); /* alone on its line */
@@ -30,8 +37,8 @@ static inline uint32_t ar_shard_idx(uint64_t h) { return ar_part(h, ar_shard_mas
 
 /* nshards (a power of two) shards over nsegs segments; zero-filled memory. */
 void ar_shards_init(ar_shard *shards, uint32_t nshards, uint32_t slots_per, uint32_t nsegs);
-/* tables: nshards * slots_per slots; ghosts: as many uint16 tags. */
-void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint16_t *ghosts, uint32_t slots_per, nocopy_rebase_fn rebase);
+/* tables: nshards * slots_per slots; ghosts: as many uint16 tags; expunges: arena-wide, in the header (rounds that lost live entries, and clears). */
+void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint16_t *ghosts, uint32_t slots_per, uint64_t *expunges, nocopy_rebase_fn rebase);
 /* Any segment depends on bits, after giving back what no longer does: one answer under every shard lock (atoms' rotation). */
 bool ar_shards_still_depend(uint8_t bits);
 /* Every shard and the pool against their invariants, every shard locked meanwhile. NULL, or the first one broken. For tests. */

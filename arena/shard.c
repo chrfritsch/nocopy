@@ -1,6 +1,6 @@
-/* nocopy arena: shards: writes, deletes, updates, making room, and repair after a dead holder. */
+/* nocopy arena: shards: locks, writes, deletes, updates, clear, and repair after a dead holder. Making room: room.c. */
 
-#include "shard.h"
+#include "shard_int.h"
 #include <stdio.h>
 
 ar_shard *ar_shards;
@@ -8,9 +8,6 @@ uint32_t ar_shard_mask;
 ar_index ar_ix[NOCOPY_MAX_SHARDS];
 
 static uint32_t nshards;
-static uint32_t fair_segs; /* nsegs / nshards: what a shard may take back from others, and the largest entry (a division on every write cost store int ~3 ns) */
-static uint16_t *ghosts[NOCOPY_MAX_SHARDS];
-static nocopy_rebase_fn rebase;
 
 static void repair(ar_shard *sh);
 
@@ -24,17 +21,15 @@ void ar_shards_init(ar_shard *shards, uint32_t n, uint32_t slots_per, uint32_t n
 	}
 }
 
-void ar_shards_adopt(ar_shard *shards, uint32_t n, ar_slot *tables, uint16_t *ghost_tabs, uint32_t slots_per, nocopy_rebase_fn fn)
+void ar_shards_adopt(ar_shard *shards, uint32_t n, ar_slot *tables, uint16_t *ghost_tabs, uint32_t slots_per, uint64_t *expunges, nocopy_rebase_fn fn)
 {
 	ar_shards = shards;
 	nshards = n;
 	ar_shard_mask = n - 1;
-	fair_segs = ar_nsegs / n;
-	rebase = fn;
 	for (uint32_t i = 0; i < n; i++) {
 		ar_index_adopt(&ar_ix[i], &shards[i].ix, tables + (size_t) i * slots_per, slots_per);
-		ghosts[i] = ghost_tabs + (size_t) i * slots_per;
 	}
+	ar_room_adopt(n, ghost_tabs, slots_per, expunges, fn);
 }
 
 /* ---- locks and entries (shard locked unless noted) ---- */
@@ -74,7 +69,7 @@ static void note_unlocking(void) {}
 void ar_shards_forget_held(void) {}
 #endif
 
-static void shard_lock(ar_shard *sh)
+void ar_shard_lock(ar_shard *sh)
 {
 	uint64_t dead;
 	note_locking(sh);
@@ -83,7 +78,7 @@ static void shard_lock(ar_shard *sh)
 	}
 }
 
-static void shard_unlock(ar_shard *sh)
+void ar_shard_unlock(ar_shard *sh)
 {
 	note_unlocking();
 	ar_lock_release(&sh->lock);
@@ -92,24 +87,8 @@ static void shard_unlock(ar_shard *sh)
 /* A reader stuck behind an odd mseq: its delete's holder may have died mid-shift; taking the lock steals and repairs. */
 __attribute__((cold, noinline)) void ar_shard_unstick(uint32_t i)
 {
-	shard_lock(&ar_shards[i]);
-	shard_unlock(&ar_shards[i]);
-}
-
-static ar_index *ix_of(const ar_shard *sh) { return &ar_ix[sh->idx]; }
-static nocopy_entry *slot_entry(ar_slot s) { return ar_at8(ar_slot_off8(s)); }
-static ar_slot slot_for(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
-
-static inline __attribute__((always_inline)) void birth(ar_shard *sh, nocopy_entry *e)
-{
-	ar_log_born(&sh->log, e);
-	ar_policy_born(e);
-}
-
-static inline __attribute__((always_inline)) void die(ar_shard *sh, nocopy_entry *e)
-{
-	ar_policy_died(e);
-	ar_log_died(&sh->log, e);
+	ar_shard_lock(&ar_shards[i]);
+	ar_shard_unlock(&ar_shards[i]);
 }
 
 /* The slot of the key's live entry (*found), or the empty slot ending its run. */
@@ -129,16 +108,6 @@ static inline __attribute__((always_inline)) ar_slot *locate(ar_shard *sh, uint6
 	return ar_probe_slot(&p);
 }
 
-static void unlink_entry(nocopy_entry *e, void *arg)
-{
-	ar_shard *sh = arg;
-	ar_slot *sp = ar_index_find(ix_of(sh), slot_for(e));
-	if (sp) {
-		ar_index_remove(ix_of(sh), sp);
-	}
-	die(sh, e);
-}
-
 /* ---- dead holders ---- */
 
 static bool linked(const nocopy_entry *e, void *arg) { return ar_index_find(ix_of(arg), slot_for(e)) != NULL; }
@@ -152,73 +121,18 @@ static void repair(ar_shard *sh)
 	ar_log_settle(&sh->log);
 }
 
-/* ---- making room ---- */
-
-/* Copies old forward into its segment's TTL bucket and repoints its slot. False if there is no room. */
-static bool relocate(nocopy_entry *old, uint8_t hot, void *arg)
-{
-	ar_shard *sh = arg;
-	nocopy_entry *n = ar_log_alloc(&sh->log, nocopy_entry_size(old), ar_segs[ar_seg_of(old)].bucket, old->expires, sh->last_seq, true);
-	if (!n) {
-		return false;
-	}
-	AR_HOOK("move.alloc");
-	memcpy(n + 1, old + 1, nocopy_entry_size(old) - sizeof *old);
-	n->h = old->h;
-	n->expires = old->expires;
-	n->created = old->created;
-	n->seq = old->seq;
-	n->klen = old->klen;
-	n->koff = old->koff;
-	n->flags = old->flags;
-	n->user = old->user;
-	n->hot = hot;
-	ar_seg_deps_or(ar_seg_of(n), rebase(n, old));
-	AR_HOOK("move.copied");
-	ar_slot *sp = ar_index_find(ix_of(sh), slot_for(old));
-	if (sp) {
-		birth(sh, n);
-		ar_index_put(ix_of(sh), sp, slot_for(n));
-		AR_HOOK("move.linked");
-	} else {
-		ar_log_abort(&sh->log, n);
-	}
-	die(sh, old);
-	return true;
-}
-
-static ar_merge merge_of(ar_shard *sh)
-{
-	return (ar_merge) {.log = &sh->log, .pol = &sh->pol, .ghosts = ghosts[sh->idx], .last_seq = sh->last_seq,
-		.relocate = relocate, .unlink = unlink_entry, .arg = sh};
-}
-
-static bool compact_or_evict(ar_shard *sh)
-{
-	ar_merge m = merge_of(sh);
-	return ar_policy_merge(&m);
-}
-
-static bool evict(ar_shard *sh)
-{
-	ar_merge m = merge_of(sh);
-	return ar_policy_evict(&m);
-}
-
-static bool expire_step(ar_shard *sh, time_t now, int budget) { return ar_log_expire_step(&sh->log, now, budget, unlink_entry, sh); }
-
 static void lock_all(void)
 {
 	note_locking_all();
 	for (uint32_t i = 0; i < nshards; i++) { /* in index order: two holders of all never deadlock */
-		shard_lock(&ar_shards[i]);
+		ar_shard_lock(&ar_shards[i]);
 	}
 }
 
 static void unlock_all(void)
 {
 	for (uint32_t i = 0; i < nshards; i++) {
-		shard_unlock(&ar_shards[i]);
+		ar_shard_unlock(&ar_shards[i]);
 	}
 }
 
@@ -258,85 +172,6 @@ bool ar_shards_still_depend(uint8_t bits)
 	return used;
 }
 
-/* Below 15/16 of its share: may take segments back from a shard holding more. */
-static bool below_share(const ar_shard *sh) { return sh->log.nown < fair_segs - fair_segs / 16; }
-
-/* sh locked, below its share, and the pool is dry: the shard holding the most evicts once to give segments back.
- * Drops sh's lock meanwhile (one lock at a time). false: nobody holds more than its share. */
-static __attribute__((cold, noinline)) bool rebalance(ar_shard *sh)
-{
-	uint32_t most = fair_segs;
-	ar_shard *big = NULL;
-	for (uint32_t i = 0; i < nshards; i++) {
-		uint32_t n = __atomic_load_n(&ar_shards[i].log.nown, __ATOMIC_RELAXED);
-		if (n > most) {
-			most = n;
-			big = &ar_shards[i];
-		}
-	}
-	if (!big) {
-		return false;
-	}
-	shard_unlock(sh);
-	AR_HOOK("rebalance.unlocked");
-	shard_lock(big);
-	ar_log_reclaim(&big->log);
-	if (big->log.nown > fair_segs && compact_or_evict(big)) {
-		ar_log_reclaim(&big->log);
-	}
-	AR_HOOK("rebalance.merged");
-	shard_unlock(big);
-	shard_lock(sh);
-	return true;
-}
-
-#define EXPIRE_PER_WRITE 64       /* entries each write's expiry step looks at */
-#define EXPIRE_UNDER_PRESSURE 4096 /* the same when an allocation failed: catch up before copying live data */
-
-/* Bounds each room-making loop: a round that frees nothing must not spin forever. */
-static uint32_t max_rounds(void) { return 2 * fair_segs; }
-
-static nocopy_entry *reclaim_alloc(ar_shard *sh, size_t total, int b, time_t exp)
-{
-	ar_log_reclaim(&sh->log);
-	return ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
-}
-
-/* A block of total bytes, freeing room as needed, cheapest first: expired entries, dead segments, dead writers' unfinished
- * entries, segments other shards hold beyond their share, merges. NULL: no room.
- * May drop and retake the lock (rebalance): whatever the caller read of the shard before calling is stale afterwards. */
-static nocopy_entry *alloc_relocking(ar_shard *sh, size_t total, time_t exp, time_t now)
-{
-	if (total > (size_t) (fair_segs - 1) << ar_seg_shift) {
-		return NULL; /* bigger than a shard's share */
-	}
-	int b = ar_log_bucket(exp ? (exp > now ? exp - now : 1) : 0); /* exp == now is not bucket 0, which never expires */
-	if (sh->log.exp_idle != now) { /* the common case: nothing left to expire this second */
-		expire_step(sh, now, EXPIRE_PER_WRITE);
-	}
-	nocopy_entry *e = ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
-	if (!e) {
-		e = reclaim_alloc(sh, total, b, exp);
-	}
-	while (!e && expire_step(sh, now, EXPIRE_UNDER_PRESSURE)) {
-		e = reclaim_alloc(sh, total, b, exp);
-	}
-	for (uint32_t tries = max_rounds(); !e && tries && below_share(sh) && rebalance(sh); tries--) {
-		e = ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
-	}
-	for (uint32_t tries = max_rounds(); !e && tries && compact_or_evict(sh); tries--) {
-		e = reclaim_alloc(sh, total, b, exp);
-	}
-	return e;
-}
-
-/* The slot table is full: evict whole segments' worth of entries until a slot is free. False if none could be. */
-static bool slot_room(ar_shard *sh)
-{
-	for (uint32_t tries = max_rounds(); ar_index_full(ix_of(sh)) && tries && evict(sh); tries--) {}
-	return !ar_index_full(ix_of(sh));
-}
-
 /* ---- writes ---- */
 
 /* Publishes e under its key; add_only fails if a live entry exists. Consumes e either way. */
@@ -349,7 +184,7 @@ static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 		return NOCOPY_PUT_EXISTS;
 	}
 	if (!old && ar_index_full(ix_of(sh))) {
-		bool room = slot_room(sh);
+		bool room = ar_room_slot(sh);
 		sp = locate(sh, e->h, nocopy_key(e), e->klen, &old); /* the merge moved entries and slots */
 		if (!old && !room) {
 			ar_log_abort(&sh->log, e);
@@ -357,7 +192,7 @@ static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 		}
 	}
 	if (!old) {
-		e->hot = ar_policy_admit(&sh->pol, ghosts[sh->idx], e->h);
+		e->hot = ar_room_admit(sh, e->h);
 	}
 	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + (1u << NOCOPY_SEQ_SHARD_BITS); /* keeps the shard bits */
 	birth(sh, e);
@@ -380,14 +215,14 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 		ar_pins_drop_transient(&c->pins); /* our own idle pins would block reclaim; only mixed read/write loops pay */
 	}
 	ar_shard *sh = &ar_shards[ar_shard_idx(q->h)];
-	shard_lock(sh);
+	ar_shard_lock(sh);
 	struct timespec ts;
 	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
 	time_t now = nocopy_now_of(&ts), exp = q->expires ? q->expires : nocopy_expiry(now, q->ttl);
 	exp = exp > UINT32_MAX ? UINT32_MAX : exp;
-	nocopy_entry *e = alloc_relocking(sh, q->size, exp, now); /* first: nothing above relies on shard state */
+	nocopy_entry *e = ar_room_alloc(sh, q->size, exp, now); /* first: nothing above relies on shard state */
 	if (!e) {
-		shard_unlock(sh);
+		ar_shard_unlock(sh);
 		return NULL;
 	}
 	AR_HOOK("put.alloc");
@@ -411,14 +246,14 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 {
 	nocopy_put_result r = commit(p->sh, p->e, add_only);
-	shard_unlock(p->sh);
+	ar_shard_unlock(p->sh);
 	return r;
 }
 
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 {
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];
-	shard_lock(sh);
+	ar_shard_lock(sh);
 	nocopy_entry *old;
 	ar_slot *sp = locate(sh, h, k, klen, &old);
 	bool found = old && !nocopy_expired(old);
@@ -431,7 +266,7 @@ bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 			ar_log_reclaim(&sh->log);
 		}
 	}
-	shard_unlock(sh);
+	ar_shard_unlock(sh);
 	return found;
 }
 
@@ -446,10 +281,10 @@ static __attribute__((noinline)) nocopy_entry *lookup(ar_shard *sh, uint64_t h, 
 int nocopy_update(uint64_t h, const char *k, uint32_t klen, int (*fn)(nocopy_entry *e, void *arg), void *arg)
 {
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];
-	shard_lock(sh);
+	ar_shard_lock(sh);
 	nocopy_entry *e = lookup(sh, h, k, klen);
 	int r = e && !nocopy_expired(e) ? fn(e, arg) : NOCOPY_GONE;
-	shard_unlock(sh);
+	ar_shard_unlock(sh);
 	return r;
 }
 
@@ -461,13 +296,13 @@ void nocopy_clear(void)
 	for (uint32_t i = 0; i < nshards; i++) {
 		ar_index_clear(&ar_ix[i], cleared, &ar_shards[i]);
 	}
-	ar_policy_count_expunge();
+	ar_room_count_expunge();
 	AR_HOOK("clear.emptied");
 	for (uint32_t i = 0; i < nshards; i++) {
 		ar_shard *sh = &ar_shards[i];
 		ar_log_seal_all(&sh->log); /* so they die and go back to the pool (with their deps) */
 		ar_log_reclaim(&sh->log);
-		shard_unlock(sh);
+		ar_shard_unlock(sh);
 		AR_HOOK("clear.unlocked");
 	}
 }

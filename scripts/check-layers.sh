@@ -10,9 +10,8 @@ rank() {
 	index.h | pool.h | atoms_read.h) echo 3 ;;
 	log.h | atoms.h | ctx.h) echo 4 ;;
 	policy_read.h) echo 5 ;;
-	policy.h) echo 6 ;;
 	shard.h) echo 7 ;;
-	layout.h | nocopy_arena.h) echo 8 ;;
+	shard_int.h | layout.h | nocopy_arena.h) echo 8 ;;
 	*) echo unknown ;;
 	esac
 }
@@ -28,7 +27,10 @@ done
 for f in arena/*.c; do
 	case $f in arena/arena.c | arena/layout.c) continue ;; esac
 	grep -qE '#include "(layout|nocopy_arena)\.h"' "$f" && no "$f includes layout.h or nocopy_arena.h: modules do not know the layout"
+	case $f in arena/shard.c | arena/room.c) continue ;; esac
+	grep -q '#include "shard_int.h"' "$f" && no "$f includes shard_int.h: the shard's own (shard.c, room.c)"
 done
+grep -l '#include "shard_int.h"' arena/*.h | grep -v '^arena/shard_int.h$' | sed 's/^/check-layers: includes shard_int.h: /' | grep . && bad=1
 grep -nE '#include "arena/' -- *.c *.h | grep -v '"arena/nocopy_arena.h"' | while read -r l; do echo "check-layers: $l: include arena/nocopy_arena.h only"; done | grep . && bad=1
 grep -nE '\b(ar|AR)_[A-Za-z]' -- *.c *.h | sed 's/^/check-layers: internal name: /' | grep . && bad=1
 # The value layer (nocopy_value.h): no module state; nocopy_value_int.h is its own; writing runs under a shard lock.

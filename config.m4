@@ -26,7 +26,7 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
   PHP_CHECK_FUNC(shm_open, rt)
 
   dnl the arena (arena/, plain C): the same list as tests/c/run.sh
-  nocopy_sources="nocopy.c arena/arena.c arena/atoms.c arena/index.c arena/layout.c arena/leases.c arena/log.c arena/policy.c arena/pool.c arena/proc.c arena/region.c arena/shard.c"
+  nocopy_sources="nocopy.c arena/arena.c arena/atoms.c arena/index.c arena/layout.c arena/leases.c arena/log.c arena/pool.c arena/proc.c arena/region.c arena/room.c arena/shard.c"
   AS_VAR_IF([PHP_NOCOPY_RESP], [no],, [
     AC_DEFINE([HAVE_NOCOPY_RESP], [1], [Define to 1 if nocopy has the RESP tier.])
     nocopy_sources="$nocopy_sources nocopy_resp.c"
