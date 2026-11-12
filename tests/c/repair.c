@@ -102,6 +102,56 @@ static void no_owner_id(void)
 	assert(waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 }
 
+/* A free run that lies across the point a shard's search starts at (its home) is found. Every segment free. */
+static void run_across_home(void)
+{
+	for (uint32_t s = 0; s < ar_nsegs; s++) {
+		ar_seg_owner[s] = s >= 8 && s < 12 ? 0 : NOCOPY_MAX_SHARDS + 1; /* someone else's, but 8..11 */
+	}
+	assert(ar_pool_take(1, 4, 10, 0) == 8);
+	memset(ar_seg_owner, 0, ar_nsegs);
+}
+
+/* A forked child that got no worker slot holds none of its parent's pins: a slot it claims later starts without them
+ * (kept as its own, never published, a segment would be read while it is reused). c: pins something. */
+static void fork_without_slot(nocopy_ctx *c)
+{
+	static nocopy_ctx all[NOCOPY_MAX_WORKERS];
+	int n = 0, up[2], down[2], st;
+	bool pinned = false;
+	for (uint32_t w = 0; w < ar_seg_words; w++) {
+		pinned |= c->pins.mine[w] != 0;
+	}
+	assert(pinned);
+	for (; n < NOCOPY_MAX_WORKERS; n++) {
+		nocopy_ctx_init(&all[n]);
+		if (!nocopy_claim(&all[n])) {
+			break;
+		}
+	}
+	assert(pipe(up) == 0 && pipe(down) == 0);
+	pid_t p = fork();
+	if (!p) {
+		char b = 0;
+		bool ok = !nocopy_after_fork(c) && nocopy_ctx_slot(c) < 0; /* every slot is the parent's */
+		ok = ok && write(up[1], &b, 1) == 1 && read(down[0], &b, 1) == 1;
+		ok = ok && nocopy_claim(c);
+		for (uint32_t w = 0; ok && w < ar_seg_words; w++) {
+			ok = !(c->pins.mine[w] & ~ar_pins_of(nocopy_ctx_slot(c))[w]);
+		}
+		_exit(ok ? 0 : 1);
+	}
+	char b;
+	assert(read(up[0], &b, 1) == 1);
+	nocopy_release(&all[0]);
+	assert(write(down[1], &b, 1) == 1);
+	assert(waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+	for (int i = 1; i < n; i++) {
+		nocopy_release(&all[i]);
+	}
+	close(up[0]), close(up[1]), close(down[0]), close(down[1]);
+}
+
 /* A creator maps the arena at a random 2 MB-aligned base: two creations, two addresses (alike once in 2^22). */
 static void random_base(void)
 {
@@ -244,7 +294,12 @@ int main(void)
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		assert(sh->log.cur[b] == -1);
 	}
+	run_across_home();
 	no_owner_id();
+	nocopy_put hp;
+	begin(&hp, &c, "held", 8);
+	assert(nocopy_put_commit(&hp, false) == NOCOPY_PUT_OK && found(&c, "held"));
+	fork_without_slot(&c);
 	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;
 }

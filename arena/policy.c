@@ -161,72 +161,76 @@ static uint8_t rank_cut(const uint32_t *v, uint32_t nv, size_t budget, size_t *s
 	return cut;
 }
 
-/* Moves survivors forward until `budget` bytes are used: every live entry when compacting, the most-read ones when evicting.
- * A moved copy keeps half its read count (aging), so it must be read again to stay on top. */
-static void move_survivors(const ar_merge *m, const uint32_t *v, uint32_t nv, size_t budget, bool lossy)
+/* e copied forward; out of segments, the victims already emptied give theirs first (each victim holds one TTL bucket, so one free segment is enough at a time). */
+static bool move_one(const ar_merge *m, nocopy_entry *e, uint8_t hot)
 {
-	size_t spare = 0;
-	uint8_t cut = lossy && budget ? rank_cut(v, nv, budget, &spare) : 1;
-	for (uint32_t i = 0; i < nv && budget; i++) {
-		AR_SEG_FOREACH(v[i], e) {
-			if (!budget) {
-				break;
-			}
-			if (!alive(e)) {
-				continue;
-			}
-			uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED); /* readers may raise it meanwhile: cut is a hint */
-			if (lossy) {
-				if (f < cut - 1 || f == 0) {
-					continue;
-				}
-				if (f < cut) {
-					if (nocopy_entry_size(e) > spare) {
-						continue;
-					}
-					spare -= nocopy_entry_size(e);
-				}
-			}
-			size_t size = nocopy_entry_size(e);
-			if (size > budget || !m->relocate(e, f >> 1, m->arg)) {
-				budget = 0;
-				break;
-			}
-			m->pol->evacuated += size;
-			budget -= size;
-		}
+	if (m->relocate(e, hot, m->arg)) {
+		return true;
 	}
+	ar_log_reclaim(m->log);
+	return m->relocate(e, hot, m->arg);
 }
 
-/* Unlinks what the victims still hold: expired entries count as expired, the rest as evicted (leaving a ghost). */
-static void evict_rest(const ar_merge *m, const uint32_t *v, uint32_t nv)
+/* What a round may still move: every live entry when compacting, the most-read ones when evicting (levels >= cut, and spare bytes of the level below). */
+typedef struct {
+	size_t budget, spare;
+	uint8_t cut;
+	bool lossy;
+} ar_moving;
+
+/* Moves s's survivors forward. A moved copy keeps half its read count (aging), so it must be read again to stay on top.
+ * False: no room for one (the budget is then spent). */
+static bool move_survivors(const ar_merge *m, uint32_t s, ar_moving *mv)
 {
-	bool lost = false;
-	for (uint32_t i = 0; i < nv && !lost; i++) {
-		AR_SEG_FOREACH(v[i], e) {
-			if (alive(e)) {
-				lost = true;
-				break;
-			}
+	AR_SEG_FOREACH(s, e) {
+		if (!mv->budget) {
+			break;
 		}
-	}
-	if (lost) {
-		ar_policy_count_expunge();
-	}
-	for (uint32_t i = 0; i < nv; i++) {
-		AR_SEG_FOREACH(v[i], e) {
-			if (!e->live) {
+		if (!alive(e)) {
+			continue;
+		}
+		uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED); /* readers may raise it meanwhile: cut is a hint */
+		if (mv->lossy) {
+			if (f < mv->cut - 1 || f == 0) {
 				continue;
 			}
-			if (nocopy_expired(e)) {
-				ar_log_count_expired(m->log);
-			} else {
-				m->pol->evicted++;
-				*ghost_cell(m->ghosts, e->h) = ghost_tag(e->h);
+			if (f < mv->cut) {
+				if (nocopy_entry_size(e) > mv->spare) {
+					continue;
+				}
+				mv->spare -= nocopy_entry_size(e);
 			}
-			m->unlink(e, m->arg);
-			AR_HOOK("merge.evicted");
 		}
+		size_t size = nocopy_entry_size(e);
+		if (size > mv->budget || !move_one(m, e, f >> 1)) {
+			mv->budget = 0;
+			return false;
+		}
+		m->pol->evacuated += size;
+		mv->budget -= size;
+	}
+	return true;
+}
+
+/* Unlinks what s still holds: expired entries count as expired, the rest as evicted (leaving a ghost). *lost: the round was counted. */
+static void evict_rest(const ar_merge *m, uint32_t s, bool *lost)
+{
+	AR_SEG_FOREACH(s, e) {
+		if (!e->live) {
+			continue;
+		}
+		if (nocopy_expired(e)) {
+			ar_log_count_expired(m->log);
+		} else {
+			if (!*lost) {
+				*lost = true;
+				ar_policy_count_expunge();
+			}
+			m->pol->evicted++;
+			*ghost_cell(m->ghosts, e->h) = ghost_tag(e->h);
+		}
+		m->unlink(e, m->arg);
+		AR_HOOK("merge.evicted");
 	}
 }
 
@@ -250,8 +254,22 @@ bool ar_policy_merge(const ar_merge *m, bool evict_only)
 		budget = nv > 2 ? ar_seg_size : 0; /* survivors fill at most one segment: frees at least one */
 	}
 	AR_HOOK("merge.picked");
-	move_survivors(m, v, nv, budget, lossy);
-	AR_HOOK("merge.moved");
-	evict_rest(m, v, nv);
+	/* victim by victim: one that is done is dead, and move_one may give it back, so it is not walked again */
+	ar_moving mv = {.budget = budget, .lossy = lossy, .cut = 1};
+	if (lossy && budget) {
+		mv.cut = rank_cut(v, nv, budget, &mv.spare);
+	}
+	uint64_t before = m->pol->evacuated;
+	bool lost = false;
+	for (uint32_t i = 0; i < nv; i++) {
+		if (!move_survivors(m, v[i], &mv) && !lossy) {
+			if (!i && m->pol->evacuated == before) {
+				evict_rest(m, v[0], &lost); /* not one entry could move: the sparsest victim makes the room */
+			}
+			return true; /* else the rest stays where it is: compaction loses nothing */
+		}
+		AR_HOOK("merge.moved");
+		evict_rest(m, v[i], &lost);
+	}
 	return true;
 }

@@ -72,7 +72,7 @@ uint32_t ar_pool_take(uint8_t tenant, uint32_t k, uint32_t from, uint32_t keep_f
 		return AR_NONE;
 	}
 	uint32_t ns = ar_nsegs;
-	for (uint32_t i = 0, n = 0; i < ns; i++) {
+	for (uint32_t i = 0, n = 0; i < ns + k - 1; i++) { /* k - 1 past the round: a run that lies across `from` */
 		uint32_t s = (from + i) % ns;
 		n = __atomic_load_n(&ar_seg_owner[s], __ATOMIC_RELAXED) ? 0 : s ? n + 1 : 1; /* runs do not wrap */
 		if (n < k) {

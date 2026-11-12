@@ -85,6 +85,8 @@ bool nocopy_after_fork(nocopy_ctx *c)
 {
 	ar_proc_attach(ar_region_reopen());
 	if (!nocopy_claim(c)) {
+		memset(&c->pins, 0, sizeof c->pins); /* the parent's pins, published nowhere: a slot claimed later would take them for its own */
+		c->pins.slot = -1;
 		return false;
 	}
 	ar_pins_publish(&c->pins);

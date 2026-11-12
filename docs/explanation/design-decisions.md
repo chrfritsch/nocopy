@@ -290,6 +290,23 @@ evicted 0 -> 496 / 160, moved 2,341 / 1,550 MB -> 0, 148 / 120 -> 1 / 6 us per p
 loop 1.5x 25.1 -> 25.1 / 40.2 -> 40.2, loop 1.1x at 64M 69.3 -> 69.2 and at 32M 50.1-52.9 -> 50.5-52.3 over four runs each,
 6 x 3 MB 83.5 -> 83.6 / 91.1 -> 91.2, with 20% rewrites 77.6-77.8 -> 77.5-77.8 / 87.7 -> 87.7. Not measured: `./dev ab` (one comparison per merge).
 
+**A merge takes its victims one at a time, and a compaction that runs out of segments stops instead of evicting.** It moved the
+survivors of all (up to 4) victims, then unlinked what was left in them; a move that found no segment ended the moving, so the rest of a
+"lossless" compaction was evicted. A victim's survivors go to its own TTL bucket's open segment: victims of two buckets, or one whose
+bucket's open segment is full twice, need more than the one segment kept free for merges. Now each victim is finished (moved, its
+expired entries unlinked) before the next, and a move without a segment first has `reclaim()` give the finished ones back; a compaction
+that still finds none keeps the rest, and only one that moved nothing evicts its sparsest victim.
+Arena alone, 4M (54 segments of 64 KB), values of 1-5 KB with TTLs over all 7 buckets, 1M mixed operations (45% puts, deletes, reads, a
+clock that expires the short TTLs), 300 / 500 / 700 / 900 keys = 19 / 29 / 43 / 53% of the segments live: evicted 0 / 637 / 6,971 / 14,511
+-> 0 / 0 / 0 / 0, every one of them by a compaction (no eviction round ran), moved 0 / 68 / 206 / 426 -> 0 / 70 / 247 / 555 MB;
+1,100 keys (64% live): 0 evicted, 1,170 MB moved. `tests/c/merge.c` (500 keys, 300,000 overwrites, nothing expires): 5,992 evicted in
+1,045 rounds -> 0. `bench/hitratio.php` (one bucket, more keys than room) 32M / 64M, old -> new: zipf 93.8 -> 93.8 / 93.3 -> 93.4,
++ 0.5 one-hit wonders 89.6 -> 89.6 / 91.0 -> 91.0, footprint 3 86.2 -> 86.4 / 85.5 -> 85.4, 20% rewrites 90.6 -> 90.5 / 90.1 -> 90.1,
+50% rewrites 89.8 -> 89.9 / 89.4 -> 89.4 (moved 1,878 -> 1,884 / 3,463 -> 3,466 MB), loop 1.5x 25.1 -> 25.2 / 40.2 -> 40.3; loop 1.1x
+52.0 -> 50.1 / 69.3 -> 68.6 in that run, then four more runs of each build with the same evicted and moved counts run for run.
+`./dev ab HEAD 3 write` (no row merges under pressure; another benchmark ran beside it): -2.1..+4.7% copy, -10.3..+6.3% zero-copy, signs mixed.
+Not measured: a PHP workload with mixed TTLs, pauses under the shard lock (`./dev tail`).
+
 **A segment holding one entry over half a segment is not compacted.** Such an entry gets a segment of its own; compacting it
 needed another whole segment, freed nothing and counted as progress, so the alloc loop copied it up to 2x the shard's share per store
 and never evicted: stores failed instead and readers kept the old value. `amp` scratch script (random overwrites, half reads),
