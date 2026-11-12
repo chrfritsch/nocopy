@@ -86,4 +86,5 @@ The arena is a named shared-memory object (`nocopy.shm_name`), so php-fpm, the C
 same cache. With `nocopy.valkey`, Valkey becomes the shared cache of several servers and each local arena holds copies
 in front of it. Why it is designed this way: [Sharing](sharing.md).
 
-Going deeper: [Design decisions](design-decisions.md) (with numbers), [Architecture](architecture.md) (internals and invariants).
+Going deeper: [Architecture](architecture.md) (the parts, a read and a write step by step, limits) and
+[Design decisions](design-decisions.md) (why it is built this way, with numbers).

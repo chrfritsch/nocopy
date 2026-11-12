@@ -12,7 +12,7 @@ Every function the extension defines, with its signature from [`nocopy.stub.php`
   an entry lives until the end of the second it expires in, so `ttl: 1` keeps it for 1 to 2 seconds.
 - **Keys** are hashed with PHP's own unseeded string hash, as in APCu. That means someone can craft keys that collide, and
   colliding keys slow down every write in their part of the cache. If a key contains user input, hash it with a secret
-  first ([why](../explanation/design-decisions.md#hashing-and-slots)):
+  first ([why](../explanation/design-decisions.md#keys-use-phps-own-hash-without-a-secret-seed)):
 
   ```php
   $key = 'search.' . hash_hmac('xxh128', $_GET['q'], $secret);

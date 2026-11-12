@@ -31,10 +31,17 @@ The docs are split by what you need right now ([Diátaxis](https://diataxis.fr))
 | **Reference**: look something up | **Explanation**: understand why |
 | [Functions](reference/functions.md) | [How nocopy works](explanation/how-it-works.md) |
 | [Configuration (php.ini)](reference/configuration.md) | [Sharing: by name and through Valkey](explanation/sharing.md) |
-| [`nocopy_stats()`](reference/stats.md) | [Design decisions and rejected ideas](explanation/design-decisions.md) (contributors) |
-| [Glossary](reference/glossary.md) | [Architecture and invariants](explanation/architecture.md) (contributors, for C changes) |
+| [`nocopy_stats()`](reference/stats.md) | [Architecture](explanation/architecture.md) |
+| [Glossary](reference/glossary.md) | [Design decisions](explanation/design-decisions.md) |
 | [APCu compatibility](reference/apcu-compatibility.md) | |
 | [Benchmark results](reference/benchmarks.md) | |
 | [`./dev` commands](reference/dev-commands.md) (contributors) | |
+
+## For contributors
+
+Changing the C code? Read these first (they are written for contributors and their tools, not for users):
+
+- [Internals](internals/architecture.md): code layers, memory layout, locking, eviction, and the invariants every change must keep
+- [Design log](internals/design-decisions.md): every decision with its measurements, and the ideas that were tried and dropped
 
 Project state, what was verified last and what is planned: [Status and roadmap](status.md).

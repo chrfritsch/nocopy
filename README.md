@@ -153,8 +153,8 @@ Same for `symfony/` (`chrfritsch/nocopy-bundle`), `drupal/` (`chrfritsch/nocopy-
 | New here | Using it | How it works |
 |---|---|---|
 | [Your first cache](docs/tutorials/first-cache.md) (10-minute tutorial) | [Symfony](docs/how-to/symfony.md) · [Drupal](drupal/README.md) · [Migrate from APCu](docs/how-to/migrate-from-apcu.md) | [How nocopy works](docs/explanation/how-it-works.md) |
-| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) · [Kubernetes](docs/how-to/kubernetes.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
-| [Glossary](docs/reference/glossary.md) | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Architecture](docs/explanation/architecture.md) (internals) |
+| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) · [Kubernetes](docs/how-to/kubernetes.md) | [Architecture](docs/explanation/architecture.md) |
+| [Glossary](docs/reference/glossary.md) | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
 
 Everything: [docs/](docs/README.md).
 

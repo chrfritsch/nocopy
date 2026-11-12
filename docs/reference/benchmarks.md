@@ -224,7 +224,7 @@ nocopy in copy mode (CLI); 2026-11-07, Docker on arm64 (11 cores), second of two
   4 workers instead of 8 it drops to 0.15-0.2 ms (APCu 0.3 ms); not the shard lock: readers take none, and 8 processes timing a pure-PHP op without any cache show the same tail in this VM (p99.99 1.42 ms at 8 workers, 0.14 ms at 4; 2026-11-11).
 - Max is 2-30 ms for everyone in every scenario: VM scheduling, not the store. Bare metal is still to come.
 - Zero-copy (one `php -S` request per run) gives the same get percentiles but evicts even in **fit**: each 10 s request keeps
-  up to `nsegs/4` segments pinned until it ends ([pins](../explanation/architecture.md#reads-lock-free-and-pins)), 8 of them pin the arena. php-fpm requests are short.
+  up to `nsegs/4` segments pinned until it ends ([pins](../internals/architecture.md#reads-lock-free-and-pins)), 8 of them pin the arena. php-fpm requests are short.
 
 ¹ APCu stores the arrays serialized (smaller), so the same keys fit and it never expunged: its rows show no eviction cost.
 
@@ -312,7 +312,7 @@ over the stored keys) and 4 writers of new keys, so every write evicts, for 20 s
 ## Hit ratio
 
 `bench/hitratio.php` measures read-through hit ratios under Zipf and loop workloads (optionally next to a few hot big values, which load some shards more than others); results back the eviction choices in
-[Design decisions](../explanation/design-decisions.md#eviction).
+[Design decisions](../internals/design-decisions.md#eviction).
 
 ### Twitter traces
 

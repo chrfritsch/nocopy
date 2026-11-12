@@ -1,5 +1,5 @@
 #!/bin/sh
-# The layers' boundaries (docs/explanation/architecture.md, Layers). Arena: headers include only lower layers; only arena.c and layout.c
+# The layers' boundaries (docs/internals/architecture.md, Layers). Arena: headers include only lower layers; only arena.c and layout.c
 # know the layout; outside arena/ only arena/nocopy_arena.h is included and no ar_/AR_ name is used. Values: see below.
 cd "$(dirname "$0")/.." || exit 2
 rank() {

@@ -30,7 +30,7 @@ stays untouched (it is mounted read-only). A failed test prints its diff: `-` ex
 | before a pull request | `./dev ci` |
 
 A single run of a concurrency test catches a race only sometimes: that is what the loops are for. Read the invariants in
-[Architecture](../explanation/architecture.md) before touching locking or the read path.
+[Architecture](../internals/architecture.md) before touching locking or the read path.
 
 ## Write a test
 
@@ -81,7 +81,7 @@ php -d nocopy.shm_name=/hr -d nocopy.shm_size=4M bench/hitratio.php zipf 1.5 0
 Full-stack: `./dev drupal-bench` (Drupal 11 behind nginx + php-fpm + MariaDB, 9 cache configs, long; writes to
 `bench/results-drupal/`), and `./dev sfbench` for a Symfony app.
 
-Record what you decided and why, with the numbers, in [Design decisions](../explanation/design-decisions.md).
+Record what you decided and why, with the numbers, in [Design decisions](../internals/design-decisions.md).
 
 ## Without Docker
 

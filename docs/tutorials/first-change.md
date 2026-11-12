@@ -140,4 +140,4 @@ If you want to keep it as a real change, also add the key to the [`nocopy_stats(
 - Which checks a change needs: `./dev novalkey` always, `./dev stress` and `./dev c` for concurrency, `./dev ci` before a pull request.
 
 Next: [Develop, test and benchmark](../how-to/develop.md) for the day-to-day tasks, and
-[Architecture and invariants](../explanation/architecture.md) before you change locking, eviction or the read path.
+[Architecture and invariants](../internals/architecture.md) before you change locking, eviction or the read path.

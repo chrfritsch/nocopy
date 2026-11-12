@@ -111,4 +111,4 @@ locally, and drops its copy if an invalidation arrived in between.
 - Valkey evicts by its own policy; an evicted key is a miss on every server.
 
 Setup: [Share one cache between php-fpm and the CLI](../how-to/share-between-fpm-and-cli.md), [Valkey](../how-to/valkey.md).
-Internals: [Architecture: Valkey tier](architecture.md#valkey-tier-nocopy_valkeyc).
+Internals: [Architecture: Valkey tier](../internals/architecture.md#valkey-tier-nocopy_valkeyc).
