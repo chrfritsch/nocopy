@@ -279,13 +279,13 @@ static int keyof(char *k, uint64_t h) { return snprintf(k, 20, "%llx", (unsigned
 static payload *pl(const nocopy_entry *e) { return (payload *) ((char *) e + HDR + NOCOPY_ALIGN(nocopy_entry_klen(e) + 1)); }
 static uint8_t pat(uint64_t h, uint32_t ver, uint32_t i) { return (uint8_t) (h ^ ver * 31 ^ i * 7); }
 
-/* deps: the atom halves the entry points into */
-static bool put_deps(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len, uint8_t deps)
+/* atoms: the entry points into the atoms of c's open view */
+static bool put_deps(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len, bool atoms)
 {
 	char k[20];
 	uint32_t klen = (uint32_t) keyof(k, h);
 	nocopy_put p;
-	nocopy_put_req q = {.h = h, .key = k, .klen = klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len), .deps = deps};
+	nocopy_put_req q = {.h = h, .key = k, .klen = klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len), .atoms = atoms};
 	nocopy_entry *e = nocopy_put_begin(&p, c, &q);
 	if (!e) {
 		return false;
@@ -297,7 +297,7 @@ static bool put_deps(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len, uint
 	return nocopy_put_commit(&p, false) == NOCOPY_PUT_OK;
 }
 
-static bool put(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len) { return put_deps(c, h, ver, len, 0); }
+static bool put(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len) { return put_deps(c, h, ver, len, false); }
 
 static void del(uint64_t h)
 {
@@ -551,7 +551,7 @@ static void rot_writer(nocopy_ctx *c)
 	w_gen = v.gen;
 	step("user.view");
 	CHECK(w_intact());
-	CHECK(put_deps(c, A, 2, 16, b ? nocopy_atom_bit(&v) : 0));
+	CHECK(put_deps(c, A, 2, 16, b != NULL));
 	nocopy_atom_end(c);
 	step("user.ended");
 	CHECK(w_intact());
@@ -638,14 +638,14 @@ static void lease_setup(nocopy_ctx *c)
 }
 static void lease_worker(nocopy_ctx *c)
 {
-	int r = nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30);
+	int r = nocopy_lease_take(c, A, 30);
 	CHECK(r == NOCOPY_LEASE_TAKEN || r == NOCOPY_LEASE_HELD);
 	if (r == NOCOPY_LEASE_TAKEN) {
 		CHECK(++holders == 1);
 		took++;
 		step("user.compute");
 		holders--;
-		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+		nocopy_lease_drop(c, A);
 	}
 }
 static void lease_check(nocopy_ctx *c)
@@ -673,22 +673,22 @@ static void late_setup(nocopy_ctx *c)
 }
 static void late_slow(nocopy_ctx *c)
 {
-	if (nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN) {
+	if (nocopy_lease_take(c, A, 30) == NOCOPY_LEASE_TAKEN) {
 		step("user.compute");
 		fake_now += 31; /* restored by late_check */
 		step("user.compute");
-		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+		nocopy_lease_drop(c, A);
 	}
 }
 static void late_next(nocopy_ctx *c)
 {
-	if (nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN) {
+	if (nocopy_lease_take(c, A, 30) == NOCOPY_LEASE_TAKEN) {
 		if (fake_now != 1700000000) {
 			step("user.took_over");
 		}
 		step("user.compute");
 		CHECK(holds(c)); /* the first holder's drop did not take it */
-		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+		nocopy_lease_drop(c, A);
 	}
 }
 static void late_check(nocopy_ctx *c)

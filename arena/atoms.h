@@ -1,6 +1,6 @@
 /* nocopy arena: atoms, writer side. Admissions append to the current generation; when its half is full, a rotation wipes
  * the other half for the next generation once no writer's view holds it and no segment's entries depend on it (the pool's
- * deps bits, which writers set under their shard's lock: ar_put_req.deps). */
+ * deps bits, which writers set under their shard's lock: nocopy_put_req.atoms). */
 
 #ifndef NOCOPY_ARENA_ATOMS_H
 #define NOCOPY_ARENA_ATOMS_H

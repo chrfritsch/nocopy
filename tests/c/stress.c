@@ -107,7 +107,7 @@ static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t
 		}
 	}
 	nocopy_put p;
-	nocopy_put_req q = {.h = h, .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = total, .ttl = ttl, .flags = 1, .deps = atom ? nocopy_atom_bit(&v) : 0};
+	nocopy_put_req q = {.h = h, .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = total, .ttl = ttl, .flags = 1, .atoms = atom != NULL};
 	nocopy_entry *e = nocopy_put_begin(&p, c, &q); /* flags 1: a payload with an atom field */
 	bool ok = false;
 	if (e) {

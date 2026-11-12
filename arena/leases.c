@@ -1,6 +1,7 @@
 /* nocopy arena: single-flight leases. A stolen table lock needs no repair: a lease changes by single stores. */
 
 #include "leases.h"
+#include "clock.h"
 
 static ar_lease_table *tables;
 static uint32_t mask;
@@ -41,8 +42,10 @@ static lease_search find_lease(ar_lease_table *t, uint64_t h, time_t now)
 	return found;
 }
 
-int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
+int nocopy_lease_take(nocopy_ctx *c, uint64_t h, time_t ttl)
 {
+	int32_t slot = c->pins.slot;
+	time_t now = nocopy_now();
 	ar_lease_table *t = table_of(h);
 	uint64_t dead = 0; /* holder found dead on the first pass: replace it if it still holds */
 	for (;;) {
@@ -70,8 +73,9 @@ int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
 	}
 }
 
-void nocopy_lease_drop(uint64_t h, int32_t slot)
+void nocopy_lease_drop(nocopy_ctx *c, uint64_t h)
 {
+	int32_t slot = c->pins.slot;
 	ar_lease_table *t = table_of(h);
 	lock(t);
 	for (int i = 0; i < NOCOPY_LEASES; i++) {

@@ -4,7 +4,7 @@
 #ifndef NOCOPY_ARENA_LEASES_H
 #define NOCOPY_ARENA_LEASES_H
 
-#include "proc.h"
+#include "ctx.h"
 
 #define NOCOPY_LEASES 32 /* per table: concurrent single-flight computes */
 
@@ -27,7 +27,7 @@ uint64_t ar_leases_held(time_t now);
 
 enum { NOCOPY_LEASE_TAKEN, NOCOPY_LEASE_HELD, NOCOPY_LEASE_MINE, NOCOPY_LEASE_FULL };
 /* MINE: recursion, our own callback asks for its key. FULL: the table is full, compute without one. Two keys with the same hash share one. */
-int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl);
-void nocopy_lease_drop(uint64_t h, int32_t slot); /* only if this slot still holds it: nobody drops a lease another worker retook */
+int nocopy_lease_take(nocopy_ctx *c, uint64_t h, time_t ttl);
+void nocopy_lease_drop(nocopy_ctx *c, uint64_t h); /* only if c's slot still holds it: nobody drops a lease another worker retook */
 
 #endif

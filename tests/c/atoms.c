@@ -97,7 +97,7 @@ static nocopy_entry *put_ref(nocopy_ctx *c, const char *k)
 	assert(nocopy_atom_begin(c, &v));
 	size_t klen = strlen(k);
 	nocopy_put p;
-	nocopy_put_req q = {.h = hash(k), .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1), .deps = nocopy_atom_bit(&v)};
+	nocopy_put_req q = {.h = hash(k), .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1), .atoms = true};
 	nocopy_entry *e = nocopy_put_begin(&p, c, &q);
 	assert(e);
 	assert(nocopy_put_commit(&p, false) == NOCOPY_PUT_OK);

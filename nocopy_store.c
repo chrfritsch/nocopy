@@ -271,7 +271,7 @@ static int lease_take(zend_ulong h)
 	if (NOCOPY_G(nleases) == (int) (sizeof NOCOPY_G(leases) / sizeof NOCOPY_G(leases)[0])) {
 		return NOCOPY_LEASE_FULL; /* nested too deep: compute without one */
 	}
-	int r = nocopy_lease_take(h, nocopy_ctx_slot(&NOCOPY_G(ctx)), nocopy_now(), LEASE_TTL);
+	int r = nocopy_lease_take(&NOCOPY_G(ctx), h, LEASE_TTL);
 	if (r == NOCOPY_LEASE_TAKEN) {
 		NOCOPY_G(leases)[NOCOPY_G(nleases)++] = h;
 	}
@@ -280,7 +280,7 @@ static int lease_take(zend_ulong h)
 
 static void lease_drop(void)
 {
-	nocopy_lease_drop(NOCOPY_G(leases)[--NOCOPY_G(nleases)], nocopy_ctx_slot(&NOCOPY_G(ctx)));
+	nocopy_lease_drop(&NOCOPY_G(ctx), NOCOPY_G(leases)[--NOCOPY_G(nleases)]);
 }
 
 /* Runs the callback (resolved only now: hits never call it), measures it, stores the result with its compute time. */

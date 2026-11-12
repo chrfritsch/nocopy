@@ -73,7 +73,7 @@ typedef enum {
 	NOCOPY_REFUSED, /* the value: warned, or an exception is pending */
 } nocopy_status;
 
-/* Writes val as q's entry. The caller sets q's h, key, klen, ttl, expires, user; the value sets size, koff, flags, deps.
+/* Writes val as q's entry. The caller sets q's h, key, klen, ttl, expires, user; the value sets size, koff, flags, atoms.
  * User code (__serialize, __sleep) runs while building, before the arena is touched; destructors after the commit. */
 nocopy_status nocopy_value_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only);
 /* The checks alone, without an arena: false if a write would refuse val. */

@@ -6,10 +6,10 @@ rank() {
 	case $1 in
 	base.h) echo 0 ;;
 	clock.h | proc.h | region.h) echo 1 ;;
-	entry.h | index_read.h | pool_read.h | leases.h) echo 2 ;;
+	entry.h | index_read.h | pool_read.h) echo 2 ;;
 	index.h | pool.h | atoms_read.h) echo 3 ;;
 	log.h | atoms.h | ctx.h) echo 4 ;;
-	policy_read.h) echo 5 ;;
+	policy_read.h | leases.h) echo 5 ;;
 	shard.h) echo 7 ;;
 	shard_int.h | layout.h | nocopy_arena.h) echo 8 ;;
 	*) echo unknown ;;

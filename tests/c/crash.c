@@ -114,7 +114,7 @@ static bool put(nocopy_ctx *c, const char *k, uint32_t ver, uint32_t len, time_t
 		}
 	}
 	nocopy_put p;
-	nocopy_put_req q = {.h = h, .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = total, .ttl = ttl, .flags = 1, .deps = atom ? nocopy_atom_bit(&v) : 0};
+	nocopy_put_req q = {.h = h, .key = k, .klen = (uint32_t) klen, .koff = HDR, .size = total, .ttl = ttl, .flags = 1, .atoms = atom != NULL};
 	nocopy_entry *e = nocopy_put_begin(&p, c, &q);
 	bool ok = false;
 	if (e) {
@@ -201,8 +201,8 @@ static bool workload(nocopy_ctx *c, uint32_t seed, int ops)
 			fake_now += 1 + rnd() % 3; /* TTLs pass, once-a-second work comes due */
 		} else if (r < 90) {
 			uint64_t h = hash(k, strlen(k));
-			if (nocopy_lease_take(h, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN && rnd() % 4) {
-				nocopy_lease_drop(h, nocopy_ctx_slot(c));
+			if (nocopy_lease_take(c, h, 30) == NOCOPY_LEASE_TAKEN && rnd() % 4) {
+				nocopy_lease_drop(c, h);
 			}
 		} else if (r < 91) {
 			if (rnd() % 8 == 0) {
@@ -268,8 +268,8 @@ static void touch_all(nocopy_ctx *c)
 		seen |= 1u << s;
 		put(c, k, 1, 50, 0, NOWORD);
 		nocopy_delete(h, k, (uint32_t) strlen(k));
-		if (nocopy_lease_take(h, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN) {
-			nocopy_lease_drop(h, nocopy_ctx_slot(c));
+		if (nocopy_lease_take(c, h, 30) == NOCOPY_LEASE_TAKEN) {
+			nocopy_lease_drop(c, h);
 		}
 	}
 	for (uint32_t i = 0; i < 4; i++) { /* the atom lock: a trylock that looks at a dead holder once a second */

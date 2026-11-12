@@ -88,7 +88,7 @@ static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req
 	q->size = val_off(q->klen) + (Z_TYPE_P(val) == IS_STRING ? str_size(Z_STRLEN_P(val)) : 0);
 	q->koff = KEY_OFF;
 	q->flags = (uint8_t) fmt;
-	q->deps = 0;
+	q->atoms = false;
 	nocopy_put p;
 	nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
 	if (!e) {
@@ -128,7 +128,7 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 		q->size = b.base + b.bn;
 		q->koff = KEY_OFF;
 		q->flags = (uint8_t) b.fmt;
-		q->deps = b.atoms && av ? nocopy_atom_bit(av) : 0;
+		q->atoms = b.atoms && av;
 		nocopy_put p;
 		nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
 		r = NOCOPY_NO_ROOM;

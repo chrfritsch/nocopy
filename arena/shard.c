@@ -211,6 +211,7 @@ static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 
 nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_req *q)
 {
+	AR_ASSERT(!q->atoms || c->atom.anest); /* atoms without an open view: a rotation may already have wiped them */
 	if (!c->pin_refs) {
 		ar_pins_drop_transient(&c->pins); /* our own idle pins would block reclaim; only mixed read/write loops pay */
 	}
@@ -233,8 +234,8 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 	e->created = (uint32_t) now;
 	e->flags = q->flags;
 	e->user = q->user;
-	if (q->deps) { /* before the writer drops its atom view: a rotation relies on it */
-		ar_seg_deps_or(ar_seg_of(e), q->deps);
+	if (q->atoms) { /* while the writer's view is open: a rotation relies on it */
+		ar_seg_deps_or(ar_seg_of(e), (uint8_t) (1u << (c->atom.agen & 1)));
 	}
 	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | sh->idx; /* commit makes it unique */
 	*p = (nocopy_put) {.sh = sh, .e = e};

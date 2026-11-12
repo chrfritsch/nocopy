@@ -66,7 +66,7 @@ typedef struct {
 	time_t expires; /* instead of ttl: the last second it lives */
 	uint8_t flags;  /* the user's, as read back by nocopy_entry_flags */
 	uint32_t user;  /* the user's, kept when merge moves the entry */
-	uint8_t deps;   /* atom halves the payload will reference (nocopy_atom_bit of the writer's view), or 0 */
+	bool atoms;     /* the payload points at atoms of c's open view (nocopy_atom_begin) */
 } nocopy_put_req;
 
 /* A write between nocopy_put_begin and nocopy_put_commit. */
