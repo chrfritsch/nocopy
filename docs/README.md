@@ -43,5 +43,6 @@ Changing the C code? Read these first (they are written for contributors and the
 
 - [Internals](internals/architecture.md): code layers, memory layout, locking, eviction, and the invariants every change must keep
 - [Design log](internals/design-decisions.md): every decision with its measurements, and the ideas that were tried and dropped
+- [Status log](internals/status.md): what was verified when, and the open work in detail
 
-Project state, what was verified last and what is planned: [Status and roadmap](status.md).
+Release state, what is supported and what is planned: [Status and roadmap](status.md).

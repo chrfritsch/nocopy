@@ -6,5 +6,6 @@ they record every invariant and measurement. Users want [the docs](../README.md)
 - [Architecture: internals](architecture.md): code layers, memory layout, locking, eviction, the read path, the Valkey
   tier, and the invariants every change must keep
 - [Design log](design-decisions.md): every decision with its numbers, and the measured ideas that were dropped
+- [Status log](status.md): what was verified when, with which commands and results, and the detailed roadmap
 
 Day-to-day commands: [Develop, test and benchmark](../how-to/develop.md) and [`./dev` commands](../reference/dev-commands.md).

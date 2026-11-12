@@ -2,7 +2,7 @@
 
 PHP extension (C): zero-copy shared-memory cache, APCu-compatible via a PHP polyfill. Read before changing things:
 `docs/` (Diátaxis for users: tutorials, how-to, reference, explanation; index `docs/README.md`; contributor internals in `docs/internals/`). Before C changes: `docs/internals/architecture.md` (invariants)
-and `docs/internals/design-decisions.md` (what was measured and rejected). State and roadmap: `docs/status.md`.
+and `docs/internals/design-decisions.md` (what was measured and rejected). State and roadmap: `docs/status.md` (users) and `docs/internals/status.md` (verification log).
 
 ## Build and test
 
@@ -29,4 +29,4 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 - Code comments: one short line, or none.
 - Performance claims need numbers (`./dev bench`, A/B via `docker/ab.sh`); record decisions and rejections with numbers in `docs/internals/design-decisions.md`.
 - Tests give every arena its own `nocopy.shm_name` and remove `/dev/shm/<name>.*` afterwards.
-- Docs: keep them in the Diátaxis quadrant they belong to, written for PHP developers who use nocopy; contributor detail (C internals, measurements) goes in `docs/internals/`, not in the user pages; update the reference pages (functions, configuration, stats, dev-commands) with any API, INI or `./dev` change, and `docs/status.md` after verifying runs or finishing roadmap items.
+- Docs: keep them in the Diátaxis quadrant they belong to, written for PHP developers who use nocopy; contributor detail (C internals, measurements) goes in `docs/internals/`, not in the user pages; update the reference pages (functions, configuration, stats, dev-commands) with any API, INI or `./dev` change, `docs/internals/status.md` after verifying runs, and both status pages after finishing roadmap items.
