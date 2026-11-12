@@ -62,13 +62,13 @@ build may lay out memory differently.
 
 ### RESP: one listener per server, and nothing outdated is served
 
-**Decision:** one background process per server receives RESP's change notifications for all workers. While it is
+**Decision:** one background process per server receives the server's change notifications for all workers. While it is
 disconnected, nothing local is served.
 
 **Why:** with every worker listening, 16 workers meant 16 connections and 16 copies of every notification. And a local copy
 whose invalidation might have been missed could be outdated.
 
-**For you:** few connections to RESP. When RESP is down you get misses, not stale data. Each write makes every server
+**For you:** few connections to the RESP server. When the server is down you get misses, not stale data. Each write makes every server
 fetch the value again once, the writer's included: fine for cache data, not for a counter bumped on every request.
 
 ## Storing
@@ -101,7 +101,7 @@ that means fewer evictions: with 24 MB, the hit rate went from 89.5% to 94.6%. R
 
 **Why:** when the wall clock is corrected (NTP, an admin, a VM resuming), entries would expire early or live too long.
 
-**For you:** a clock change does not touch your cache. With RESP, TTLs are sent as relative times, so RESP's clock does
+**For you:** a clock change does not touch your cache. With RESP, TTLs are sent as relative times, so the server's clock does
 not matter either; still run NTP on your servers.
 
 ## Keys and slots
@@ -189,7 +189,7 @@ for anything expensive to compute.
 | Idea | Why not |
 |---|---|
 | Compressing entries in shared memory | Every read would have to decompress (10-27 µs for a render array, against 0 now) |
-| Compressing what goes to RESP | igbinary already makes it 2-2.3x smaller; compression pays only when RESP is short of memory or bandwidth |
+| Compressing what goes to the RESP server | igbinary already makes it 2-2.3x smaller; compression pays only when RESP is short of memory or bandwidth |
 | Native cache tags in C | At most 0.5-1.5% of a Drupal page-cache hit; Drupal already checks all tags in one lookup |
 | A seeded key hash | 1.5-2 ns on every call; see above |
 | Dropping `nocopy_get_multiple()` for a PHP loop | 10 keys: 142 ns become 292 ns |

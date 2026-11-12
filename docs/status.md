@@ -15,7 +15,7 @@ Install with `pie install chrfritsch/nocopy` ([install guide](how-to/install.md)
 | **PHP** | 8.4 and 8.5, NTS and ZTS (thread-safe) |
 | **Web servers** | php-fpm, Apache mod_php (prefork), FrankenPHP (classic and worker mode), `php -S`, CGI, LiteSpeed. Not tested: mod_php under a threaded Apache MPM. |
 | **Long-running processes** | CLI scripts, queue workers, FrankenPHP workers (they get [copy mode](explanation/how-it-works.md#zero-copy-and-copy-mode) automatically) |
-| **Several servers** | RESP, or Redis 6.2+, including over TLS. Not yet: Sentinel, Cluster, TLS over unix sockets. |
+| **Several servers** | Redis 6.2+ or Valkey, including over TLS. Not yet: Sentinel, Cluster, TLS over unix sockets. |
 
 ### Integrations
 

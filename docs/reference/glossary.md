@@ -24,6 +24,6 @@ Words these docs use, in plain terms. The full story: [How nocopy works](../expl
 
 **Off**: The state of a process that has no shared cache (no `nocopy.shm_name`, no permission, too many processes). Reads miss, writes return `false`, nothing throws. `nocopy_stats()['off']` says why.
 
-**Listener**: With RESP, one background process per server (`nocopy-resp` in `ps`) that receives RESP's change notifications and drops outdated local copies.
+**Listener**: With RESP, one background process per server (`nocopy-resp` in `ps`) that receives the server's change notifications and drops outdated local copies.
 
 **Polyfill**: The PHP package `chrfritsch/nocopy-apcu`, which defines the `apcu_*` functions on top of nocopy.

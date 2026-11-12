@@ -16,7 +16,7 @@ usually read different php.ini files, so check both:
 ```ini
 nocopy.shm_name=/nocopy        ; required: Drush and cron attach to php-fpm's memory
 nocopy.serializer=igbinary     ; recommended, if you have igbinary: render arrays contain objects, stored serialized
-;nocopy.resp=host:6379       ; several servers: RESP is the shared cache, each server keeps local copies
+;nocopy.resp=host:6379       ; several servers: the RESP server is the shared cache, each server keeps local copies
 ```
 
 Then require the module and the polyfill (not on Packagist yet, so from a checkout of the nocopy repository) and enable it:
@@ -85,7 +85,7 @@ TTL and stay. Invalidated items are not deleted (as in core), so without a memor
 ## Key prefix
 
 The prefix is derived like core's APCu prefix: from the app root, `deployment_identifier` and the Drupal version. So it
-changes with each deploy and core update. With `nocopy.resp`, the old tag tokens and small bins then stay in RESP,
+changes with each deploy and core update. With `nocopy.resp`, the old tag tokens and small bins then stay in the RESP server,
 since they have no TTL. If every server uses the same docroot, set a fixed prefix:
 
 ```php

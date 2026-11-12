@@ -2,14 +2,14 @@
 
 Goal: several web servers (and their CLI processes) share one cache.
 
-RESP holds the data all servers share. Each server keeps local copies in its own shared memory, so most reads never
-leave the machine and stay zero-copy. When a value changes, RESP tells every server to drop its copy (client-side
-tracking). nocopy talks to RESP itself: you do not need phpredis or Predis.
+RESP is the protocol that Redis and Valkey speak, so any of them works as the shared cache. The RESP server holds the data all servers share. Each server keeps local copies in its own shared memory, so most reads never
+leave the machine and stay zero-copy. When a value changes, the RESP server tells every web server to drop its copy (client-side
+tracking). nocopy talks to the RESP server itself: you do not need phpredis or Predis.
 
-Works with RESP, or Redis 6.2+ (RESP3), managed services included. Needs a build with RESP support, which is the
+Works with any server that speaks RESP: Redis 6.2+ or Valkey, managed services included. Needs a build with the RESP tier, which is the
 default (not `--disable-nocopy-resp`).
 
-## 1. Point every server at RESP
+## 1. Point every server at the RESP server
 
 On every server, for php-fpm and the CLI:
 
@@ -40,7 +40,7 @@ php -r 'var_dump(nocopy_shared_with());'     # "resp"
 valkey-cli client list | grep -c name=nocopy-listener   # one per server
 ```
 
-Each server runs one listener process (`nocopy-resp` in `ps`). It receives RESP's change notifications for the whole
+Each server runs one listener process (`nocopy-resp` in `ps`). It receives the server's change notifications for the whole
 server and drops outdated local copies. Now write on server A and read on server B:
 
 ```sh
@@ -50,7 +50,7 @@ php -r 'var_dump(nocopy_get("probe"));'           # on B: A's hostname
 
 ## 3. Give RESP a memory limit
 
-Set `maxmemory` and an eviction policy in `valkey.conf`. A key RESP evicts is a miss on every server. For the Drupal
+Set `maxmemory` and an eviction policy in `valkey.conf` (`redis.conf` on Redis). A key the server evicts is a miss on every server. For the Drupal
 module, use `maxmemory-policy volatile-lfu` ([why](../../drupal/README.md#several-web-servers)).
 
 ## Use TLS
@@ -67,7 +67,7 @@ nocopy uses TLS 1.2 or newer and checks the certificate against the host name (o
 the files once at startup, so the key file can be readable by root only. Set `nocopy.resp_tls_verify=0` only in tests.
 A build without OpenSSL says so on the first connection.
 
-## When RESP is down
+## When the server is down
 
 nocopy stops serving local copies, because they could be outdated. Reads miss and writes return `false`, with a warning
 each time; each worker tries to reconnect every 0.5-1.5 s. When the listener reconnects, it clears the local cache, since
@@ -83,9 +83,9 @@ Your code sees cache misses, not exceptions: make sure it can run on misses alon
   fine for cache traffic, but not for a counter you increment on every request.
 - **Per server, not per cluster:** `nocopy_stats()`, and `nocopy_remember()`'s "only one worker computes" (one computation
   per server).
-- **Security:** trust RESP as much as php-fpm. Values read from it are unserialized with every class allowed (as in
+- **Security:** trust the RESP server as much as php-fpm. Values read from it are unserialized with every class allowed (as in
   APCu or Symfony's Redis adapter). Use AUTH/ACLs and TLS, and do not share the key prefix with untrusted clients.
-- **Clocks:** TTLs go to RESP as relative times, so RESP's clock does not matter. Local copies expire at the time the
+- **Clocks:** TTLs go to the RESP server as relative times, so the server's clock does not matter. Local copies expire at the time the
   writer computed, so run NTP: servers whose clocks differ by more than a TTL keep copies for too short or too long.
 - **Not supported yet:** Sentinel, Cluster, TLS over unix sockets.
 

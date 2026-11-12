@@ -103,10 +103,10 @@ kernel file lock on its slot in the shared memory, and the kernel releases it wh
 
 With `nocopy.resp` set, the arena becomes a local copy of what RESP holds:
 
-- **Read:** a local hit works as above. A local miss fetches from RESP and stores a local copy.
-- **Write:** stored locally, then sent to RESP.
-- **Change elsewhere:** RESP notifies each server's listener, which drops the local copy.
-- **RESP unreachable:** nothing local is served (it could be outdated); reads miss and writes fail until it is back.
+- **Read:** a local hit works as above. A local miss fetches from the RESP server and stores a local copy.
+- **Write:** stored locally, then sent to the RESP server.
+- **Change elsewhere:** the RESP server notifies each web server's listener, which drops the local copy.
+- **Server unreachable:** nothing local is served (it could be outdated); reads miss and writes fail until it is back.
 
 Details: [Sharing](sharing.md#several-servers-resp-as-the-cache-of-record).
 

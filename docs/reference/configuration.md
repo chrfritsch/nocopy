@@ -97,7 +97,7 @@ Only in builds with the RESP tier (the default; absent with `--disable-nocopy-re
 | Setting | Default | Meaning |
 |---|---|---|
 | `nocopy.resp` | off | Where RESP is (formats below). `phpinfo()` hides the credentials |
-| `nocopy.resp_prefix` | `nocopy:` | Key prefix in RESP. Servers with the same prefix share one cache |
+| `nocopy.resp_prefix` | `nocopy:` | Key prefix in the RESP server. Servers with the same prefix share one cache |
 | `nocopy.resp_timeout` | `0.5` | Seconds to wait for a connection or a reply before treating RESP as down |
 | `nocopy.resp_tls_ca_file` | system store | PEM file with the CAs that may sign the server certificate |
 | `nocopy.resp_tls_cert_file` | none | Client certificate (chain), for servers with `tls-auth-clients` |

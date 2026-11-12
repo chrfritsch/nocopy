@@ -71,7 +71,7 @@ $users = nocopy_get_multiple(['user.1', 'user.2', 'user.3']);
 $missing = array_diff(['user.1', 'user.2', 'user.3'], array_keys($users));
 ```
 
-With `nocopy.resp`, all keys missing locally are fetched from RESP in one round trip (`MGET`).
+With `nocopy.resp`, all keys missing locally are fetched from the RESP server in one round trip (`MGET`).
 
 ## Write
 
@@ -138,7 +138,7 @@ With `nocopy.resp`, one `UNLINK` command.
 nocopy_clear(): bool
 ```
 
-Deletes every entry. With `nocopy.resp`, it also deletes every key under `nocopy.resp_prefix` in RESP.
+Deletes every entry. With `nocopy.resp`, it also deletes every key under `nocopy.resp_prefix` in the RESP server.
 
 Returns `false` if not everything was cleared: the cache is off in this process (`nocopy_stats()['off']` says why), or
 RESP could not be reached. Use this in deploy scripts so a clear that reached nothing fails loudly:
@@ -278,7 +278,7 @@ The live keys that start with `$prefix`, oldest first (to within 1-4 ms, so not 
 
 It does not block writers, so a key that is being deleted at the same moment may be missing from the list. It looks at
 every slot in the cache, so use it in tools and admin pages, not on every request. With `nocopy.resp` it lists what
-this server has cached locally, not every key in RESP.
+this server has cached locally, not every key in the RESP server.
 
 ## What can be stored
 

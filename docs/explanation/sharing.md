@@ -63,12 +63,12 @@ run what it wants, past `disable_functions`. So:
 
 ## Several servers: RESP as the cache of record
 
-Shared memory ends at the machine. With `nocopy.resp`, RESP holds the data every server shares, and each server's arena
+Shared memory ends at the machine. With `nocopy.resp`, the RESP server holds the data every server shares, and each server's arena
 holds local copies:
 
-- **Writes** go to the local arena and to RESP (`SET`). Deletes, `add`, `inc`, `cas` and `clear` run in RESP.
-- **Reads** are served locally when there is a copy (zero-copy, no round trip); a local miss is fetched from RESP and kept.
-- **Invalidation:** RESP's client-side tracking pushes every change under the prefix (writes, deletes, expiry, eviction)
+- **Writes** go to the local arena and to the RESP server (`SET`). Deletes, `add`, `inc`, `cas` and `clear` run in the RESP server.
+- **Reads** are served locally when there is a copy (zero-copy, no round trip); a local miss is fetched from the RESP server and kept.
+- **Invalidation:** the server's client-side tracking pushes every change under the prefix (writes, deletes, expiry, eviction)
   to a listener process on each server, which drops the local copy.
 
 ```mermaid
@@ -100,7 +100,7 @@ The listener pings RESP every second. While its connection is down or silent, no
 might be missing. On every (re)connect it clears the local arena, because it cannot know what it missed. When RESP is
 unreachable, fetches miss and writes fail: misses are slow, stale data is wrong.
 
-A fill guard closes the last gap: a worker that fetched a value from RESP checks an invalidation counter before storing it
+A fill guard closes the last gap: a worker that fetched a value from the RESP server checks an invalidation counter before storing it
 locally, and drops its copy if an invalidation arrived in between.
 
 ### Costs
@@ -108,7 +108,7 @@ locally, and drops its copy if an invalidation arrived in between.
 - The writer's own server also gets its write pushed back and refetches it once: fine for cache traffic, wasteful for
   counters bumped on every request.
 - `nocopy_stats()` and the single flight of `nocopy_remember()` are per server.
-- RESP evicts by its own policy; an evicted key is a miss on every server.
+- The server evicts by its own policy; an evicted key is a miss on every server.
 
 Setup: [Share one cache between php-fpm and the CLI](../how-to/share-between-fpm-and-cli.md), [RESP](../how-to/resp.md).
 Internals: [Architecture: RESP tier](../internals/architecture.md#resp-tier-nocopy_respc).

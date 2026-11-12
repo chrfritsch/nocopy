@@ -9,7 +9,7 @@ Goal: php-fpm pods, their CLI processes and CronJobs share one cache. Install th
 |---|---|
 | php-fpm and `kubectl exec … drush` in **one container** | `nocopy.shm_name` and a `/dev/shm` volume |
 | Containers of **one pod** (php-fpm plus a CLI or worker sidecar) | the same volume mounted at `/dev/shm` in each, the same image, the same uid |
-| **Several pods**: replicas, separate deployments, CronJobs | `nocopy.resp` as well: RESP is the shared cache, each pod keeps local copies ([RESP](resp.md)) |
+| **Several pods**: replicas, separate deployments, CronJobs | `nocopy.resp` as well: the RESP server is the shared cache, each pod keeps local copies ([RESP](resp.md)) |
 
 Shared memory does not cross pods: anything that writes in one pod and reads in another needs RESP. A Drupal or Symfony
 site with more than one replica, or with cron in its own pod, is in the last row.
@@ -94,9 +94,9 @@ CronJob without `nocopy.resp` has a cache of its own, and its writes and invalid
 - All pods of one environment need the same prefix and the same `nocopy.serializer`.
 - An unset variable expands to an empty value, and an empty `nocopy.resp` means no RESP.
 
-## 4. Size RESP
+## 4. Size the server
 
-- Connections: one per php-fpm worker or CLI process, plus one listener per pod. Keep RESP's `maxclients` above
+- Connections: one per php-fpm worker or CLI process, plus one listener per pod. Keep the server's `maxclients` above
   `replicas × (pm.max_children + 1)` summed over every deployment, plus CronJobs.
 - Memory: set `maxmemory` below the RESP container's limit, and `maxmemory-policy volatile-lfu` for the Drupal module
   ([why](../../drupal/README.md)).
