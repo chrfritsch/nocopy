@@ -239,6 +239,15 @@ get_prods, get_ords, get_json unchanged. `./dev ab HEAD 9 write`, copy / zero: s
 1k rows +4.4 / +3.2%, 1k unserialized keys +3.0 / +5.0%, 1k new rows +1.3 / +2.3%, 10 new rows -1.5 / -1.8%, int, string, store+delete
 within ±2%. `./dev ab HEAD 7 read`: fetches within ±3%, block bytes unchanged (240,544). The lock is held for the copy and the adds only.
 
+**Every block is placed under the shard lock** (2026-11-12; was: blocks over 2 KB with the lock dropped, the entry recorded in the
+worker slot (`wip`) and rolled back by `wip_reap`, on a slot claim or by `nocopy_clear` if the writer died). Placing is a copy now, so
+the split saved little and cost a second lock round trip plus the recovery code; a writer dying mid-fill is a dead holder like any
+other. Measured as `NOCOPY_INLINE_PUT` raised to 4 GB: `./dev tail 8 10 contend` (100-row arrays rewritten under readers), two runs each
+interleaved, copy mode old / new: put p99.9 131, 137 / 163, 131 µs, put p99.99 1194, 921 / 1360, 882, get p99.99 1302, 962 / 1549, 921,
+put 454k, 456k / 443k, 460k ops/s (zero-copy alike). `./dev ab HEAD 5 "write contend parallel"`: large-block stores -1 to +3% but
+1k new rows zero -11%, where rows this cannot touch moved as much (parallel fetch int x8, no writers, -8 / -12%). Price: a megabyte value
+holds its shard's writers for its `memcpy`, as a merge round already does for up to 4 MB; readers take no lock.
+
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
 round trip each with `nocopy.resp`. `bench/delete.php`, RESP on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
@@ -504,7 +513,7 @@ polyfill (strace, 2,000 nodes). Median of 3 interleaved runs, nocopy-all: logged
 
 ## Build
 
-**The value layer by phase, without module state.** `nocopy_plan.c` (may allocate, runs hooks), `nocopy_write.c` (under the shard lock: `./dev layers`
+**The value layer by phase, without module state.** `nocopy_build.c` (was `nocopy_plan.c`; may allocate, runs hooks), `nocopy_write.c` (under the shard lock: `./dev layers`
 rejects allocator and user-code calls there), `nocopy_read.c`, `nocopy_class.c`, `nocopy_serial.c`, entry points in `nocopy_value.c`; the store passes a
 `nocopy_env` instead of the value units reading `NOCOPY_G`. The value layer still calls `nocopy_put_begin`/`commit` itself: handing that to the store
 needs either a sink of callbacks (two indirect calls on a ~27 ns store) or the planning state in the public header. Not a directory like `arena/`:

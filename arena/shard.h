@@ -9,13 +9,10 @@
 #include "index.h"
 #include "policy.h"
 
-#define NOCOPY_INLINE_PUT 2048 /* blocks up to this size are filled under the lock: one lock round trip per write */
-
 typedef struct {
 	ar_lock lock __attribute__((aligned(64))); /* alone on its line */
 	uint32_t idx;
 	uint64_t last_seq;  /* a global atomic counter here cost 9x at 8 parallel writers */
-	time_t wip_checked; /* last look for dead writers' unfinished entries */
 	ar_policy pol;
 	ar_index_hdr ix;
 	ar_log log __attribute__((aligned(64)));
@@ -35,7 +32,6 @@ static inline uint32_t ar_shard_idx(uint64_t h) { return ar_part(h, ar_shard_mas
 void ar_shards_init(ar_shard *shards, uint32_t nshards, uint32_t slots_per, uint32_t nsegs);
 /* tables: nshards * slots_per slots; ghosts: as many uint16 tags. */
 void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint16_t *ghosts, uint32_t slots_per, nocopy_rebase_fn rebase);
-void ar_shard_wip_abort(int slot); /* a worker slot claimed from a dead owner: abort the entry it was filling. No lock held */
 bool ar_shards_deps(uint8_t bits); /* any segment depends on bits: every shard locked meanwhile (atoms' rotation) */
 
 typedef struct {
@@ -64,15 +60,12 @@ typedef struct {
 
 /* A write between nocopy_put_begin and nocopy_put_commit or nocopy_put_abort. */
 typedef struct {
-	nocopy_ctx *c;
 	ar_shard *sh;
 	nocopy_entry *e;
-	bool locked; /* small block: filled under the shard lock */
 } nocopy_put;
 
 /* Allocates the block, sets its header and key; NULL if it does not fit (larger than a shard's share, or nothing to evict).
- * The caller fills its payload, then commits or aborts. Blocks over NOCOPY_INLINE_PUT are filled with the lock dropped;
- * a writer that dies meanwhile has its block rolled back. */
+ * The shard stays locked: the caller fills its payload (copies only: no allocation, no user code), then commits or aborts. */
 nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_req *q);
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);

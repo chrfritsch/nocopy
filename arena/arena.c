@@ -65,8 +65,7 @@ bool nocopy_claim(nocopy_ctx *c)
 		return false;
 	}
 	ar_pins_clear(i);
-	ar_shard_wip_abort(i); /* its previous owner died filling an entry */
-	ar_atoms_reset_slot(i); /* ... or holding an atom view */
+	ar_atoms_reset_slot(i); /* its previous owner may have died holding an atom view */
 	c->rng = ((uint32_t) (ar_self ^ (ar_self >> 32)) * 2654435761u + (uint32_t) i) | 1;
 	return true;
 }

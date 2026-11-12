@@ -18,7 +18,7 @@
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "crash: %s, %d MB: %s (line %d)\n", where, arena_mb, #c, __LINE__); exit(1); } } while (0)
 
 static const char *points[] = {
-	"put.alloc", "put.wip", "put.fill", "commit.relocked", "commit.born", "commit.linked", "commit.done", "commit.unwip",
+	"put.alloc", "put.fill", "commit.born", "commit.linked", "commit.done",
 	"delete.unlinked", "delete.died", "shift.odd", "shift.moved",
 	"take.claimed", "take.owned", "seg.taken", "seg.sealed", "pool.claimed", "pool.given", "give.zeroed", "reclaim.gave", "expire.unlinked",
 	"merge.picked", "move.alloc", "move.copied", "move.linked", "merge.moved", "merge.evicted", "rebalance.unlocked", "rebalance.merged",
@@ -181,7 +181,7 @@ static bool workload(nocopy_ctx *c, uint32_t seed, int ops)
 		if (r < 45) {
 			put(c, k, rnd(), 100 + rnd() % (uint32_t) (ar_seg_size / len_div), rnd() % 5 < 4 ? 0 : 2 + rnd() % 30, rnd() % 10 < 3 ? rnd() % WORDS : NOWORD);
 		} else if (r < 49) {
-			snprintf(k, sizeof k, "b%u", rnd() % 8); /* a run of segments, filled outside the lock */
+			snprintf(k, sizeof k, "b%u", rnd() % 8); /* a run of segments */
 			put(c, k, rnd(), (uint32_t) (ar_seg_size / 2 + rnd() % (2 * ar_seg_size)), rnd() % 2 ? 0 : 5, NOWORD);
 		} else if (r < 62) {
 			nocopy_delete(hash(k, strlen(k)), k, (uint32_t) strlen(k));
@@ -231,13 +231,6 @@ static ar_slot slot_of(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(
 
 static void structure(void)
 {
-	uint32_t wips[NOCOPY_MAX_SEGS] = {0};
-	for (uint32_t i = 0; i < ar_worker_high(); i++) {
-		uint32_t w = ar_worker_at(i)->wip;
-		if (w) {
-			wips[ar_seg_of(ar_at8(w))]++;
-		}
-	}
 	for (uint32_t si = 0; si <= ar_shard_mask; si++) {
 		ar_shard *sh = &ar_shards[si];
 		ar_index *ix = &ar_ix[si];
@@ -285,7 +278,7 @@ static void structure(void)
 				}
 				p += nocopy_entry_size(e);
 			}
-			CHECK(seg_live == g->live && g->pending == wips[s]);
+			CHECK(seg_live == g->live && !g->pending);
 			bool open = false;
 			for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 				open |= lg->cur[b] == (int32_t) s;
@@ -429,9 +422,6 @@ static bool run_case(nocopy_ctx *c, const char *point, int hit, uint32_t seed)
 	structure();
 	for (uint32_t s = 0; s < ar_nsegs; s++) {
 		CHECK(!ar_seg_owner[s] && ar_segs[s].state == SEG_FREE && !ar_segs[s].pending && !ar_segmeta_at[s].deps);
-	}
-	for (uint32_t i = 0; i < ar_worker_high(); i++) {
-		CHECK(!ar_worker_at(i)->wip);
 	}
 	uint64_t rot = AT->rotations;
 	char k[24];

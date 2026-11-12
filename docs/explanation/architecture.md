@@ -75,10 +75,9 @@ read again while it is unchanged.
 
 `nocopy_put('products', $rows, ttl: 300);`
 
-1. Walk the value once to work out its exact size and what can be shared (repeated strings, arrays already stored).
-   Objects' `__serialize()` / `__sleep()` run here, before any lock is taken.
-2. Take the shard's lock, reserve space at the end of the open segment for this TTL, and copy the value in. (Values over
-   2 KB are copied with the lock released, so other writers to the shard don't wait for them.)
+1. Walk the value once, copying it into a private buffer and deciding what can be shared (repeated strings, arrays
+   already stored). Objects' `__serialize()` / `__sleep()` run here, before any lock is taken.
+2. Take the shard's lock, reserve space at the end of the open segment for this TTL, and copy the buffer in.
 3. Point the key's slot at the new entry and mark the old one dead. Release the lock.
 
 Readers never wait for writers: a reader that already holds the old value keeps it, the next one gets the new value.

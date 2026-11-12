@@ -219,10 +219,9 @@ int main(void)
 	nocopy_err err = nocopy_arena_open(&(nocopy_config) {.name = base, .size = 4 << 20, .hint = N, .abi = 1, .rebase = rebase}, &nm);
 	shm_unlink(nm.name); /* this run's only: the mapping stays */
 	assert(err.code == NOCOPY_ERR_NONE && ar_hdr->nshards == 1);
-	nocopy_ctx c, w;
+	nocopy_ctx c;
 	nocopy_ctx_init(&c);
-	nocopy_ctx_init(&w);
-	assert(nocopy_claim(&c) && nocopy_claim(&w));
+	assert(nocopy_claim(&c));
 	ar_shard *sh = &ar_shards[0];
 	ar_index *ix = &ar_ix[0];
 	char k[32];
@@ -233,13 +232,8 @@ int main(void)
 		begin(&p, &c, k, 100);
 		assert(nocopy_put_commit(&p, false) == NOCOPY_PUT_OK);
 	}
-	/* another writer's big entry, filled outside the lock; the writer dies */
-	nocopy_entry *big = begin(&p, &w, "big", ar_seg_size);
-	assert(!p.locked && ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->wip);
-	ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->owner = dead_owner();
-	/* an allocation the holder never publishes: from here on we hold the shard lock */
-	begin(&p, &c, "abandoned", 300);
-	assert(p.locked);
+	/* a big allocation the holder never publishes: from here on we hold the shard lock */
+	nocopy_entry *big = begin(&p, &c, "abandoned", ar_seg_size);
 	/* a delete whose backward shift dies after its first move: mseq odd, the moved key in two slots, the victim still live */
 	uint32_t m = ix->mask, i = 0, j = 0;
 	for (;; i++) {
@@ -279,18 +273,18 @@ int main(void)
 	}
 	assert(n == N - 1 && ar_index_nlive(ix) == n && sh->log.live_bytes == live);
 	assert(!ar_seg_owner[orphan] && !ar_log_owns(&sh->log, orphan) && sh->log.nown == (uint32_t) __builtin_popcountll(sh->log.own[0]));
-	assert(ar_segs[ar_seg_of(big)].pending == 1); /* its writer is not the dead holder: left for the reaper */
+	assert(!ar_segs[ar_seg_of(big)].pending); /* the dead holder's unpublished entry: dead bytes */
 	for (int x = 0; x < N; x++) {
 		snprintf(k, sizeof k, "k%d", x);
 		assert(found(&c, k) == (strcmp(k, vk) != 0)); /* the victim's miss returns instead of retrying forever */
 	}
 
 	nocopy_drop_idle(&c);
-	nocopy_clear(); /* reaps the dead writer's entry, seals the open segments: with nothing pinned, all go back to the pool */
+	nocopy_clear(); /* seals the open segments: with nothing pinned, all go back to the pool */
 	for (uint32_t s = 0; s < ar_nsegs; s++) {
 		assert(!ar_seg_owner[s] && ar_segs[s].state == SEG_FREE && !ar_log_owns(&sh->log, s) && !ar_segs[s].pending);
 	}
-	assert(!ar_worker_at((uint32_t) nocopy_ctx_slot(&w))->wip && sh->log.live_bytes == 0 && sh->log.nown == 0);
+	assert(sh->log.live_bytes == 0 && sh->log.nown == 0);
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		assert(sh->log.cur[b] == -1);
 	}

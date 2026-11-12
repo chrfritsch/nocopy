@@ -154,11 +154,10 @@ static inline void ar_log_count_expired(ar_log *lg) { lg->expired++; }
  * looking at most `budget` entries. True if it unlinked anything. A full pass with nothing to do idles until the next second. */
 bool ar_log_expire_step(ar_log *lg, time_t now, int budget, void (*unlink)(nocopy_entry *e, void *arg), void *arg);
 
-/* Repair after a holder died, in three steps. Rebuild: segments from the pool's owner[] (a run taken or freed halfway,
- * an open segment never installed), live bytes from linked(e), pending 0. Then ar_log_hold each entry still being filled
- * outside the lock. Settle: dead counts, cursor, reclaim. */
+/* Repair after a holder died, in two steps. Rebuild: segments from the pool's owner[] (a run taken or freed halfway,
+ * an open segment never installed), live bytes from linked(e), pending 0.
+ * Settle: dead counts, cursor, reclaim. */
 void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg), void *arg);
-static inline void ar_log_hold(const nocopy_entry *e) { ar_segs[ar_seg_of(e)].pending++; }
 void ar_log_settle(ar_log *lg);
 
 #endif

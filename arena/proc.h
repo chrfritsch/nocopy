@@ -44,7 +44,6 @@ ar_try_result ar_lock_try(ar_lock *l, time_t *checked, time_t now);
 typedef struct {
 	uint64_t owner;       /* proc: owner id, 0 free */
 	uint64_t hits, misses; /* the API's lookup counters (nocopy_count): single writer, no RMW */
-	uint32_t wip;         /* shard: offset/8 of the entry it fills outside the shard lock, 0 none; changes under that shard's lock */
 	uint32_t agen;        /* atoms: the generation its write in progress may reference, 0 none */
 } __attribute__((aligned(64))) ar_worker;
 

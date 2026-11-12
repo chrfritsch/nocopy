@@ -375,7 +375,7 @@ static void shift_check(nocopy_ctx *c)
 
 /* ---- reuse: a reader holds a value while writers replace it twice; its segment dies and is given back ---- */
 
-static uint32_t big; /* over half a segment: a run of its own, filled outside the lock */
+static uint32_t big; /* over half a segment: a run of its own */
 static void reuse_setup(nocopy_ctx *c)
 {
 	A = 0x1001;
@@ -390,10 +390,10 @@ static void reuse_reader(nocopy_ctx *c)
 }
 static void reuse_check(nocopy_ctx *c) { CHECK(get(c, A) == 3 && entries(c) == 1); }
 
-/* ---- writers: two writers of one key (one filling outside the lock), a reader between them ---- */
+/* ---- writers: two writers of one key, a reader between them ---- */
 
 static void writers_a(nocopy_ctx *c) { CHECK(put(c, A, 10, 16)); }
-static void writers_b(nocopy_ctx *c) { CHECK(put(c, A, 20, NOCOPY_INLINE_PUT + 64)); }
+static void writers_b(nocopy_ctx *c) { CHECK(put(c, A, 20, 64)); }
 static void writers_reader(nocopy_ctx *c)
 {
 	long v = hold(c, A), w = hold(c, A);
@@ -474,8 +474,8 @@ static void merge_check(nocopy_ctx *c) { CHECK(get(c, A) == 1 && get(c, B) == 1)
 
 static const scenario scenarios[] = {
 	{"shift", 4, 3, 2, run_keys, {shift_writer, shift_reader}, shift_check, {"shift.moved", "probe.retry", "pin.set"}},
-	{"reuse", 4, 3, 2, reuse_setup, {reuse_writer, reuse_reader}, reuse_check, {"reclaim.gave", "reclaim.pinned", "pin.set", "put.wip"}},
-	{"writers", 4, 2, 3, run_keys, {writers_a, writers_b, writers_reader}, writers_check, {"lock.wait", "commit.relocked", "pin.set"}},
+	{"reuse", 4, 3, 2, reuse_setup, {reuse_writer, reuse_reader}, reuse_check, {"reclaim.gave", "reclaim.pinned", "pin.set", "put.fill"}},
+	{"writers", 4, 2, 3, run_keys, {writers_a, writers_b, writers_reader}, writers_check, {"lock.wait", "put.fill", "pin.set"}},
 	{"churn", 4, 2, 3, run_keys, {churn_del, churn_put, churn_reader}, churn_check, {"shift.moved", "lock.wait", "probe.retry"}},
 	{"merge", 4, 2, 2, merge_setup, {merge_writer, merge_reader}, merge_check, {"merge.picked", "move.linked", "reclaim.gave", "pin.set"}},
 };

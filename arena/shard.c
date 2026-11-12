@@ -11,7 +11,7 @@ static uint32_t fair_segs; /* nsegs / nshards: what a shard may take back from o
 static uint16_t *ghosts[NOCOPY_MAX_SHARDS];
 static nocopy_rebase_fn rebase;
 
-static void repair(ar_shard *sh, uint64_t dead);
+static void repair(ar_shard *sh);
 
 void ar_shards_init(ar_shard *shards, uint32_t n, uint32_t slots_per, uint32_t nsegs)
 {
@@ -42,7 +42,7 @@ static void shard_lock(ar_shard *sh)
 {
 	uint64_t dead;
 	if (ar_lock_acquire(&sh->lock, &dead) == AR_STOLEN) {
-		repair(sh, dead);
+		repair(sh);
 	}
 }
 
@@ -98,78 +98,16 @@ static void unlink_entry(nocopy_entry *e, void *arg)
 	die(sh, e);
 }
 
-/* ---- dead writers ---- */
-
-/* Before unlocking to fill e outside the lock: record it, so the entry of a writer that dies meanwhile is rolled back. NULL after the commit. */
-static void wip_set(int slot, const nocopy_entry *e) { __atomic_store_n(&ar_worker_at((uint32_t) slot)->wip, e ? ar_off8(e) : 0, __ATOMIC_RELAXED); }
-static void wip_clear(uint32_t slot) { __atomic_store_n(&ar_worker_at(slot)->wip, 0, __ATOMIC_RELAXED); }
-
-/* NULL: in the pool. A wip entry's segment stays with its shard: the entry keeps it pending. */
-static ar_shard *seg_shard(uint32_t s)
-{
-	uint8_t o = ar_pool_tenant(s);
-	return o ? &ar_shards[o - 1] : NULL;
-}
-
-/* The entry worker slot i is filling in sh, or NULL. */
-static nocopy_entry *wip_in(uint32_t i, const ar_shard *sh)
-{
-	uint32_t w = __atomic_load_n(&ar_worker_at(i)->wip, __ATOMIC_RELAXED);
-	return w && seg_shard(ar_seg_of(ar_at8(w))) == sh ? ar_at8(w) : NULL;
-}
-
-/* Aborts the unfinished entries in sh of writers that died outside the lock. */
-static void wip_reap(ar_shard *sh)
-{
-	uint32_t nw = ar_worker_high();
-	for (uint32_t i = 0; i < nw; i++) {
-		nocopy_entry *e = wip_in(i, sh);
-		if (e && !ar_worker_live(i)) {
-			wip_clear(i);
-			ar_log_abort(&sh->log, e);
-		}
-	}
-}
-
-void ar_shard_wip_abort(int slot)
-{
-	uint32_t w = __atomic_load_n(&ar_worker_at((uint32_t) slot)->wip, __ATOMIC_RELAXED);
-	if (!w) {
-		return;
-	}
-	ar_shard *sh = seg_shard(ar_seg_of(ar_at8(w)));
-	if (!sh) {
-		wip_clear((uint32_t) slot);
-		return;
-	}
-	shard_lock(sh);
-	if (__atomic_load_n(&ar_worker_at((uint32_t) slot)->wip, __ATOMIC_RELAXED) == w) { /* not reaped meanwhile */
-		wip_clear((uint32_t) slot);
-		ar_log_abort(&sh->log, ar_at8(w));
-	}
-	shard_unlock(sh);
-}
+/* ---- dead holders ---- */
 
 static bool linked(const nocopy_entry *e, void *arg) { return ar_index_find(ix_of(arg), slot_for(e)) != NULL; }
 
 /* sh's lock was just taken from a dead holder. The slot table only ever changes by single stores, so it is the truth:
- * the index repairs itself, the log rebuilds its segments from it, and entries being filled outside the lock stay pending. */
-static void repair(ar_shard *sh, uint64_t dead)
+ * the index repairs itself, the log rebuilds its segments from it (an entry the holder was filling is unlinked: dead bytes). */
+static void repair(ar_shard *sh)
 {
 	ar_index_repair(ix_of(sh));
 	ar_log_rebuild(&sh->log, linked, sh);
-	uint32_t nw = ar_worker_high();
-	for (uint32_t i = 0; i < nw; i++) {
-		nocopy_entry *e = wip_in(i, sh);
-		if (!e) {
-			continue;
-		}
-		if (__atomic_load_n(&ar_worker_at(i)->owner, __ATOMIC_RELAXED) == dead) {
-			wip_clear(i); /* the holder itself, between relock and commit */
-		} else {
-			ar_log_hold(e);
-		}
-	}
 	ar_log_settle(&sh->log);
 }
 
@@ -321,11 +259,6 @@ static nocopy_entry *alloc_relocking(ar_shard *sh, size_t total, time_t exp, tim
 	while (!e && expire_step(sh, now, 4096)) { /* under pressure: catch up on expiry before copying live data */
 		e = reclaim_alloc(sh, total, b, exp);
 	}
-	if (!e && sh->wip_checked != now) {
-		sh->wip_checked = now;
-		wip_reap(sh); /* segments held back by dead writers' unfinished entries */
-		e = reclaim_alloc(sh, total, b, exp);
-	}
 	for (uint32_t tries = 2 * fair_segs; !e && tries && sh->log.nown < fair_segs - fair_segs / 16 && rebalance(sh); tries--) {
 		e = ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
 	}
@@ -407,12 +340,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 		ar_seg_deps_or(ar_seg_of(e), q->deps);
 	}
 	e->seq = ((uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u) << NOCOPY_SEQ_SHARD_BITS | sh->idx; /* commit makes it unique */
-	*p = (nocopy_put) {.c = c, .sh = sh, .e = e, .locked = q->size <= NOCOPY_INLINE_PUT};
-	if (!p->locked) {
-		wip_set(c->pins.slot, e);
-		AR_HOOK("put.wip");
-		shard_unlock(sh);
-	}
+	*p = (nocopy_put) {.sh = sh, .e = e};
 	memcpy((char *) e + q->koff, q->key, q->klen);
 	AR_HOOK("put.fill");
 	return e;
@@ -420,25 +348,13 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 {
-	if (!p->locked) {
-		shard_lock(p->sh);
-		AR_HOOK("commit.relocked");
-	}
 	nocopy_put_result r = commit(p->sh, p->e, add_only);
-	if (!p->locked) {
-		wip_set(p->c->pins.slot, NULL);
-	}
-	AR_HOOK("commit.unwip");
 	shard_unlock(p->sh);
 	return r;
 }
 
 void nocopy_put_abort(nocopy_put *p)
 {
-	if (!p->locked) {
-		shard_lock(p->sh);
-		wip_set(p->c->pins.slot, NULL);
-	}
 	ar_log_abort(&p->sh->log, p->e);
 	shard_unlock(p->sh);
 }
@@ -493,7 +409,6 @@ void nocopy_clear(void)
 	AR_HOOK("clear.emptied");
 	for (uint32_t i = 0; i < nshards; i++) {
 		ar_shard *sh = &ar_shards[i];
-		wip_reap(sh);
 		ar_log_seal_all(&sh->log); /* so they die and go back to the pool (with their deps) */
 		ar_log_reclaim(&sh->log);
 		shard_unlock(sh);
