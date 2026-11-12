@@ -51,7 +51,7 @@ the SAPI, then from how the request behaves:
 You don't choose the mode: nocopy picks it, and your code works the same either way.
 
 Objects and shared references cannot be immutable: they are stored as nodes and rebuilt on each fetch (with the arrays that
-hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`Serializable`, most internal classes, ...)
+hold them), while the strings and arrays inside them stay shared. Objects that can't be nodes (`Serializable`-only classes, exceptions, stateful internal objects like iterators, ...)
 make the whole value serialized and unserialized on every fetch.
 
 ## Writes, shards and segments

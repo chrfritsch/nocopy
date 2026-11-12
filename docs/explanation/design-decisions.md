@@ -82,7 +82,8 @@ fetch the value again once, the writer's included: fine for cache data, not for 
 
 **For you:** one object fetches in 112 ns instead of 881 ns, 100 objects in 4.6 µs instead of 83 µs, and arrays next to
 an object stay zero-copy. If a class changes its properties, the old entry is a miss, not a broken object.
-`Serializable` objects and most internal classes are still serialized, as in APCu.
+Internal value classes (dates, SPL containers, `ArrayObject`, random engines) are nodes too; objects that implement only
+`Serializable`, exceptions and stateful internal objects (iterators, DOM) are still serialized, as in APCu.
 
 ### Strings and arrays are shared across entries
 

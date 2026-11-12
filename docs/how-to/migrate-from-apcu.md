@@ -36,8 +36,9 @@ $rows = nocopy_remember('products', fn () => loadProducts(), ttl: 300);
 
 Arrays and scalars are never serialized: that is where zero-copy comes from. Most objects are not serialized either. They
 are stored as their properties and rebuilt on fetch, with the same `__sleep()`, `__wakeup()` and `__unserialize()` calls
-`serialize()` and `unserialize()` would make, and the strings and arrays inside them stay zero-copy. Objects that implement
-`Serializable`, or extend most internal classes, are stored serialized, as in APCu
+`serialize()` and `unserialize()` would make, and the strings and arrays inside them stay zero-copy. Internal value classes
+(dates, SPL containers, `ArrayObject`) are nodes too. Objects that implement only `Serializable`, exceptions and
+stateful internal objects (iterators, DOM, XML readers) are stored serialized, as in APCu
 ([details](../reference/functions.md#what-can-be-stored)).
 
 For frameworks: [Symfony bundle](symfony.md), [Drupal module](../../drupal/README.md).

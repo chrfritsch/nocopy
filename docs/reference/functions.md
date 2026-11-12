@@ -286,7 +286,7 @@ this server has cached locally, not every key in the RESP server.
 |---|---|---|
 | Arrays, strings, integers, floats, booleans, `null` | As they are | Zero-copy under web servers |
 | Most objects (see below) | As their properties, without serializing | Rebuilt; the strings and arrays inside stay zero-copy |
-| `Serializable` objects, lazy objects, internal classes without `__serialize()` | Serialized with `nocopy.serializer`, as in APCu | Unserialized every time |
+| Objects that implement only `Serializable`, lazy objects, internal classes without `__serialize()` (exceptions and their subclasses, iterators, DOM, ...) | Serialized with `nocopy.serializer`, as in APCu | Unserialized every time |
 | Values nested more than 64 levels deep | Serialized, as above | Unserialized every time |
 | Resources | Not stored: a warning, and `nocopy_put()` returns `false` | |
 
