@@ -85,7 +85,7 @@ struct nocopy_strslot {
 	zend_string *copy; /* reading: its private copy */
 	zend_ulong h;
 	uint32_t gen;
-	uint32_t ord; /* planning: its index in plan.str */
+	uint32_t ord; /* building: its index in nc_builder.str */
 };
 
 static zend_always_inline void strtab_reset(nocopy_strtab *t)
@@ -146,7 +146,8 @@ typedef struct {
 	zval props[];
 } nc_obj;
 
-/* Followed by nc_class[ncls], zval refs[nref] (shared references' values), uint32_t off[nobj] (each object's offset from the graph), uint32_t hooks[nhooks]. */
+/* Followed by nc_class[ncls], zval refs[nref] (shared references' values), uint32_t off[nobj] (each object's offset from the graph, signed:
+ * the header is built last, after the objects), uint32_t hooks[nhooks]. */
 typedef struct {
 	uint32_t ncls, nobj, nhooks, nref;
 	zval root;
@@ -155,7 +156,7 @@ typedef struct {
 static zend_always_inline nc_class *graph_cls(const nc_graph *g) { return (nc_class *) (g + 1); }
 static zend_always_inline zval *graph_refs(const nc_graph *g) { return (zval *) (graph_cls(g) + g->ncls); }
 static zend_always_inline uint32_t *graph_off(const nc_graph *g) { return (uint32_t *) (graph_refs(g) + g->nref); }
-static zend_always_inline nc_obj *graph_obj(const nc_graph *g, uint32_t i) { return (nc_obj *) ((char *) g + graph_off(g)[i]); }
+static zend_always_inline nc_obj *graph_obj(const nc_graph *g, uint32_t i) { return (nc_obj *) ((char *) g + (int32_t) graph_off(g)[i]); }
 /* Objects whose __wakeup/__unserialize runs after the build, inner first (unserialize's order). */
 static zend_always_inline uint32_t *graph_hooks(const nc_graph *g) { return graph_off(g) + g->nobj; }
 static zend_always_inline size_t graph_head(uint32_t ncls, uint32_t nref, uint32_t nobj, uint32_t nhooks) { return sizeof(nc_graph) + ncls * sizeof(nc_class) + nref * sizeof(zval) + (nobj + nhooks) * sizeof(uint32_t); }
@@ -193,7 +194,7 @@ static zend_always_inline uint64_t date_word(const timelib_time *t)
 	return (uint64_t) t->us | (uint64_t) t->zone_type << 20 | (uint64_t) (t->dst != 0) << 24 | (uint64_t) (uint32_t) t->z << 32;
 }
 
-/* ---- planning: sizing the value and taking every decision writing replays ---- */
+/* ---- building (nocopy_build.c): one walk into a private buffer; user code may run ---- */
 
 /* Nonzero key -> uint32, open addressing, at most half full; small graphs stay in inl. */
 typedef struct {
@@ -207,18 +208,18 @@ typedef struct {
 	pslot inl[32];
 } pmap;
 
-
-/* What planning learned about one object. */
+/* What building learned about one object. */
 typedef struct {
+	zend_object *o;       /* held: its handle stays unique while user code runs */
 	uint32_t ck;          /* class index << 3 | kind */
+	uint32_t off;         /* its nc_obj's block offset */
 	bool dyn;             /* dynamic properties stored after the slots */
-	bool done;            /* written */
 	bool own;             /* data is the node's (released with it); else borrowed from its hook result */
 	zval data;            /* __serialize()'s array, else the dynamic properties without the slots; UNDEF: none, or the object's own table (stdClass) */
 	const uint8_t *named; /* __sleep(): 1 per slot it named; NULL: no __sleep() */
 } gnode;
 
-/* A __serialize/__sleep result, kept by object across planning passes. */
+/* A __serialize/__sleep result, kept by object across passes. */
 typedef struct {
 	zend_object *o; /* held, so its handle stays unique */
 	zval data;      /* __serialize()'s array, or the dynamic properties __sleep() named */
@@ -229,13 +230,13 @@ typedef struct {
 /* A class of the graph, by index. */
 typedef struct {
 	zend_class_entry *ce;
-	zend_string *lc; /* lowercase name, hashed: made while planning, as writing must not allocate */
+	zend_string *lc; /* lowercase name, hashed */
 	uint64_t fp;
 } gclass;
 
 #define GHOOK_INL 4 /* hook results found by a linear search, without a map */
 
-/* One value's objects, classes and shared references, by index in the order planning meets them. */
+/* One value's objects, classes and shared references, by index in the order building meets them. */
 typedef struct {
 	pmap objs;       /* handle -> index */
 	pmap cls;        /* class entry -> index << 3 | kind */
@@ -245,11 +246,14 @@ typedef struct {
 	uint32_t nn, ncap;
 	uint32_t *hooks; /* indices, inner first */
 	uint32_t nh, hcap;
-	pmap refs;       /* shared reference -> its first tape position, or REF_MULTI | index */
+	pmap refs;       /* reference (held) -> the pass + 1 that met it, or REF_MULTI | index; outlives a pass */
 	uint32_t nref;   /* held more than once: nodes */
+	zval *refv;      /* their built values */
+	uint8_t *refdone; /* built in this pass */
+	uint32_t vcap;
 	pmap *hk;        /* handle -> index into res, past GHOOK_INL; outlives a pass */
 	ghook *res;
-	uint32_t nres, nrun, rcap;
+	uint32_t nres, rcap;
 	bool on;         /* set up: an object or a shared reference was met */
 	bool refs_on;
 	gnode inl[16];
@@ -274,21 +278,12 @@ static zend_always_inline void graph_b_release(graph_b *g)
 	}
 }
 
-/* The tape: one entry per decision, in walk order.
- * A deduped string: its index in str << 1 | T_FIRST the first time. An object: its index.
- * A reference held by more than one zval: T_ONCE (the value holds it once: written as its value), else its index << 1 | T_FIRST. */
-#define T_FIRST 1u
-typedef enum { OP_KEY, OP_STR, OP_LSTR, OP_ARR, OP_EMPTY, OP_SHARED, OP_OBJ, OP_OBJ_REF, OP_DEREF, OP_REF, OP_REF_USE } nc_opk;
-#define NC_OP_MAX 0xFFFFFFFu /* 28 bits of payload */
 /* Only a long value string (or a string alone) may be unhashed in a block: such a string is never in the string table, and rebase zeroes exactly these. */
 static zend_always_inline bool nc_may_be_unhashed(const zend_string *s) { return ZSTR_LEN(s) > NC_VSTR_MAX; }
-#define OP(k, x) ((uint32_t) (k) | (uint32_t) (x) << 4)
-#define TAPE_INL 64
 #define STR_INL 32
-
 #define HV_INL 16
 
-/* An array of a region, in planning's order: its hash (0: not shareable), the arrays of its subtree with itself, bytes at most. */
+/* An array of a region, in building's order: its hash (0: not shareable), the arrays of its subtree with itself, bytes at most. */
 typedef struct {
 	uint64_t h;
 	uint32_t n, up;
@@ -304,12 +299,9 @@ typedef struct {
 typedef struct {
 	hnode *hv;         /* the regions' arrays: the current one [hc, hend), nested ones above it up to hn */
 	uint32_t hn, hc, hend, hcap;
-	zend_array **arr;  /* the shared arrays the tape points at */
-	uint32_t narr, acap;
 	nc_cand *cand;
 	uint32_t ncand, ccap;
 	hnode inl[HV_INL];
-	zend_array *arr_inl[8];
 } nc_share;
 
 static zend_always_inline nc_share *nc_share_init(nc_share *s)
@@ -317,64 +309,65 @@ static zend_always_inline nc_share *nc_share_init(nc_share *s)
 	s->hv = s->inl;
 	s->hn = s->hc = s->hend = 0;
 	s->hcap = HV_INL;
-	s->arr = s->arr_inl;
-	s->acap = 8;
-	s->narr = s->ncand = s->ccap = 0;
+	s->ncand = s->ccap = 0;
 	s->cand = NULL;
 	return s;
 }
 
+typedef enum { BUILD_OK, BUILD_DEEP, BUILD_OBJECT, BUILD_RESOURCE, BUILD_ERROR /* an exception is pending */, BUILD_AGAIN /* internal: a new shared reference */ } build_status;
+
+/* A source array the walk is reading, and whether it holds a reference to it (taken when user code runs). */
+typedef struct {
+	zend_array *a;
+	bool held;
+} nc_open;
+#define NC_OPEN_MAX (NC_MAX_DEPTH + 2)
+
+/* A value built in one walk into a private buffer: pointers into it are block offsets (base: the block offset of buf[0]),
+ * every such pointer's place listed in rel, so placing it is a copy and one add per pointer. */
 typedef struct {
 	nocopy_env *env;
-	size_t n;          /* the bytes writing will take after the key */
 	nocopy_strtab strs; /* this value's view of the table */
 	graph_b *g;
 	const nocopy_atom_view *av; /* NULL: no atoms */
+	nc_share *sh;      /* NULL: arrays are not shared (no atoms) */
 	bool sight;        /* first pass: strings that are not atoms count towards admission */
 	bool atoms;        /* an atom is used */
-	uint32_t *tape;
-	uint32_t nt, tcap;
-	zend_string **str; /* per distinct deduped string: its atom, else NULL until writing puts its copy there */
-	uint32_t ns, scap;
-	uint32_t *tape_inl; /* the caller's buffers, until they grow into request memory */
-	zend_string **str_inl;
-	nc_share *sh;      /* NULL: arrays are not shared (no atoms) */
-} plan;
-
-typedef enum { PLAN_OK, PLAN_DEEP, PLAN_OBJECT, PLAN_RESOURCE, PLAN_ERROR /* an exception is pending */ } plan_status;
-
-plan_status nc_plan_walk(plan *z, zval *val); /* above IS_STRING: arrays, objects, references; runs hooks between passes */
-
-/* Scalars and a string alone inline: a string alone bypasses the table, writing stores it alike. */
-static zend_always_inline plan_status nc_plan_value(plan *z, zval *val)
-{
-	if (Z_TYPE_P(val) < IS_STRING) {
-		return PLAN_OK;
-	}
-	if (Z_TYPE_P(val) == IS_STRING) {
-		z->n += str_size(Z_STRLEN_P(val));
-		return PLAN_OK;
-	}
-	return nc_plan_walk(z, val);
-}
-void nc_plan_free(plan *z);
-bool nc_same_array(const zend_array *a, const zend_array *b, int depth); /* equal keys, order, types and values (doubles bitwise) */
-void nc_share_admit(nocopy_env *env, const plan *outer, const nocopy_atom_view *av); /* its candidates the doorkeeper lets in */
-
-/* ---- writing (nocopy_write.c): under a shard lock, so no allocation and no user code ---- */
-
-/* A value to write: what planning produced. */
-typedef struct {
-	plan z;
-	graph_b g;
+	bool obj;          /* an object or shared reference met since the innermost array began */
 	nocopy_fmt fmt;
-	zval *val; /* the value, or ser */
-	zval ser;  /* NOCOPY_FMT_PHP/IGB: the serialized string */
-} encoding;
+	uint32_t pass;
+	zend_string **str; /* per distinct deduped string: its atom or its copy */
+	uint32_t ns, scap;
+	zend_string **str_inl;
+	size_t base;
+	char *buf;         /* env's, taken while building */
+	size_t bn, bcap;
+	uint32_t *rel;
+	uint32_t rn, rcap;
+	zend_array **held; /* references taken for user code, released at the end */
+	uint32_t nheld, hcap, cheld;
+	uint32_t nopen;
+	nc_open open[NC_OPEN_MAX];
+	zval root;
+} nc_builder;
 
-static zend_always_inline size_t encoding_size(const encoding *x, size_t klen) { return SALIGN(sizeof(nocopy_block)) + SALIGN(klen) + x->z.n; }
+#define NC_IS_OFF(p) ((uintptr_t) (p) < ((uintptr_t) 1 << 32))
+/* A built zval that points into the buffer (an offset to relocate). */
+static zend_always_inline bool nc_off_val(const zval *v)
+{
+	return ((1u << (Z_TYPE_P(v) & 31)) & (1u << IS_STRING | 1u << IS_ARRAY | 1u << NC_SPINE | 1u << IS_PTR)) && NC_IS_OFF(Z_PTR_P(v));
+}
 
-/* A scalar, or a string alone at p (str_size bytes): no tape. */
+void nc_build_init(nc_builder *b, nocopy_env *env, const nocopy_atom_view *av, nc_share *ss, graph_b *g, zend_string **str, size_t base);
+build_status nc_build(nc_builder *b, zval *val); /* b->root, b->fmt: plain or graph */
+void nc_build_bufs_back(nc_builder *b); /* the buffers to env, once placed */
+void nc_build_free(nc_builder *b);      /* may run destructors */
+bool nc_same_array(const zend_array *a, const zend_array *b, int depth); /* equal keys, order, types and values (doubles bitwise) */
+void nc_share_admit(nocopy_env *env, const nc_builder *outer, const nocopy_atom_view *av); /* its candidates the doorkeeper lets in */
+
+/* ---- placing (nocopy_write.c): under a shard lock, so no allocation and no user code ---- */
+
+/* A scalar, or a string alone at p (str_size bytes). */
 static zend_always_inline void nc_write_flat(nocopy_entry *e, char *p, const zval *val)
 {
 	zval *v = block_val(e);
@@ -390,9 +383,8 @@ static zend_always_inline void nc_write_flat(nocopy_entry *e, char *p, const zva
 	ZVAL_STR(v, r);
 	Z_TYPE_FLAGS_P(v) = 0;
 }
-bool nc_write(encoding *x, nocopy_entry *e); /* fills e after its header and key: exactly encoding_size bytes */
-bool nc_write_array(const plan *z, const zend_array *src, void *dst); /* a shared array at dst: exactly z->n bytes */
-
+void nc_place_at(char *p, const nc_builder *b); /* b's buffer at p + base, its offsets made pointers from p */
+void nc_place(nocopy_entry *e, const nc_builder *b); /* b's value into e, after its header and key */
 
 /* ---- reading (nocopy_read.c) ---- */
 

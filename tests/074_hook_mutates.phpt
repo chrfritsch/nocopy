@@ -1,5 +1,5 @@
 --TEST--
-nocopy: a __serialize/__sleep that changes the part of the value already walked stores what the hooks left
+nocopy: a __serialize/__sleep that changes the value while it is walked stores what serialize() would
 --EXTENSIONS--
 nocopy
 --INI--
@@ -26,37 +26,37 @@ class S {
     public function __sleep(): array { $this->a->p = new P; $this->a->p->v = 'new'; return ['keep', 'a']; }
 }
 
-$a = new A;
-$a->p = $old = new P;
-var_dump(nocopy_put('k', [$a, new B($a)]));
-$g = nocopy_get('k');
-var_dump(get_class($g[0]->p), strlen($g[0]->p->x));
-
-$a = new A;
-$a->p = new D('first');
-var_dump(nocopy_put('s', [$a, new S($a)]));
-$g = nocopy_get('s');
-var_dump(get_class($g[0]->p), $g[0]->p->v, $g[1]->a === $g[0]);
-
 class L { public $list; }
 class Grow {
     public function __construct(public L $l) {}
     public function __serialize(): array { for ($i = 0; $i < 100; $i++) { $this->l->list[] = $i; } return []; }
     public function __unserialize(array $d): void {}
 }
-$l = new L;
-$l->list = [new Grow($l), 'x'];
-var_dump(nocopy_put('g', $l), count(nocopy_get('g')->list));
+
+// each case built twice: once through nocopy, once through serialize()
+$cases = [
+    'k' => function () { $a = new A; $a->p = new P; return [$a, new B($a)]; },
+    's' => function () { $a = new A; $a->p = new D('first'); return [$a, new S($a)]; },
+    'g' => function () { $l = new L; $l->list = [new Grow($l), 'x']; return $l; },
+];
+$show = fn($k, $g) => match ($k) {
+    'k' => [get_class($g[0]->p), isset($g[0]->p->x) ? strlen($g[0]->p->x) : null],
+    's' => [get_class($g[0]->p), $g[0]->p->x ?? $g[0]->p->v, $g[1]->a === $g[0]],
+    'g' => [count($g->list)],
+};
+foreach ($cases as $k => $make) {
+    var_dump(nocopy_put($k, $make()));
+    $mine = $show($k, nocopy_get($k));
+    $ser = $show($k, unserialize(serialize($make())));
+    echo $k, ': ', json_encode($mine), $mine === $ser ? ' same as serialize()' : ' serialize(): ' . json_encode($ser), "\n";
+}
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t074*')); ?>
 --EXPECT--
 bool(true)
-string(1) "D"
-int(1000)
+k: ["P",null] same as serialize()
 bool(true)
-string(1) "P"
-string(3) "new"
+s: ["D","first",true] same as serialize()
 bool(true)
-bool(true)
-int(102)
+g: [2] same as serialize()

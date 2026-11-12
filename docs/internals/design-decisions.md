@@ -204,7 +204,7 @@ array of scalars under 128 bytes (object -14 -> -4%). Also measured and dropped:
 -11%), two dependent multiplies per element, admitting up to 1,024 arrays per write instead of 64 (no change), the doorkeeper off (~5 points
 more saved, but the area fills with arrays met once), the area at `/ 128` vs `/ 32` (`ab.sh write` within ±2%).
 
-**Planning decides, writing replays (the tape).** Sizing and persisting used to agree because both walks took the same decisions
+**Planning decides, writing replays (the tape).** Superseded 2026-11-12 by one walk into a private buffer (below). Sizing and persisting used to agree because both walks took the same decisions
 (the string table probed twice, the object and reference maps probed again while persisting; only atoms were recorded and replayed).
 Now planning records every decision in walk order (a deduped string's index and whether it comes first, an object's index, a shared
 reference's index or "held once") and writing looks nothing up: it cannot disagree with the size, and it allocates nothing (class
@@ -212,7 +212,7 @@ lowercase names are made while planning; before, `zend_string_tolower` ran under
 `./dev ab main 7`, copy / zero: store array 10 rows -1.9 / -2.2%, 1k rows -2.7 / -2.0%, 1k rows unserialized keys -2.3 / -3.2% (a tape
 entry per string); store object +10.8 / +8.7% and fetch object (zero) +5.5% (no map probes while writing); other stores and fetches within ±3%.
 
-**Planning decides, writing replays and checks (tagged ops).** Every decision the writer used to re-derive from the value (long string,
+**Planning decides, writing replays and checks (tagged ops).** Superseded 2026-11-12 by one walk into a private buffer (below). Every decision the writer used to re-derive from the value (long string,
 empty array, reference held once, object first or again, array while sharing is off) is now a tagged op on the tape; the writer takes one
 op per non-scalar slot, checks it against the slot and the bytes left, and a failure (release builds too) aborts the put: store refused with
 a warning, never a corrupt or overrunning block. Rebase descends only through pointers that moved; `block_check` also runs after rebase in
@@ -221,6 +221,23 @@ checked builds. Final `./dev ab HEAD 7 write`, copy / zero: array stores -0.8 to
 without a walk (arrays -2.6 to -5.9%, and it cannot notice a slot it was never told about); relocation data in blocks (bitmap +1.56%
 bytes per array block, u32 list +2.5 to 6%; would move array blocks 1.8 to 3x faster, left for later); hashing every string on write
 (string alone 100 B 31-37 -> 60 ns, 10 KB 222 -> 2,690 ns).
+
+**One walk into a private buffer, placed by a copy and a relocation list** (2026-11-12; were: planning sized the value and recorded a
+tape, writing replayed it into the block under the lock). One walk (`nocopy_build.c`) copies the value into a per-thread buffer, every
+pointer as a block offset with its place listed; placing is a `memcpy` and one add per listed place. Gone: the sizing pass, the tape, the
+replay checks and their `longjmp`, the "value changed between planning and writing" refusal (test 103), multi-pass hook planning.
+Hooks run as met, in `serialize()`'s order and with its semantics (a hook that changes a part already walked does not change what is
+stored; test 074 now compares with `serialize()`); the walk holds what it still reads before user code runs. A reference found shared
+after it was built as its value restarts the walk once, knowing it. Value layer 2,224 -> 2,132 lines.
+Rebasing the copied block with `nocopy_value_rebase` instead of a relocation list cost full writes 11-12% (`ab.sh write`, 1k new rows);
+the list brought it to -6%, and cachegrind showed the builder already running fewer instructions than plan + write: the rest was the
+block's `memcpy` (perf: `__memcpy_generic` 1.1 -> 7.5% of `put_newbig`) and the relocation loop. Tuned by leaving scalars as the table copy
+brought them (no call, no write-back), the buffer pointers in the builder instead of behind `env`, a one-mask test for pointer slots.
+Final, cachegrind Ir per call HEAD -> this: put_arr 8,951 -> 8,506, put_new 15,363 -> 13,851, put_big 762,899 -> 724,872, put_newbig
+1,310,458 -> 1,159,087, put_obj 4,850 -> 4,059, put_prods 272,906 -> 248,745, put_ords 170,204 -> 151,222, put_json 326,046 -> 304,026;
+get_prods, get_ords, get_json unchanged. `./dev ab HEAD 9 write`, copy / zero: store object +12.0 / +11.5%, array 10 rows +5.1 / +5.7%,
+1k rows +4.4 / +3.2%, 1k unserialized keys +3.0 / +5.0%, 1k new rows +1.3 / +2.3%, 10 new rows -1.5 / -1.8%, int, string, store+delete
+within ±2%. `./dev ab HEAD 7 read`: fetches within ±3%, block bytes unchanged (240,544). The lock is held for the copy and the adds only.
 
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
 round trip each with `nocopy.resp`. `bench/delete.php`, RESP on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
@@ -460,7 +477,7 @@ instead (one lookup fewer) gave 1-3%.
 What sizing learns about each object (class code, kind, dynamic properties, `__serialize()`'s array) is kept in a node array
 by object index, so persisting does one lookup per object and no `HashTable`s are built for hooks: `prof.php` best of 11,
 put_obj 240 -> 212 ns, put_ords 37.4 -> 36.0 µs, put_prods 9.79 -> 9.97 µs, put_json 11.86 -> 12.15 µs (~1 ns per plain
-object; not the free loop, regrowth or node size: 8-byte nodes with a side array made put_json 5.6% slower). **Hooks run between sizing passes, not during one** (were: called mid-walk, then a second pass reused their results by walk
+object; not the free loop, regrowth or node size: 8-byte nodes with a side array made put_json 5.6% slower). **Hooks run between sizing passes, not during one** (superseded 2026-11-12: hooks run as met again, with the walk holding what it still reads, see [Writes](#writes); were: called mid-walk, then a second pass reused their results by walk
 index): a `__serialize` that replaced an object already walked gave persisting another graph than sizing (block size assertion,
 test 074), and a hook could grow an array the walk was iterating. A pass skips the contents of objects whose hook has not run,
 the hooks run, the next pass sizes everything; results are found by object (held), not by index. `prof.php` best of 9
@@ -557,7 +574,7 @@ Code comments are one short line, or none.
 | `nocopy_worker` aligned to 128 B (Apple's line size; one worker's per-fetch `hits` write shares a line with its neighbour's) | Graviton4 (c8g.xlarge, 64 B lines), 4-8 readers on 1 / 100k keys: all within ±2%, medians of 8. The +20-50% on an M3 Pro (128 B lines) sat inside its 2-3x run-to-run noise. Padding `nocopy_seg` to 64 B and dropping reader `hot` writes: no signal above that noise either |
 | RESP: no refetch after our own write, via `CLIENT TRACKING ON REDIRECT <listener> BCAST PREFIX p NOLOOP` on every command connection | Valkey 8.1 and 9.1 send one push per tracking connection, also when they redirect to the same client: 3 redirecting workers gave the listener 3 pushes per foreign write and 2 per own write (`NOLOOP` skips only the writer). With 32 fpm workers that is 32 pushes per write per server, which the single listener exists to avoid. Skipping our own echo in the listener instead is unsafe: a cycle's invalidations of one key are merged, so an echo can hide another server's write |
 | One-pass `copy_out` | `zend_array_dup` of an immutable array is already one memcpy; the cost was per-key allocation (fixed by key dedupe) |
-| Persist into a private buffer, then `memcpy` + `nocopy_rebase` into the arena (no sizing pass, no fill outside the lock) | bounded with two `docker/ab.sh` variants, `write`, best of 5: what it adds (persist privately + copy + rebase) costs more than what it saves (a second `size_zval`): 1k rows +27.1 vs -17.9 µs, 10 rows +276 vs -183 ns, int +7.1 vs -2.4 ns, so writes ~15-20% slower. A growable buffer also moves pointers already written |
+| Persist into a private buffer, then `memcpy` + `nocopy_rebase` into the arena (no sizing pass, no fill outside the lock) | adopted 2026-11-12 with a relocation list instead of the rebase walk, see [Writes](#writes). Bounded then with two `docker/ab.sh` variants, `write`, best of 5: 1k rows +27.1 vs -17.9 µs, 10 rows +276 vs -183 ns, int +7.1 vs -2.4 ns, so writes ~15-20% slower; the rebase walk and a fresh buffer per write were most of it |
 | Skip `size_zval` for small values: allocate a top-level lower bound under the lock, grow into the segment's free tail up to `NOCOPY_INLINE_PUT`, persist with bounds and type checks, trim (or give back and take the sized path) | arrays that fit gain (bench rows, best of 3 x 200k puts: 1 row 90-96 -> 83-87 ns, 2 rows 152-164 -> 121-126); nested arrays whose top level looks small but that overflow 2 KB pay a wasted persist (4 rows 244-268 -> 420-624, 6 rows 349-407 -> 531-643; `ab.sh` store array 10 rows -18/-23%); the checks in `persist_*` cost the sized path 3-8% (1k rows); scalars -5-9% (their sizing is ~2 ns). Always reserving 2 KB instead lost a hot key in test 029 (wasted tails evict sooner) |
 | An upper-bound `size_zval` without key dedupe (then trim), to make sizing cheaper | the dedupe lookups are 5-25% of sizing (`ab.sh` `write`, a second sizing pass with and without them: 10 rows ~47 of ~187 ns, 1k rows ~4.5 of ~20 µs, unserialized keys ~1 of ~20 µs); the walk itself is the cost. At most ~8% of an array write, for blocks that overshoot |
 | Shrinking `nocopy_fetch`'s frame (perf: ~20% of a zero-copy hit in its prologue and epilogue; 224 B frame, all callee-saved registers) | copy mode out of line: copy fetches of strings and arrays -6-9%, zero mode unchanged. Pin's new-pin path and `drop_transient` out of line: frame 224 -> 208 B, zero mode within noise. The pressure is the probe itself |

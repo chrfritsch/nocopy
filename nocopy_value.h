@@ -1,5 +1,5 @@
-/* The value layer: PHP values in and out of arena blocks. Entry points nocopy_value.c; phases nocopy_plan.c (sizing, hooks),
- * nocopy_write.c (persisting, moving: under a shard lock), nocopy_read.c (copies, graphs, templates); nocopy_class.c, nocopy_serial.c. */
+/* The value layer: PHP values in and out of arena blocks. Entry points nocopy_value.c; phases nocopy_build.c (one walk into a
+ * private buffer, hooks), nocopy_write.c (placing, moving: under a shard lock), nocopy_read.c (copies, graphs, templates); nocopy_class.c, nocopy_serial.c. */
 
 #ifndef NOCOPY_VALUE_H
 #define NOCOPY_VALUE_H
@@ -52,6 +52,10 @@ typedef struct {
 
 typedef struct {
 	nocopy_strtab strs;
+	char *buf; /* a write's block, built before the arena is touched; kept for the next */
+	size_t bcap;
+	uint32_t *rel; /* its pointer slots, by block offset */
+	uint32_t rcap;
 	HashTable classes; /* class entry -> fingerprint, this request */
 	HashTable zones;   /* time zone name -> timelib_tzinfo (ext/date's), this request */
 } nocopy_env;
@@ -70,7 +74,7 @@ typedef enum {
 } nocopy_status;
 
 /* Writes val as q's entry. The caller sets q's h, key, klen, ttl, expires, user; the value sets size, koff, flags, deps.
- * User code (__serialize, __sleep) runs before the arena is touched, destructors after the commit. */
+ * User code (__serialize, __sleep) runs while building, before the arena is touched; destructors after the commit. */
 nocopy_status nocopy_value_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only);
 /* The checks alone, without an arena: false if a write would refuse val. */
 bool nocopy_value_check(nocopy_env *env, zval *val);

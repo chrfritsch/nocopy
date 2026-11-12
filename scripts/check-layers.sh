@@ -32,7 +32,7 @@ done
 grep -nE '#include "arena/' -- *.c *.h | grep -v '"arena/nocopy_arena.h"' | while read -r l; do echo "check-layers: $l: include arena/nocopy_arena.h only"; done | grep . && bad=1
 grep -nE '\b(ar|AR)_[A-Za-z]' -- *.c *.h | sed 's/^/check-layers: internal name: /' | grep . && bad=1
 # The value layer (nocopy_value.h): no module state; nocopy_value_int.h is its own; writing runs under a shard lock.
-value="nocopy_value.c nocopy_plan.c nocopy_write.c nocopy_read.c nocopy_class.c nocopy_serial.c nocopy_value.h nocopy_value_int.h"
+value="nocopy_value.c nocopy_build.c nocopy_write.c nocopy_read.c nocopy_class.c nocopy_serial.c nocopy_value.h nocopy_value_int.h"
 for f in $value; do
 	grep -nE '#include "nocopy_(php|kept)\.h"|\bNOCOPY_(G|SHARED)\b' "$f" | sed "s|^|check-layers: $f: module state in the value layer: |" | grep . && bad=1
 done

@@ -1,4 +1,4 @@
-/* nocopy: the value layer's entry points. A write is planned (user code may run), written (under the shard lock), then released (destructors). */
+/* nocopy: the value layer's entry points. A write is built (user code may run), placed (under the shard lock), then released (destructors). */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -37,6 +37,10 @@ void nocopy_env_init(nocopy_env *env)
 {
 	env->strs.slot = pecalloc(NC_STRTAB, sizeof(nocopy_strslot), 1);
 	env->strs.gen = 0;
+	env->buf = NULL;
+	env->bcap = 0;
+	env->rel = NULL;
+	env->rcap = 0;
 	env_caches_init(env);
 }
 
@@ -45,102 +49,42 @@ void nocopy_env_request_end(nocopy_env *env)
 	zend_hash_destroy(&env->classes);
 	zend_hash_destroy(&env->zones);
 	env_caches_init(env);
+	if (env->bcap > 1024 * 1024) { /* one large write keeps no large buffer */
+		pefree(env->buf, 1);
+		env->buf = NULL;
+		env->bcap = 0;
+	}
+	if (env->rcap > 256 * 1024) {
+		pefree(env->rel, 1);
+		env->rel = NULL;
+		env->rcap = 0;
+	}
 }
 
 void nocopy_env_free(nocopy_env *env)
 {
 	pefree(env->strs.slot, 1);
+	if (env->buf) {
+		pefree(env->buf, 1);
+	}
+	if (env->rel) {
+		pefree(env->rel, 1);
+	}
 }
 
 /* ---- in ---- */
 
-/* Plans val into x (OK: release it after the commit); REFUSED leaves nothing to release. tape, str: the plan's first buffers. */
-static zend_always_inline nocopy_status encode(encoding *x, nocopy_env *env, zval *val, const nocopy_atom_view *av, uint32_t *tape, zend_string **str,
-	nc_share *ss)
+static zend_always_inline nocopy_status put_result(nocopy_put_result c)
 {
-	graph_b_off(&x->g);
-	x->z = (plan) {.env = env, .strs = env->strs, .g = &x->g, .av = av, .sight = av != NULL, .sh = av ? nc_share_init(ss) : NULL,
-		.tape = tape, .tcap = TAPE_INL, .tape_inl = tape, .str = str, .scap = STR_INL, .str_inl = str};
-	x->fmt = NOCOPY_FMT_PLAIN;
-	x->val = val;
-	plan_status st = nc_plan_value(&x->z, val);
-	if (st == PLAN_OK && graph_b_used(&x->g)) {
-		x->fmt = NOCOPY_FMT_GRAPH;
-		return NOCOPY_OK;
-	}
-	graph_b_release(&x->g); /* nothing to write from it: references held once only, or a value to serialize */
-	if (st == PLAN_OK) {
-		return NOCOPY_OK;
-	}
-	nc_plan_free(&x->z);
-	if (st == PLAN_ERROR) {
-		return NOCOPY_REFUSED;
-	}
-	if (st == PLAN_RESOURCE) {
-		php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
-		return NOCOPY_REFUSED;
-	}
-	nocopy_fmt fmt;
-	if (!nocopy_serialize(val, &x->ser, &fmt)) {
-		return NOCOPY_REFUSED;
-	}
-	x->fmt = fmt;
-	x->val = &x->ser;
-	x->z.n = str_size(Z_STRLEN(x->ser)); /* a string alone: no tape, no atoms */
-	x->z.nt = x->z.ns = 0;
-	x->z.atoms = false;
-	return NOCOPY_OK;
+	return c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 }
 
-static void encoding_release(encoding *x)
-{
-	graph_b_release(&x->g);
-	if (x->fmt == NOCOPY_FMT_PHP || x->fmt == NOCOPY_FMT_IGB) {
-		zend_string_release(Z_STR(x->ser));
-	}
-	nc_plan_free(&x->z);
-}
-
-static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only, const nocopy_atom_view *av)
-{
-	uint32_t tape[TAPE_INL]; /* not zeroed: it cost every store */
-	zend_string *str[STR_INL];
-	nc_share ss;
-	encoding x;
-	nocopy_status r = encode(&x, env, val, av, tape, str, &ss);
-	if (r != NOCOPY_OK) {
-		return r;
-	}
-	q->size = encoding_size(&x, q->klen);
-	q->koff = KEY_OFF;
-	q->flags = (uint8_t) x.fmt;
-	q->deps = x.z.atoms && av ? nocopy_atom_bit(av) : 0;
-	nocopy_put p;
-	nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
-	r = NOCOPY_NO_ROOM;
-	if (e) {
-		if (EXPECTED(nc_write(&x, e))) {
-			nocopy_put_result c = nocopy_put_commit(&p, add_only);
-			r = c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
-		} else {
-			nocopy_put_abort(&p);
-			php_error_docref(NULL, E_WARNING, "nocopy: the value changed between planning and writing; not stored");
-			r = NOCOPY_REFUSED;
-		}
-	}
-	if (x.z.sh && x.z.sh->ncand) {
-		nc_share_admit(env, &x.z, av); /* before the release: candidates may be a node's own data */
-	}
-	encoding_release(&x); /* after the commit: may run destructors */
-	return r;
-}
-
-/* A scalar or a string alone: nothing to plan or release. */
-static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req *q, const zval *val, bool add_only)
+/* A scalar or a string alone (a serialized value too): nothing to build or release. */
+static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req *q, const zval *val, bool add_only, nocopy_fmt fmt)
 {
 	q->size = KEY_OFF + SALIGN(q->klen) + (Z_TYPE_P(val) == IS_STRING ? str_size(Z_STRLEN_P(val)) : 0);
 	q->koff = KEY_OFF;
-	q->flags = NOCOPY_FMT_PLAIN;
+	q->flags = (uint8_t) fmt;
 	q->deps = 0;
 	nocopy_put p;
 	nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
@@ -148,15 +92,70 @@ static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req
 		return NOCOPY_NO_ROOM;
 	}
 	nc_write_flat(e, (char *) e + KEY_OFF + SALIGN(q->klen), val);
-	nocopy_put_result c = nocopy_put_commit(&p, add_only);
-	return c == NOCOPY_PUT_OK ? NOCOPY_OK : c == NOCOPY_PUT_EXISTS ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
+	return put_result(nocopy_put_commit(&p, add_only));
 }
 
-/* Arrays and objects see the atoms: a view announced from planning until the commit. */
+/* What building could not take: REFUSED, or the value serialized (NOCOPY_OK, ser to release). */
+static nocopy_status not_built(build_status st, zval *val, zval *ser, nocopy_fmt *fmt)
+{
+	if (st == BUILD_ERROR) {
+		return NOCOPY_REFUSED;
+	}
+	if (st == BUILD_RESOURCE) {
+		php_error_docref(NULL, E_WARNING, "nocopy: cannot store resources");
+		return NOCOPY_REFUSED;
+	}
+	return nocopy_serialize(val, ser, fmt) ? NOCOPY_OK : NOCOPY_REFUSED;
+}
+
+static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only, const nocopy_atom_view *av)
+{
+	zend_string *str[STR_INL];
+	nc_share ss;
+	graph_b g;
+	nc_builder b;
+	nc_build_init(&b, env, av, &ss, &g, str, KEY_OFF + SALIGN(q->klen));
+	build_status st = nc_build(&b, val);
+	nocopy_status r;
+	if (st == BUILD_OK && b.base + b.bn > UINT32_MAX) {
+		nc_build_free(&b); /* offsets and the relocation list are 32-bit */
+		return NOCOPY_NO_ROOM;
+	}
+	if (st == BUILD_OK) {
+		q->size = b.base + b.bn;
+		q->koff = KEY_OFF;
+		q->flags = (uint8_t) b.fmt;
+		q->deps = b.atoms && av ? nocopy_atom_bit(av) : 0;
+		nocopy_put p;
+		nocopy_entry *e = nocopy_put_begin(&p, ctx, q);
+		r = NOCOPY_NO_ROOM;
+		if (e) {
+			nc_place(e, &b);
+			r = put_result(nocopy_put_commit(&p, add_only));
+		}
+		nc_build_bufs_back(&b);
+		if (b.sh && b.sh->ncand) {
+			nc_share_admit(env, &b, av); /* before the release: candidates may be a node's own data */
+		}
+		nc_build_free(&b); /* after the commit: may run destructors */
+		return r;
+	}
+	nc_build_free(&b);
+	zval ser;
+	nocopy_fmt fmt;
+	if ((r = not_built(st, val, &ser, &fmt)) != NOCOPY_OK) {
+		return r;
+	}
+	r = put_flat(ctx, q, &ser, add_only, fmt);
+	zend_string_release(Z_STR(ser));
+	return r;
+}
+
+/* Arrays and objects see the atoms: a view announced from building until the commit. */
 nocopy_status nocopy_value_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zval *val, bool add_only)
 {
 	if (Z_TYPE_P(val) <= IS_STRING) {
-		return put_flat(ctx, q, val, add_only);
+		return put_flat(ctx, q, val, add_only, NOCOPY_FMT_PLAIN);
 	}
 	nocopy_atom_view av;
 	if ((Z_TYPE_P(val) != IS_ARRAY && Z_TYPE_P(val) != IS_OBJECT) || !nocopy_atom_begin(ctx, &av)) {
@@ -169,13 +168,24 @@ nocopy_status nocopy_value_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req 
 
 bool nocopy_value_check(nocopy_env *env, zval *val)
 {
-	uint32_t tape[TAPE_INL];
+	if (Z_TYPE_P(val) <= IS_STRING) {
+		return true;
+	}
 	zend_string *str[STR_INL];
-	encoding x;
-	if (encode(&x, env, val, NULL, tape, str, NULL) != NOCOPY_OK) {
+	graph_b g;
+	nc_builder b;
+	nc_build_init(&b, env, NULL, NULL, &g, str, KEY_OFF);
+	build_status st = nc_build(&b, val);
+	nc_build_free(&b);
+	if (st == BUILD_OK) {
+		return true;
+	}
+	zval ser;
+	nocopy_fmt fmt;
+	if (not_built(st, val, &ser, &fmt) != NOCOPY_OK) {
 		return false;
 	}
-	encoding_release(&x);
+	zend_string_release(Z_STR(ser));
 	return true;
 }
 

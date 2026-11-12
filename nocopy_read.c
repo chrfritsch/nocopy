@@ -418,7 +418,8 @@ bool nc_graph_out(nocopy_env *env, zval *rv, const zval *v, bool copy)
 
 struct nocopy_tpl {
 	zend_class_entry **ces;
-	nc_graph g; /* followed by the rest of the block */
+	nc_graph *g; /* in bytes: objects lie before it */
+	char bytes[]; /* the block's value: everything after the key */
 };
 
 /* Private copy of an arena value, keeping graph markers: spines become private arrays. */
@@ -450,29 +451,35 @@ static void tpl_free_zval(void *ctx, zval *z)
 	}
 }
 
+static zend_always_inline size_t g_ncls_size(const nocopy_entry *e)
+{
+	return ((const nc_graph *) Z_PTR_P(nocopy_value_zval(e)))->ncls * sizeof(zend_class_entry *);
+}
+
 nocopy_tpl *nocopy_tpl_make(nocopy_env *env, const nocopy_entry *e)
 {
-	const nc_graph *g = Z_PTR_P(nocopy_value_zval(e));
-	size_t n = nocopy_entry_size(e) - (size_t) ((const char *) g - (const char *) e);
-	nocopy_tpl *t = emalloc(offsetof(nocopy_tpl, g) + n + g->ncls * sizeof(zend_class_entry *));
-	memcpy(&t->g, g, n);
-	t->ces = (zend_class_entry **) ((char *) &t->g + n);
-	if (!graph_classes(env, &t->g, t->ces)) {
+	const char *v = (const char *) e + KEY_OFF + SALIGN(nocopy_entry_klen(e));
+	size_t n = SALIGN(nocopy_entry_size(e) - (size_t) (v - (const char *) e));
+	nocopy_tpl *t = emalloc(offsetof(nocopy_tpl, bytes) + n + g_ncls_size(e));
+	memcpy(t->bytes, v, n);
+	t->g = (nc_graph *) (t->bytes + ((const char *) Z_PTR_P(nocopy_value_zval(e)) - v));
+	t->ces = (zend_class_entry **) (t->bytes + n);
+	if (!graph_classes(env, t->g, t->ces)) {
 		efree(t);
 		return NULL;
 	}
 	strtab_reset(&env->strs);
-	graph_each(&t->g, tpl_zval, &env->strs);
+	graph_each(t->g, tpl_zval, &env->strs);
 	return t;
 }
 
 void nocopy_tpl_free(nocopy_tpl *t)
 {
-	graph_each(&t->g, tpl_free_zval, NULL);
+	graph_each(t->g, tpl_free_zval, NULL);
 	efree(t);
 }
 
 bool nocopy_tpl_read(nocopy_env *env, nocopy_tpl *t, zval *rv)
 {
-	return graph_build(env, rv, &t->g, t->ces, G_TPL);
+	return graph_build(env, rv, t->g, t->ces, G_TPL);
 }

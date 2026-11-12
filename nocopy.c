@@ -29,7 +29,7 @@
 /* One translation unit, so nocopy_* inlines the store and value layers (split: miss -5%, failing add -6%); each also compiles alone. */
 #include "nocopy_class.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_serial.c" /* NOLINT(bugprone-suspicious-include) */
-#include "nocopy_plan.c" /* NOLINT(bugprone-suspicious-include) */
+#include "nocopy_build.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_write.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_read.c" /* NOLINT(bugprone-suspicious-include) */
 #include "nocopy_value.c" /* NOLINT(bugprone-suspicious-include) */ /* last: the phases defined before the entry points call them */
