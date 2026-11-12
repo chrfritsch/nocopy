@@ -227,28 +227,12 @@ static bool workload(nocopy_ctx *c, uint32_t seed, int ops)
 
 /* ---- what must hold with no write in progress ---- */
 
-
 static void structure(void)
 {
-	for (uint32_t si = 0; si <= ar_shard_mask; si++) {
-		CHECK(!ar_shards[si].lock.holder);
-	}
-	const char *bad = ar_shards_verify();
-	if (bad) {
-		fprintf(stderr, "crash: %s\n", bad);
-	}
-	CHECK(!bad);
-	/* atoms: the current generation's table reaches whole records only */
-	uint32_t g = AT->gen;
-	const ar_atom_half *hf = &AT->half[g & 1];
-	CHECK(hf->state == g && hf->used <= AT->half_bytes && !AT->lock.holder);
-	for (uint32_t i = 0; i <= ar_atom_mask; i++) {
-		ar_slot sl = ar_atom_tab[(size_t) (g & 1) * (ar_atom_mask + 1) + i];
-		if (sl) {
-			uint32_t at = (uint32_t) sl << 3;
-			const uint32_t *r = (const uint32_t *) (ar_atoms + (size_t) (g & 1) * ar_atom_bytes + at);
-			CHECK(at >= 8 && at < hf->used && at + 8 + r[1] + r[0] + 1 <= hf->used);
-		}
+	const char *why = nocopy_arena_check();
+	if (why) {
+		fprintf(stderr, "crash: %s, %d MB: arena: %s\n", where, arena_mb, why);
+		exit(1);
 	}
 }
 

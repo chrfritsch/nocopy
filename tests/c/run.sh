@@ -14,5 +14,5 @@ build stress-tsan stress -O1 -fsanitize=thread -Wno-tsan
 s=${1:-3}
 for mb in 4 64; do "$out/stress" $mb 8 "$s"; done
 for mb in 4 64; do TSAN_OPTIONS=halt_on_error=1 "$out/stress-tsan" $mb 8 "$s"; done
-for t in repair atoms merge; do build $t $t -O1 -Wall -Wextra && "$out/$t"; done
-for t in crash sched; do build $t $t -O1 -Wall -Wextra -DNOCOPY_HOOKS && "$out/$t"; done
+for t in repair atoms merge; do build $t $t -O1 -Wall -Wextra; "$out/$t"; done
+for t in crash sched; do build $t $t -O1 -Wall -Wextra -DNOCOPY_HOOKS; "$out/$t"; done

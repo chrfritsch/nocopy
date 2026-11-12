@@ -58,6 +58,11 @@ int main(void)
 		version[i] = n;
 	}
 
+	const char *why = nocopy_arena_check();
+	if (why) {
+		printf("merge: arena: %s\n", why);
+		return 1;
+	}
 	nocopy_stats_t st;
 	nocopy_stats(&st);
 	assert(st.evacuated); /* it did compact */

@@ -162,3 +162,33 @@ void nocopy_stats(nocopy_stats_t *st)
 }
 
 uint64_t nocopy_expunges(void) { return __atomic_load_n(&ar_hdr->expunges, __ATOMIC_RELAXED); }
+
+/* ---- invariants ---- */
+
+#define NEED(c) do { if (!(c)) return #c; } while (0)
+
+static const char *check_atoms(void)
+{
+	const ar_atoms_hdr *at = &ar_hdr->atoms;
+	uint32_t g = at->gen;
+	const ar_atom_half *hf = &at->half[g & 1];
+	NEED(hf->state == g && hf->used <= at->half_bytes && !at->lock.holder);
+	for (uint32_t i = 0; i <= ar_atom_mask; i++) {
+		ar_slot sl = ar_atom_tab[(size_t) (g & 1) * (ar_atom_mask + 1) + i];
+		if (sl) {
+			uint32_t o = (uint32_t) sl << 3;
+			const uint32_t *r = (const uint32_t *) (ar_atoms + (size_t) (g & 1) * ar_atom_bytes + o);
+			NEED(o >= 8 && o < hf->used && o + 8 + r[1] + r[0] + 1 <= hf->used); /* whole records only */
+		}
+	}
+	return NULL;
+}
+
+const char *nocopy_arena_check(void)
+{
+	for (uint32_t si = 0; si <= ar_shard_mask; si++) {
+		NEED(!ar_shards[si].lock.holder && !(ar_ix[si].hdr->mseq & 1));
+	}
+	const char *why = ar_shards_verify();
+	return why ? why : check_atoms();
+}

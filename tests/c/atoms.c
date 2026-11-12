@@ -4,6 +4,7 @@
 #include "../../arena/nocopy_arena.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -104,6 +105,15 @@ static nocopy_entry *put_ref(nocopy_ctx *c, const char *k)
 	return e;
 }
 
+static void check(void)
+{
+	const char *why = nocopy_arena_check();
+	if (why) {
+		fprintf(stderr, "atoms: arena: %s\n", why);
+		exit(1);
+	}
+}
+
 int main(void)
 {
 	char base[32];
@@ -139,6 +149,7 @@ int main(void)
 	/* generation 3 full: generation 2 is still referenced by "ref"'s segment */
 	assert(ar_seg_deps(ar_seg_of(e)) == 1);
 	assert(!fill() && AT->gen == 3);
+	check();
 	assert(AT->half[0].state == 2 && !strcmp(lang, "languages:language_interface")); /* restored, untouched */
 
 	/* deleted and cleared: the segment goes back to the pool with its bit, and the next fill rotates */
@@ -146,6 +157,7 @@ int main(void)
 	nocopy_drop_idle(&c);
 	nocopy_clear();
 	assert(fill() && AT->gen == 4);
+	check();
 
 	/* a writer that died holding a view of generation 3 does not block it */
 	nocopy_ctx d;
@@ -162,6 +174,7 @@ int main(void)
 	assert(!fill() && AT->gen == 6);
 	nocopy_atom_end(&c);
 	assert(fill() && AT->gen == 7);
+	check();
 
 	/* a holder of the atom lock died midway through a rotation: the lock is taken over, the rotation done again */
 	AT->lock.holder = dead_owner();
@@ -169,6 +182,7 @@ int main(void)
 	uint32_t steals = ar_proc->lock_steals;
 	assert(fill() && AT->gen == 8 && AT->half[0].state == 8 && ar_proc->lock_steals == steals + 1);
 	assert(AT->lock.holder == 0);
+	check();
 
 	assert(!ar_shards_verify());
 	nocopy_stats_t s;

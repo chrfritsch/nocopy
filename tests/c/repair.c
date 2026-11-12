@@ -6,6 +6,7 @@
 #include "../../arena/nocopy_arena.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -67,6 +68,15 @@ static uint64_t dead_owner(void) /* the id of a process that has exited and been
 
 static ar_slot slot_of(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
 static nocopy_entry *entry_of(ar_slot s) { return (nocopy_entry *) ar_at8(ar_slot_off8(s)); }
+
+static void check(void)
+{
+	const char *why = nocopy_arena_check();
+	if (why) {
+		fprintf(stderr, "repair: arena: %s\n", why);
+		exit(1);
+	}
+}
 
 static bool found(nocopy_ctx *c, const char *k)
 {
@@ -262,18 +272,8 @@ int main(void)
 	assert(ar_proc->lock_steals == 1);
 	assert(!(ix->hdr->mseq & 1));
 	assert(ar_index_find(ix, slot_of(moved)) && !victim->live);
-	uint32_t n = 0;
-	size_t live = 0;
-	for (uint32_t s = 0; s <= m; s++) {
-		if (ix->t[s]) {
-			nocopy_entry *e = entry_of(ix->t[s]);
-			assert(ar_index_find(ix, slot_of(e)) == &ix->t[s]); /* no duplicates, every tag its entry's */
-			n++;
-			live += nocopy_entry_size(e);
-		}
-	}
-	assert(n == N - 1 && ar_index_nlive(ix) == n && sh->log.live_bytes == live);
-	assert(!ar_shards_verify()); /* the rest of the shard rebuilt too */
+	check();
+	assert(ar_index_nlive(ix) == N - 1);
 	assert(!ar_seg_owner[orphan] && !ar_log_owns(&sh->log, orphan) && sh->log.nown == (uint32_t) __builtin_popcountll(sh->log.own[0]));
 	assert(!ar_segs[ar_seg_of(big)].pending); /* the dead holder's unpublished entry: dead bytes */
 	for (int x = 0; x < N; x++) {
@@ -287,6 +287,7 @@ int main(void)
 		assert(!ar_seg_owner[s] && ar_segs[s].state == SEG_FREE && !ar_log_owns(&sh->log, s) && !ar_segs[s].pending);
 	}
 	assert(sh->log.live_bytes == 0 && sh->log.nown == 0);
+	check();
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		assert(sh->log.cur[b] == -1);
 	}
@@ -295,8 +296,9 @@ int main(void)
 	nocopy_put hp;
 	begin(&hp, &c, "held", 8);
 	assert(nocopy_put_commit(&hp, false) == NOCOPY_PUT_OK && found(&c, "held"));
+	check();
 	fork_without_slot(&c);
-	assert(!ar_shards_verify());
+	check();
 	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;
 }

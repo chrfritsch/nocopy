@@ -138,4 +138,7 @@ typedef struct {
 void nocopy_stats(nocopy_stats_t *s);
 uint64_t nocopy_expunges(void); /* rounds that lost live entries, and clears: a reader's miss after one may be an eviction */
 
+/* NULL, or the first invariant broken: shards, slot tables, segments, the atoms' current table. No write in progress: for tests. */
+const char *nocopy_arena_check(void);
+
 #endif
