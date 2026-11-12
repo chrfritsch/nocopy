@@ -1,25 +1,25 @@
 --TEST--
-nocopy.valkey: unreachable means misses and failed writes, one attempt per 0.5-1.5 s; a lost connection clears the local copies on reconnect
+nocopy.resp: unreachable means misses and failed writes, one attempt per 0.5-1.5 s; a lost connection clears the local copies on reconnect
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t052
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t052:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t052:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 nocopy_put('k', 'mine');
 nocopy_get('k');
 vk('CLIENT', 'KILL', 'SKIPME', 'yes'); // drops nocopy's connection
 vk('SET', 't052:k', '2');              // an invalidation nocopy never sees
 var_dump(nocopy_get('other'));         // the round trip finds the connection gone
 sleep(2);                              // past the jittered retry pause
-var_dump(nocopy_get('k'));             // reconnected: local copies cleared, Valkey's value
+var_dump(nocopy_get('k'));             // reconnected: local copies cleared, RESP's value
 ?>
 --CLEAN--
 <?php array_map('unlink', glob('/dev/shm/nocopy-t052*')); ?>

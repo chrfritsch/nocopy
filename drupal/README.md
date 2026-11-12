@@ -5,7 +5,7 @@ A Drupal cache backend on the [nocopy](https://github.com/chrfritsch/nocopy) PHP
 - **All cache bins, cache tag checksums, locks and flood control** move out of the database into shared memory. Cache
   reads, tag checks, locks and flood checks no longer run a query.
 - **One cache for the whole site:** php-fpm, Drush and cron share it, and it survives php-fpm restarts. On one server
-  through `nocopy.shm_name`, on several through `nocopy.valkey`.
+  through `nocopy.shm_name`, on several through `nocopy.resp`.
 - **No copying:** cached arrays (config, the container definition, most bootstrap data) are read without a copy.
 
 ## Install
@@ -16,7 +16,7 @@ usually read different php.ini files, so check both:
 ```ini
 nocopy.shm_name=/nocopy        ; required: Drush and cron attach to php-fpm's memory
 nocopy.serializer=igbinary     ; recommended, if you have igbinary: render arrays contain objects, stored serialized
-;nocopy.valkey=host:6379       ; several servers: Valkey is the shared cache, each server keeps local copies
+;nocopy.resp=host:6379       ; several servers: RESP is the shared cache, each server keeps local copies
 ```
 
 Then require the module and the polyfill (not on Packagist yet, so from a checkout of the nocopy repository) and enable it:
@@ -70,22 +70,22 @@ $settings['bootstrap_container_definition'] = [
 The status report (`admin/reports/status`) shows whether this PHP process shares the cache, its memory use and evictions.
 
 Each process also checks, on its first cache access, that it shares the cache with the rest of the site
-(`nocopy_shared_with()` is `host` or `valkey`). If not, it throws an exception that names the cause, rather than serve data
+(`nocopy_shared_with()` is `host` or `resp`). If not, it throws an exception that names the cause, rather than serve data
 other processes have already changed.
 
 ## Several web servers
 
-With `nocopy.valkey`, all bins and tag checksums are shared through Valkey, and each server keeps zero-copy local copies
-([Valkey guide](../docs/how-to/valkey.md)).
+With `nocopy.resp`, all bins and tag checksums are shared through RESP, and each server keeps zero-copy local copies
+([RESP guide](../docs/how-to/resp.md)).
 
-Give Valkey a `maxmemory` and `maxmemory-policy volatile-lfu`. In this mode, permanent cache items get a one-year TTL, so
-Valkey may evict them; cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) get no
-TTL and stay. Invalidated items are not deleted (as in core), so without a memory limit Valkey only grows.
+Give RESP a `maxmemory` and `maxmemory-policy volatile-lfu`. In this mode, permanent cache items get a one-year TTL, so
+RESP may evict them; cache tag tokens, bin markers and the small bins (container, bootstrap, config, discovery) get no
+TTL and stay. Invalidated items are not deleted (as in core), so without a memory limit RESP only grows.
 
 ## Key prefix
 
 The prefix is derived like core's APCu prefix: from the app root, `deployment_identifier` and the Drupal version. So it
-changes with each deploy and core update. With `nocopy.valkey`, the old tag tokens and small bins then stay in Valkey,
+changes with each deploy and core update. With `nocopy.resp`, the old tag tokens and small bins then stay in RESP,
 since they have no TTL. If every server uses the same docroot, set a fixed prefix:
 
 ```php
@@ -97,17 +97,17 @@ $settings['nocopy_prefix'] = 'mysite';
 To keep the database as the cache of record and only replace APCu in front of it, use
 [`bench/drupal/settings.fast.php`](../bench/drupal/settings.fast.php) and
 [`fast.services.yml`](../bench/drupal/fast.services.yml) instead of the settings above. They use
-`cache.backend.nocopy_fast`, which works on several web servers without Valkey (chainedfast already checks the database on
+`cache.backend.nocopy_fast`, which works on several web servers without RESP (chainedfast already checks the database on
 every request). Like core's APCu fast layer, it falls back to the database alone where the extension is not loaded or
 `nocopy.shm_name` is not set.
 
 ## Trade-offs
 
-- **Without `nocopy.valkey`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
+- **Without `nocopy.resp`: single server only.** Each server has its own shared memory, so caches and tag invalidations are not shared.
 - **Long-running CLI processes** (queue workers, migrations) in copy mode see changes made elsewhere on their next cache read, like web requests.
 - **Deletes inside a database transaction wait for the commit** (none on rollback), so a concurrent request cannot refill the cache from uncommitted data.
-- **Locks** (`lock`, `lock.persistent`): their keys have no TTL and no deploy in the prefix, so Valkey's `volatile-*` eviction never
-  drops a held lock and old and new code share locks during a rolling deploy. Without Valkey a full arena can evict one, like any cache.
+- **Locks** (`lock`, `lock.persistent`): their keys have no TTL and no deploy in the prefix, so RESP's `volatile-*` eviction never
+  drops a held lock and old and new code share locks during a rolling deploy. Without RESP a full arena can evict one, like any cache.
   Expiry is wall time: run NTP.
 - **Flood control** counts in a fixed window from the first event (as Laravel's rate limiter): up to twice the threshold across its edge.
   It does not implement `PrefixFloodInterface`, so a password change does not clear `user.failed_login_user` (as with `drupal/redis`).

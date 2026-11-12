@@ -80,4 +80,4 @@ The warning in the error log tells you what is wrong:
 | `nocopy.shm_size or nocopy.entries_hint ignored: …` | a process still using the cache created it with other settings: stop every process using it (php-fpm, CLI workers, cron) to resize |
 | CLI and web disagree although names match | different containers: they share only through a common `/dev/shm`, with the same `nocopy.so` and uid |
 
-To share between servers, see [Valkey](valkey.md). Background: [Sharing: by name and through Valkey](../explanation/sharing.md).
+To share between servers, see [RESP](resp.md). Background: [Sharing: by name and through RESP](../explanation/sharing.md).

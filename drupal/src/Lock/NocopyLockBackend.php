@@ -8,11 +8,11 @@ use Drupal\Core\Lock\LockBackendAbstract;
 use Drupal\nocopy\Cache\NocopyBackend;
 
 /**
- * Locks in nocopy: one integer per lock, its expiry and owner, changed only by nocopy_add() and nocopy_cas() (atomic, also in Valkey).
+ * Locks in nocopy: one integer per lock, its expiry and owner, changed only by nocopy_add() and nocopy_cas() (atomic, also in RESP).
  *
  * Expiry in the value, not as a TTL, so extending and taking over an expired lock are one compare-and-swap. Released: 0, never
- * deleted (a delete could remove the next owner's lock). No TTL, so Valkey's volatile-* eviction never drops a held lock;
- * a full arena without Valkey can, like any cache.
+ * deleted (a delete could remove the next owner's lock). No TTL, so RESP's volatile-* eviction never drops a held lock;
+ * a full arena without RESP can, like any cache.
  */
 class NocopyLockBackend extends LockBackendAbstract {
 
@@ -54,7 +54,7 @@ class NocopyLockBackend extends LockBackendAbstract {
   }
 
   public function release($name) {
-    // Our own value first: a copy read from Valkey may not show our last write yet.
+    // Our own value first: a copy read from RESP may not show our last write yet.
     $v = $this->locks[$name] ?? nocopy_get($this->prefix . $name);
     unset($this->locks[$name]);
     if (is_int($v) && $v !== 0 && ($v & self::OWNER_MASK) === $this->owner()) {

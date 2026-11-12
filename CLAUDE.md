@@ -10,7 +10,7 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 
 - `./dev test` after any C change; `./dev test tests/0xx.phpt` for one test; `PHP=8.4 ./dev test` for another version
 - Locking, eviction, pins, shards: also `./dev stress 30` and `./dev c 5`
-- Valkey code (`nocopy_valkey.c`): also `./dev novalkey` (core must build without it) and `./dev shm`
+- RESP code (`nocopy_resp.c`): also `./dev noresp` (core must build without it) and `./dev shm`
 - Polyfill (`apcu/`): `./dev apcu` (13 known failures, listed in `scripts/apcu-suite.sh`); Symfony bundle: `./dev symfony`; Drupal module: `./dev drupal`
 - Before calling something done: `./dev ci`
 - Poke at it by hand: `./dev shell`
@@ -18,9 +18,9 @@ No PHP on the host: everything runs in Docker through `./dev` (CI runs the same 
 ## Layout
 
 - Value layer (interface `nocopy_value.h`, internals `nocopy_value_int.h`, no module state): `nocopy_value.c` entry points, `nocopy_plan.c` sizing + hooks, `nocopy_write.c` persisting + rebase (under the shard lock: no allocation), `nocopy_read.c` copies + graphs out, `nocopy_class.c` fingerprints, `nocopy_serial.c`; `nocopy_store.c` the store API over the arena, `nocopy_kept.c|h` copy mode's reads and kept copies (no module state; `nocopy_php.h`: module globals, store API, detour), `nocopy.c` `nocopy_*` + module; `arena/` the shared-memory arena (plain C, tested alone by `tests/c/`): public API `arena/nocopy_arena.h` only, `ar_*` modules inside, layers checked by `./dev layers`
-- `nocopy_valkey.c` Valkey tier, reached by the store only via the `nocopy_detour` table, by the module only via `nocopy_valkey.h` (connections: vendored libvalkey in `third_party/`, updated only with `scripts/vendor-libvalkey.sh <tag>`); compiled out with `--disable-nocopy-valkey`
+- `nocopy_resp.c` RESP tier, reached by the store only via the `nocopy_detour` table, by the module only via `nocopy_resp.h` (connections: vendored libvalkey in `third_party/`, updated only with `scripts/vendor-libvalkey.sh <tag>`); compiled out with `--disable-nocopy-resp`
 - `nocopy.stub.php` -> `nocopy_arginfo.h` (`./dev stub` after API changes)
-- `tests/*.phpt` suite (05x need Valkey, skip without); `docker/` images + in-container scripts; `bench/` benchmarks
+- `tests/*.phpt` suite (05x need RESP, skip without); `docker/` images + in-container scripts; `bench/` benchmarks
 - `apcu/`, `symfony/`, `drupal/`: integrations, `cli/`: console (stats, keys, get, delete, clear), each its own composer package
 
 ## Rules

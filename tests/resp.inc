@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/php.inc';
-// Minimal RESP2 client for the Valkey tests: another connection than nocopy's.
+// Minimal RESP2 client for the RESP tests: another connection than nocopy's.
 function vk(string ...$a)
 {
     static $s;
@@ -28,12 +28,12 @@ function vk(string ...$a)
     return rtrim(substr($l, 1));
 }
 
-// Returns once nocopy's listener has applied every change made in Valkey before the call: a local copy of a marker
+// Returns once nocopy's listener has applied every change made in RESP before the call: a local copy of a marker
 // is dropped only by an invalidation for it, and those arrive in order.
 function settle(): void
 {
     static $n = 0;
-    $k = ini_get('nocopy.valkey_prefix') . '__settle';
+    $k = ini_get('nocopy.resp_prefix') . '__settle';
     vk('SET', $k, (string) ++$n);
     for ($i = 0; $i < 2000; $i++, usleep(1000)) {
         $h = nocopy_stats()['hits'];
@@ -47,9 +47,9 @@ function settle(): void
     }
 }
 
-// A PHP process with its own nocopy memory: another web server on the same Valkey.
+// A PHP process with its own nocopy memory: another web server on the same RESP.
 function other_server(string $prefix, string $code): string
 {
     // its own arena, as on another server
-    return php_run($code, ['nocopy.shm_name' => '/nocopy-' . rtrim($prefix, ':') . '-other', 'nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => $prefix]);
+    return php_run($code, ['nocopy.shm_name' => '/nocopy-' . rtrim($prefix, ':') . '-other', 'nocopy.resp' => '127.0.0.1:6379', 'nocopy.resp_prefix' => $prefix]);
 }

@@ -14,7 +14,7 @@ use Drupal\Core\Site\Settings;
 /**
  * Cache bin in nocopy shared memory. Items are plain arrays, so object-free data is read without a copy.
  *
- * Every PHP process of the site must share one cache (nocopy.shm_name on one server, nocopy.valkey on several):
+ * Every PHP process of the site must share one cache (nocopy.shm_name on one server, nocopy.resp on several):
  * writes by Drush and cron then reach php-fpm by themselves. Checked once per process.
  */
 class NocopyBackend implements CacheBackendInterface {
@@ -25,7 +25,7 @@ class NocopyBackend implements CacheBackendInterface {
   // Invalidated items outlive their expiry by this long for $allow_invalid readers, then nocopy may drop them.
   private const TTL_SLACK = 3600;
 
-  // With nocopy.valkey: permanent items expire after a year, so Valkey's volatile-* eviction can drop them
+  // With nocopy.resp: permanent items expire after a year, so RESP's volatile-* eviction can drop them
   // but never tag tokens, bin versions or these small bins (no TTL).
   private const PERM_TTL = 31536000, PERMANENT_BINS = ['container', 'bootstrap', 'config', 'discovery'];
 
@@ -59,8 +59,8 @@ class NocopyBackend implements CacheBackendInterface {
       return;
     }
     $with = function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none (the nocopy extension is not loaded)';
-    if ($with !== 'host' && $with !== 'valkey') {
-      throw new \RuntimeException(sprintf('nocopy: this %s process does not share the cache with the rest of the site (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this site, and run Drush and cron as the user that starts php-fpm.', PHP_SAPI, $with));
+    if ($with !== 'host' && $with !== 'resp') {
+      throw new \RuntimeException(sprintf('nocopy: this %s process does not share the cache with the rest of the site (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.resp (several) in the php.ini of every PHP that runs this site, and run Drush and cron as the user that starts php-fpm.', PHP_SAPI, $with));
     }
     self::$shared = TRUE;
   }
@@ -92,7 +92,7 @@ class NocopyBackend implements CacheBackendInterface {
     return $version;
   }
 
-  // key => stored item, for the keys written under the bin's current version. With nocopy.valkey every local miss in one round trip.
+  // key => stored item, for the keys written under the bin's current version. With nocopy.resp every local miss in one round trip.
   protected function fetchCurrent(array $keys): array {
     $found = nocopy_get_multiple([$this->versionKey, ...$keys]);
     $version = $this->version($found);
@@ -131,8 +131,8 @@ class NocopyBackend implements CacheBackendInterface {
         $raw[$keys[$key]] = $item;
       }
     }
-    // One lookup for every item's tags saves round trips to Valkey; locally it costs more than it saves.
-    if (count($raw) > 1 && nocopy_shared_with() === 'valkey' && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
+    // One lookup for every item's tags saves round trips to RESP; locally it costs more than it saves.
+    if (count($raw) > 1 && nocopy_shared_with() === 'resp' && $this->checksumProvider instanceof CacheTagsChecksumPreloadInterface) {
       $tags = [];
       foreach ($raw as $item) {
         if ($item[self::TAGS] !== '') {
@@ -176,12 +176,12 @@ class NocopyBackend implements CacheBackendInterface {
 
   protected function ttl($expire): int {
     if ($expire == CacheBackendInterface::CACHE_PERMANENT) {
-      return nocopy_shared_with() === 'valkey' && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
+      return nocopy_shared_with() === 'resp' && !in_array($this->bin, self::PERMANENT_BINS, TRUE) ? self::PERM_TTL : 0;
     }
     return (int) max(1, $expire - $this->time->getRequestTime()) + self::TTL_SLACK;
   }
 
-  // One nocopy_put_multiple() per TTL: with nocopy.valkey one pipeline each. Tags first, in one lookup.
+  // One nocopy_put_multiple() per TTL: with nocopy.resp one pipeline each. Tags first, in one lookup.
   public function setMultiple(array $items) {
     $tags = array_merge(...array_map(fn ($item) => $item['tags'] ?? [], array_values($items)));
     assert(Inspector::assertAllStrings($tags), 'Cache tags must be strings.');
@@ -222,7 +222,7 @@ class NocopyBackend implements CacheBackendInterface {
     }
   }
 
-  // With nocopy.valkey: one UNLINK.
+  // With nocopy.resp: one UNLINK.
   protected function doDelete(array $cids): void {
     nocopy_delete_multiple($this->keys($cids));
   }

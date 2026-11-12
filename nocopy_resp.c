@@ -1,7 +1,7 @@
-/* nocopy's Valkey tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
- * whose pushes (a change under the prefix) drop the local copies. Every Valkey command and the tier's routing live here; the store reaches it only through
- * nocopy_detour, the module through nocopy_valkey.h.
- * The connections are libvalkey's (third_party/libvalkey), blocking with nocopy.valkey_timeout; pushes come back as replies and are applied here. */
+/* nocopy's RESP tier: a RESP3 command connection per worker, and per arena one listener process with client-side tracking (BCAST)
+ * whose pushes (a change under the prefix) drop the local copies. Every RESP command and the tier's routing live here; the store reaches it only through
+ * nocopy_detour, the module through nocopy_resp.h.
+ * The connections are libvalkey's (third_party/libvalkey), blocking with nocopy.resp_timeout; pushes come back as replies and are applied here. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -121,7 +121,7 @@ static ZEND_INI_MH(on_prefix)
 	return SUCCESS;
 }
 
-/* nocopy.valkey_tls_*: a path, or empty */
+/* nocopy.resp_tls_*: a path, or empty */
 static ZEND_INI_MH(on_path)
 {
 	char **p = (char **) mh_arg1;
@@ -199,11 +199,11 @@ static void tls_init(void)
 	SSL_CTX_set_verify(c, vk_tls_verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
 	const char *what = NULL;
 	if (vk_tls_ca ? !SSL_CTX_load_verify_locations(c, vk_tls_ca, NULL) : !SSL_CTX_set_default_verify_paths(c)) {
-		what = "nocopy.valkey_tls_ca_file";
+		what = "nocopy.resp_tls_ca_file";
 	} else if (vk_tls_cert && !SSL_CTX_use_certificate_chain_file(c, vk_tls_cert)) {
-		what = "nocopy.valkey_tls_cert_file";
+		what = "nocopy.resp_tls_cert_file";
 	} else if ((vk_tls_key || vk_tls_cert) && !SSL_CTX_use_PrivateKey_file(c, vk_tls_key ? vk_tls_key : vk_tls_cert, SSL_FILETYPE_PEM)) {
-		what = "nocopy.valkey_tls_key_file";
+		what = "nocopy.resp_tls_key_file";
 	}
 	if (what) {
 		static char buf[400];
@@ -321,7 +321,7 @@ static bool is_str(const valkeyReply *r)
 /* A push whose first element is name. */
 static bool push_is(const valkeyReply *r, const char *name, size_t n) { return r->type == VALKEY_REPLY_PUSH && r->elements && is_str(r->element[0]) && r->element[0]->len == n && memcmp(r->element[0]->str, name, n) == 0; }
 
-/* The fill guard: a fill that read Valkey before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
+/* The fill guard: a fill that read RESP before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
 static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->vk.inval_gen, __ATOMIC_SEQ_CST); }
 static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->vk.inval_gen, 1, __ATOMIC_SEQ_CST); }
 
@@ -426,7 +426,7 @@ static void arg_long(smart_str *s, int64_t v)
 	arg(s, b, (size_t) snprintf(b, sizeof b, "%" PRId64, v));
 }
 
-/* SET key val [NX] [PX px]: relative, so Valkey's clock is never compared with ours */
+/* SET key val [NX] [PX px]: relative, so RESP's clock is never compared with ours */
 static void set_cmd(smart_str *s, const char *k, size_t kl, const char *val, size_t vl, int64_t px, bool nx)
 {
 	head(s, 3 + nx + (px ? 2 : 0)), ARG(s, "SET"), key_arg(s, k, kl), arg(s, val, vl);
@@ -471,7 +471,7 @@ static bool vk_subscribed(nocopy_vk *v)
 	return ok;
 }
 
-/* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from Valkey's idle `timeout`.
+/* HELLO 3 (AUTH), tracking for the listener, and SUBSCRIBE: subscribed clients are exempt from RESP's idle `timeout`.
  * ponytail: the connection counts as pubsub for client-output-buffer-limit (default 32mb, or 8mb for 60 s) of unread pushes. */
 static bool vk_handshake(nocopy_vk *v, bool track)
 {
@@ -514,11 +514,11 @@ static bool vk_connect(nocopy_vk *v)
 	}
 	const char *msg;
 	if (!vk_open(v, &msg)) {
-		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to Valkey (%s): %s", vk_path ? vk_path : vk_host, msg);
+		php_error_docref(NULL, E_WARNING, "nocopy: cannot connect to RESP (%s): %s", vk_path ? vk_path : vk_host, msg);
 		return vk_fail(v);
 	}
 	if (!vk_handshake(v, false)) {
-		php_error_docref(NULL, E_WARNING, "nocopy: Valkey handshake failed: %s", v->err[0] ? v->err : "unexpected reply");
+		php_error_docref(NULL, E_WARNING, "nocopy: RESP handshake failed: %s", v->err[0] ? v->err : "unexpected reply");
 		return vk_fail(v);
 	}
 	return true;
@@ -530,13 +530,13 @@ static bool vk_connect(nocopy_vk *v)
 #define STALE_MS 1000 /* no heartbeat for this long: the listener is gone, the next worker starts one */
 
 static const zend_ini_entry_def vk_ini[] = {
-	PHP_INI_ENTRY_EX("nocopy.valkey", "", PHP_INI_SYSTEM, on_url, display_url)
-	PHP_INI_ENTRY("nocopy.valkey_prefix", "nocopy:", PHP_INI_SYSTEM, on_prefix)
-	PHP_INI_ENTRY("nocopy.valkey_timeout", "0.5", PHP_INI_SYSTEM, on_timeout)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_ca_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_ca)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_cert_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_cert)
-	PHP_INI_ENTRY1("nocopy.valkey_tls_key_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_key)
-	PHP_INI_ENTRY("nocopy.valkey_tls_verify", "1", PHP_INI_SYSTEM, on_verify)
+	PHP_INI_ENTRY_EX("nocopy.resp", "", PHP_INI_SYSTEM, on_url, display_url)
+	PHP_INI_ENTRY("nocopy.resp_prefix", "nocopy:", PHP_INI_SYSTEM, on_prefix)
+	PHP_INI_ENTRY("nocopy.resp_timeout", "0.5", PHP_INI_SYSTEM, on_timeout)
+	PHP_INI_ENTRY1("nocopy.resp_tls_ca_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_ca)
+	PHP_INI_ENTRY1("nocopy.resp_tls_cert_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_cert)
+	PHP_INI_ENTRY1("nocopy.resp_tls_key_file", "", PHP_INI_SYSTEM, on_path, &vk_tls_key)
+	PHP_INI_ENTRY("nocopy.resp_tls_verify", "1", PHP_INI_SYSTEM, on_verify)
 	{0}
 };
 
@@ -603,7 +603,7 @@ static ZEND_NORETURN void vk_listen(void)
 		bool got = p.revents || !wait, ok = !got || (valkeyBufferRead(c) == VALKEY_OK && vk_pushes(c, false));
 		now = nocopy_mono_ms();
 		if (got) {
-			heard_by = 0; /* anything from Valkey answers the PING */
+			heard_by = 0; /* anything from RESP answers the PING */
 		}
 		if (ok && heard_by && now > heard_by) {
 			ok = false; /* a silent connection: PING unanswered */
@@ -673,7 +673,7 @@ static void vk_spawn(void)
 	}
 	signal(SIGPIPE, SIG_IGN); /* a write to a closed connection fails instead */
 #ifdef __linux__
-	prctl(PR_SET_NAME, "nocopy-valkey");
+	prctl(PR_SET_NAME, "nocopy-resp");
 #endif
 	nocopy_arena_unhold();
 	nocopy_request_end(&NOCOPY_G(ctx)); /* the spawner's pins: the listener reads no values */
@@ -702,7 +702,7 @@ static bool listener_live(int wait_ms)
 		}
 		if (now >= until) {
 			if (wait_ms) {
-				php_error_docref(NULL, E_WARNING, "nocopy: the Valkey listener is not connected: no invalidations, local copies are not served");
+				php_error_docref(NULL, E_WARNING, "nocopy: the RESP listener is not connected: no invalidations, local copies are not served");
 			}
 			return false;
 		}
@@ -751,21 +751,21 @@ void nocopy_vk_close(nocopy_vk *v)
 	v->synced = false;
 }
 
-/* ---- commands: keys without the prefix. -1: Valkey unreachable or failed (the connection is reset). ---- */
+/* ---- commands: keys without the prefix. -1: RESP unreachable or failed (the connection is reset). ---- */
 
 typedef struct {
 	const char *k, *v;
 	size_t kl, vl;
 } vk_kv;
 
-/* This worker's connection, (re)connected if it dropped; NULL: Valkey unreachable. */
+/* This worker's connection, (re)connected if it dropped; NULL: RESP unreachable. */
 static nocopy_vk *vk_conn(void)
 {
 	nocopy_vk *v = &NOCOPY_G(vk);
 	return v->c || vk_ready() ? v : NULL;
 }
 
-/* vk_call on this worker's connection; NULL also when Valkey is unreachable. s is freed either way. */
+/* vk_call on this worker's connection; NULL also when RESP is unreachable. s is freed either way. */
 static valkeyReply *vk_cmd(smart_str *s)
 {
 	nocopy_vk *v = vk_conn();
@@ -776,7 +776,7 @@ static valkeyReply *vk_cmd(smart_str *s)
 	return vk_call(v, s);
 }
 
-/* Integers are stored bare (decimal, for INCRBY): their expiry is only in Valkey. */
+/* Integers are stored bare (decimal, for INCRBY): their expiry is only in RESP. */
 static bool vk_is_int(const zend_string *raw) { return raw && ZSTR_LEN(raw) && ZSTR_VAL(raw)[0] != 0; }
 
 /* PTTL of the integers among vals, one pipeline; ttl[i]: -1 none, -2 gone or unknown. */
@@ -955,11 +955,11 @@ static int vk_clear(void)
 	return ret;
 }
 
-/* ---- the tier: the arena holds local copies of what Valkey holds ---- */
+/* ---- the tier: the arena holds local copies of what RESP holds ---- */
 
 static void vk_uncopy(zend_string *key) { nocopy_drop_local(ZSTR_VAL(key), ZSTR_LEN(key)); }
 
-/* After a change in Valkey: a sibling's fill that read the old value sees the guard move and drops its copy. */
+/* After a change in RESP: a sibling's fill that read the old value sees the guard move and drops its copy. */
 static void vk_forget(zend_string *key)
 {
 	vk_bump(); /* before the drop */
@@ -985,7 +985,7 @@ static int64_t vk_px(time_t expires)
 }
 
 #define VK_HDR 14 /* 0x00, flags (VK_IGB), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
-#define VK_IGB 2  /* the value is igbinary's (a wire format: Valkey may hold values older builds wrote) */
+#define VK_IGB 2  /* the value is igbinary's (a wire format: RESP may hold values older builds wrote) */
 
 static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 {
@@ -1009,7 +1009,7 @@ static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 	return s;
 }
 
-/* raw: a private copy, so unserialize may run user code that calls Valkey again */
+/* raw: a private copy, so unserialize may run user code that calls RESP again */
 static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_t *user)
 {
 	const char *b = ZSTR_VAL(raw);
@@ -1034,7 +1034,7 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[1] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
 }
 
-/* An integer's last whole second in Valkey from its PTTL, so our copy never outlives it. 0: never; -1: keep no copy. */
+/* An integer's last whole second in RESP from its PTTL, so our copy never outlives it. 0: never; -1: keep no copy. */
 static time_t vk_pttl_expires(int64_t ttl)
 {
 	if (ttl < 0) {
@@ -1043,7 +1043,7 @@ static time_t vk_pttl_expires(int64_t ttl)
 	return (time_t) ((wall_ms() + ttl) / 1000 - 1);
 }
 
-/* Decodes a value read from Valkey into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
+/* Decodes a value read from RESP into rv and keeps a local copy. Add-only: a local write since our miss is newer. */
 static bool vk_fill(zend_string *key, const zend_string *raw, int64_t ttl, zval *rv, time_t *exp, uint32_t *delta)
 {
 	time_t expires;
@@ -1055,7 +1055,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, int64_t ttl, zval 
 		expires = vk_pttl_expires(ttl);
 	}
 	const nocopy_opts o = {.expires = expires > 0 ? nocopy_from_wall(expires) : 0, .add_only = true};
-	if (!expires || expires >= time(NULL)) { /* Valkey's PX decides it lives; the writer's second only bounds our copy */
+	if (!expires || expires >= time(NULL)) { /* RESP's PX decides it lives; the writer's second only bounds our copy */
 		nocopy_put_local(key, rv, &o, user);
 	}
 	if (exp) {
@@ -1089,13 +1089,13 @@ static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *d
 	return ok;
 }
 
-/* Valkey first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
+/* RESP first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
 static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	if (!vk_ready()) {
 		return NOCOPY_NO_ROOM;
 	}
-	const nocopy_opts local = {.ttl = o->ttl}; /* over the local copy: Valkey decides add */
+	const nocopy_opts local = {.ttl = o->ttl}; /* over the local copy: RESP decides add */
 	if (!o->add_only && nocopy_put_local(key, val, &local, user) == NOCOPY_REFUSED) {
 		return NOCOPY_REFUSED;
 	}
@@ -1257,14 +1257,14 @@ static bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw)
 
 static bool nocopy_vk_clear(void)
 {
-	bool ok = vk_ready() && vk_clear() >= 0; /* Valkey down: the other servers keep theirs */
+	bool ok = vk_ready() && vk_clear() >= 0; /* RESP down: the other servers keep theirs */
 	nocopy_clear();
 	return ok;
 }
 
 static const nocopy_detour_ops vk_detour = {
 	nocopy_vk_store, nocopy_vk_fetch, nocopy_vk_fetch_multi, nocopy_vk_store_multi, nocopy_vk_drop, nocopy_vk_drop_multi,
-	nocopy_vk_add_long, nocopy_vk_cas_long, nocopy_vk_clear, true, "valkey",
+	nocopy_vk_add_long, nocopy_vk_cas_long, nocopy_vk_clear, true, "resp",
 };
 
 const nocopy_detour_ops *nocopy_vk_route(void) { return vk_on ? &vk_detour : NULL; }

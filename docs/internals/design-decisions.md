@@ -44,7 +44,7 @@ slot, silence on ignored settings):
 no name, no attach and no worker slot all route to the no-arena table, which misses and fails every write and
 the clear, with the reason in `nocopy_stats()['off']`. The route moved into the module globals (per thread: a ZTS thread
 can lack a slot while the others have one): `./dev ab HEAD 7 read write` within noise on NTS (rows ±6%, with signs
-flipping across groups); ZTS not measured. `nocopy_clear()` with Valkey unreachable is `false` too: the other servers
+flipping across groups); ZTS not measured. `nocopy_clear()` with RESP unreachable is `false` too: the other servers
 keep their copies.
 **No default name:** two sites of one user would share keys.
 
@@ -54,17 +54,17 @@ Each process holds an OFD lock on its process slot's byte of the shm object; a h
 Price: one descriptor per process, a 1024-process limit at attach. The lock fast path is unchanged; the query runs only where `/proc` was read before.
 macOS keeps pid + start time (`sysctl`, no fd, no namespaces; no OFD locks there).
 
-**Valkey: one listener process per arena** holds the only tracking connection: 16 connections and 16 copies of every push
+**RESP: one listener process per arena** holds the only tracking connection: 16 connections and 16 copies of every push
 per server became 1. The writer's own server refetches its write once, since the listener cannot tell own writes apart.
 
-**Valkey connections from vendored libvalkey** (`third_party/libvalkey`, 0.5.0), replacing our own socket, TLS BIO and RESP3 parser
+**RESP connections from vendored libvalkey** (`third_party/libvalkey`, 0.5.0), replacing our own socket, TLS BIO and RESP3 parser
 (~600 lines and a fuzzer): Cluster, when it comes, is libvalkey's `cluster.c` rather than ours. Vendored because no distro or Homebrew
-packages it and PIE builds from the release archive (submodules are left out). `bench/` has no Valkey A/B; a put/get/inc/get_multiple loop
+packages it and PIE builds from the release archive (submodules are left out). `bench/` has no RESP A/B; a put/get/inc/get_multiple loop
 over loopback (scratch script, 9 interleaved rounds, rounds where both builds ran at the VM's fast speed): put 10.3-11.4 -> 11.5-12.0 µs
 (each reply is a malloc'd tree), get 3.9-4.0 -> 3.7-4.0, inc 11.8-13.8 -> 12.5-13.0, get_multiple of 100 58-75 -> 52-71. Price: ~7k lines
 of C in the repo, updated with `scripts/vendor-libvalkey.sh <tag>`.
 
-**Valkey tier behind a seam.** `nocopy_store.c` reaches it only through `nocopy_detour`, a table of the store ops whose other implementation is no arena; `--disable-nocopy-valkey` compiles the Valkey table
+**RESP tier behind a seam.** `nocopy_store.c` reaches it only through `nocopy_detour`, a table of the store ops whose other implementation is no arena; `--disable-nocopy-resp` compiles the RESP table
 out, so the core builds and ships without it. CI runs the suite both ways. Default stays on.
 The table replaced ten hand-written `detour`/`nocopy_vk_on`/`nocopy_a` branches; the local path only tests a pointer instead of a bool (`./dev ab main 7 read`: fetch int 10.96 -> 10.69 ns, 100k distinct keys 27.0 -> 26.9, within noise).
 
@@ -223,7 +223,7 @@ bytes per array block, u32 list +2.5 to 6%; would move array blocks 1.8 to 3x fa
 (string alone 100 B 31-37 -> 60 ns, 10 KB 222 -> 2,690 ns).
 
 **`nocopy_delete_multiple`**, because Drupal's `deleteMultiple()` and Symfony's `deleteItems()` deleted key by key, one `UNLINK`
-round trip each with `nocopy.valkey`. `bench/delete.php`, Valkey on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
+round trip each with `nocopy.resp`. `bench/delete.php`, RESP on loopback (medians of 21): 10 keys 340 -> 39 µs, 100 keys
 3.3 ms -> 75 µs, 1000 keys 33 -> 0.44 ms. Locally 100 keys 2.8 -> 1.9 µs, 1000 keys 33 -> 22 µs. The APCu polyfill keeps its loop:
 `apcu_delete()` returns the keys that failed, and a count cannot say which.
 
@@ -237,13 +237,13 @@ keeps them late. Read cost in the dev image, 2x10^7 reads, 3 runs: `MONOTONIC_CO
 `BOOTTIME`/`MONOTONIC`/`REALTIME` 11.3-13.7. `CLOCK_BOOTTIME` was the plan's first choice (it counts suspend) and is
 rejected: it has no coarse variant, 3x per read, and servers do not suspend; a suspended laptop keeps entries that long
 longer. Wall time stays where time leaves the arena: `start_time`, `nocopy_keys()` (converted, within a second) and the
-Valkey payload. Valkey gets `SET … PX <ms>` (relative, was `PXAT`): Valkey's clock is never compared with ours. The
-payload's absolute second only bounds a reader's local copy; it no longer turns a value Valkey still holds into a miss.
-Test 100 (a writer an hour behind or ahead, libfaketime) and 101 (the same against Valkey) fail on the wall clock.
+RESP payload. RESP gets `SET … PX <ms>` (relative, was `PXAT`): RESP's clock is never compared with ours. The
+payload's absolute second only bounds a reader's local copy; it no longer turns a value RESP still holds into a miss.
+Test 100 (a writer an hour behind or ahead, libfaketime) and 101 (the same against RESP) fail on the wall clock.
 Processes in different time namespaces (`unshare --time`, CRIU) must not share an arena.
 
-**Integers read from Valkey take their expiry from `PTTL`.** They are stored bare (decimal, so `INCRBY` works), with no
-header and so no expiry second; their local copy never expired and outlived the key until an invalidation for Valkey's
+**Integers read from RESP take their expiry from `PTTL`.** They are stored bare (decimal, so `INCRBY` works), with no
+header and so no expiry second; their local copy never expired and outlived the key until an invalidation for RESP's
 expiry arrived (Drupal's `testFlood` passed 1 of 6 runs). A read that got integers pipelines one `PTTL` each (relative,
 like `PX`) and keeps the copy to the last whole second the key still lives, or keeps none. Costs one round trip more on
 an integer's local miss; reads without integers send nothing more. Rejected: `PTTL` with every `MGET` (a command per key
@@ -333,12 +333,12 @@ loads and all hits on scans.
 
 **No `nocopy.ttl` default:** it expired Drupal's cache tag tokens. Callers pass `$ttl`.
 
-**Drupal `get()` has a path of its own, and tags are preloaded only with `nocopy.valkey`:** `get()` went through
+**Drupal `get()` has a path of its own, and tags are preloaded only with `nocopy.resp`:** `get()` went through
 `getMultiple()` (key maps, `array_diff`, a tag preload whose tags `isValid()` asks for right away), and the checksum trait's
 `isValid()` copies and merges arrays even when every tag is loaded. Now: one `nocopy_get_multiple` of version key and item
-(still one round trip on a Valkey miss; two `nocopy_get` would be two), prefix and version key built once, the item object
+(still one round trip on a RESP miss; two `nocopy_get` would be two), prefix and version key built once, the item object
 cast from an array, `isValid()` in `NocopyCacheTagsChecksum` summing the loaded tokens itself and falling back to the trait
-when a tag is missing, delayed or waiting for preload. `getMultiple()` preloads tags only with Valkey, where one lookup saves
+when a tag is missing, delayed or waiting for preload. `getMultiple()` preloads tags only with RESP, where one lookup saves
 round trips; locally it cost more than the lookups. `./dev drupal-get`, ns per call, best of 5 x 20k, CLI (copy mode),
 bare `nocopy_get` 34: miss 499 -> 127, hit without tags 935 -> 335, 3 tags 1,572 -> 533, 20 tags 3,447 -> 1,170,
 3 tags expiring 1,684 -> 600, `getMultiple` of 10 per item 929 -> 510, of 10 misses 130 -> 99. A miss no longer creates a
@@ -346,7 +346,7 @@ missing bin version (the next `set()` does). What is left of a hit: the copy of 
 and `explode()` of the tags (stored as one string). Not measured per page.
 
 **Drupal bin version in the item, not the key:** a versioned key orphaned every item on `deleteAll()`, and with
-`nocopy.valkey` the TTL-less small bins (config, discovery, ...) then stayed in Valkey for good after each `drush cr`.
+`nocopy.resp` the TTL-less small bins (config, discovery, ...) then stayed in RESP for good after each `drush cr`.
 Not Redis's `last_delete_all` timestamp: that compares clocks of different servers. `invalidateAll()` deletes (as Redis
 does by default), so each call reads one bin key instead of two.
 
@@ -497,8 +497,8 @@ string -10.2 / -7.3%; the root planned inline (scalars and a lone string in the 
 A zero-copy scalar fetch through the mode dispatch was -5% (`ab` best of 9: fetch int, `exists`, parallel fetch int x1-x8 -4.5 to -5.7%):
 `nocopy_value_scalar` first, as the old read path did, brings them to within ±2% (parallel +0.4 to +2.6%).
 
-**The PHP layers' boundaries checked, not agreed.** Kept copies take their state as a parameter (`nocopy_kept_cache`, the value layer's env) and include `nocopy_value.h` only; the Valkey tier
-has its own header for the module (`nocopy_valkey.h`: state and six calls; its INI lives in `nocopy_valkey.c`); `nocopy_keys`' walk is the store's. `./dev layers` enforces each, and that no
+**The PHP layers' boundaries checked, not agreed.** Kept copies take their state as a parameter (`nocopy_kept_cache`, the value layer's env) and include `nocopy_value.h` only; the RESP tier
+has its own header for the module (`nocopy_resp.h`: state and six calls; its INI lives in `nocopy_resp.c`); `nocopy_keys`' walk is the store's. `./dev layers` enforces each, and that no
 `nocopy_value_int.h` name reaches past the value units through `nocopy.c`'s one translation unit (`GROW` did). Each step `./dev ab main 7`, copy / zero: fetch and store rows within ±3%;
 reruns of the rows outside (ab main 9-11) flipped sign: fetch string 100B copy -4.8% then +1.2%, parallel arr1k zero x2 -6.3% then +6.5%, 4 readers + 4 writers zero +5.2 / -7.2 / +4.5%
 in three runs, and the "4 readers + 1 writer" copy row ranges 74-1415 k ops/s on unchanged code. A ±3% bar on those rows needs more rounds than `ab` takes.
@@ -543,9 +543,9 @@ Code comments are one short line, or none.
 | Robust pthread mutexes to detect dead lock holders | 15% slower uncontended, 2-8x with 2-16 contending processes. Owner-id locks + `shard_repair` instead |
 | Ghost variants | 2-way: no better. 2x tags: +0-3 points on mixed loads for 4 B/slot more |
 | Dropping `nocopy_get_multiple`/`put_multiple` (PHP loop instead) | get 10 keys 142 -> 292 ns, 100 keys 1.3 -> 2.8 µs; put 100 keys 8.3 -> 9.3 µs |
-| Dropping `nocopy.serializer=igbinary` (~50 lines) | the Valkey tier serializes every non-integer value. Loopback, 2000 values, best of 5, put / cold get µs and bytes in Valkey, php -> igbinary: 1k rows 260 / 377 -> 236 / 182, 141 -> 47 KB; 100 objects 37 / 57 -> 26 / 36, 15.5 -> 4.6 KB; render-array-like nested 1.5 KB of 3.7; 10 rows 1374 -> 490 B, times within noise; a 10 KB string unchanged |
-| Compressing the Valkey tier's payloads (LZ4, zstd) | `bench/compress.php` + `bench/codecs.c` (liblz4 1.10, libzstd 1.5.7, aarch64, random-word values: pessimistic), igbinary -> +LZ4 / +zstd 1, bytes and decode µs: render array 20.5 -> 14.4 / 8.9 KB, +1.1 / +9.9; 1k rows 77 -> 61 / 40 KB, +9 / +51; 20 KB HTML 24 -> 11 / 7.3 KB, +1.3 / +8.7; < 100 B and random bytes: nothing. Encode +60-100% (LZ4), +100-200% (zstd); zstd 3 no smaller than 1. igbinary already takes most (php -> igbinary 2.0-2.3x on arrays, faster decode); the rest pays only with Valkey short of memory or on links of ~10 Gbit or slower. serialize+LZ4 instead of igbinary: 10-30% smaller, decode 1.6-3x slower |
-| Arena blocks as the Valkey encoding (spike: memcpy + rebase instead of unserialize + put) | fill 4-7x cheaper (render array 34 -> 7.3 µs, 1k rows 173 -> 23), store cheaper (the local put built the block), but 5-6x igbinary's bytes (102 KB vs 20.5): more transfer than CPU saved at 10 Gbit. +LZ4: 1.3-1.9x igbinary's bytes, fill 2-3.4x cheaper, store 2.3x slower; +zstd 1: igbinary's size, fill no cheaper. Needs a layout id and tagged out-of-block pointers (`ARENA_EMPTY`), as OPcache's file cache does (offsets from the buffer, interned strings with the low bit set, empty hashes by flag; `system_id` + Adler-32, no pointer checks) |
+| Dropping `nocopy.serializer=igbinary` (~50 lines) | the RESP tier serializes every non-integer value. Loopback, 2000 values, best of 5, put / cold get µs and bytes in RESP, php -> igbinary: 1k rows 260 / 377 -> 236 / 182, 141 -> 47 KB; 100 objects 37 / 57 -> 26 / 36, 15.5 -> 4.6 KB; render-array-like nested 1.5 KB of 3.7; 10 rows 1374 -> 490 B, times within noise; a 10 KB string unchanged |
+| Compressing the RESP tier's payloads (LZ4, zstd) | `bench/compress.php` + `bench/codecs.c` (liblz4 1.10, libzstd 1.5.7, aarch64, random-word values: pessimistic), igbinary -> +LZ4 / +zstd 1, bytes and decode µs: render array 20.5 -> 14.4 / 8.9 KB, +1.1 / +9.9; 1k rows 77 -> 61 / 40 KB, +9 / +51; 20 KB HTML 24 -> 11 / 7.3 KB, +1.3 / +8.7; < 100 B and random bytes: nothing. Encode +60-100% (LZ4), +100-200% (zstd); zstd 3 no smaller than 1. igbinary already takes most (php -> igbinary 2.0-2.3x on arrays, faster decode); the rest pays only with RESP short of memory or on links of ~10 Gbit or slower. serialize+LZ4 instead of igbinary: 10-30% smaller, decode 1.6-3x slower |
+| Arena blocks as the RESP encoding (spike: memcpy + rebase instead of unserialize + put) | fill 4-7x cheaper (render array 34 -> 7.3 µs, 1k rows 173 -> 23), store cheaper (the local put built the block), but 5-6x igbinary's bytes (102 KB vs 20.5): more transfer than CPU saved at 10 Gbit. +LZ4: 1.3-1.9x igbinary's bytes, fill 2-3.4x cheaper, store 2.3x slower; +zstd 1: igbinary's size, fill no cheaper. Needs a layout id and tagged out-of-block pointers (`ARENA_EMPTY`), as OPcache's file cache does (offsets from the buffer, interned strings with the low bit set, empty hashes by flag; `system_id` + Adler-32, no pointer checks) |
 | Compressing arena entries | every hit decompresses (render array: LZ4 10 µs, zstd 27 µs, vs zero-copy 0); blocks shrink 3-4x (LZ4) / 5-6x (zstd 1). Only conceivable for cold entries instead of evicting them; shared strings across entries ([Writes](#writes)) come first |
 | Dropping the frameless `nocopy_get`/`nocopy_put` (~55 lines with arginfo) | `./dev ab HEAD 5 read write`, copy / zero: fetch int 11.0 -> 15.2 / 11.0 -> 14.7 ns, fetch string 10KB 13.1 -> 18.0 / 11.2 -> 16.7, fetch int 100k distinct keys 27.8 -> 34.8 / 28.2 -> 34.9; stores 1-3 ns slower |
 | A leaner Symfony read path, as done for Drupal's `get()` | nothing of that size is left: `./dev sfget`, bare `nocopy_get` 22 ns, `get()` hit 200, `getItem` hit 382 / miss 336, `hasItem` 183, `getItems` of 10 per item 298. The rest is `AbstractAdapter`'s (`getId`, item objects, generators) around private state (`$deferred`, `$ids`, the namespace version): overriding `getItem` would ignore `saveDeferred()`, an id cache of our own would have to follow every version change. In our code, measured apart: the closure `get()` builds per call 54 ns (kept in a property instead, a nested `get()` from an unserialize hook could run another key's callback), `doFetch`'s `ini_set` pair 44 ns (turns a missing class into a miss), `nocopy_get` for one id instead of `nocopy_get_multiple` 18 ns |
@@ -555,7 +555,7 @@ Code comments are one short line, or none.
 | Scanning the candidates' entries to rank them (no per-segment counter) | same hit ratios, but puts under eviction +40% at 32M, +75% at 256M (32 segments walked under the lock) |
 | Cost-benefit order for compaction victims (LFS/RAMCloud `(1-u)·age/(1+u)`) | no change in any `hitratio.php` workload: rarely more than 4 sparse candidates |
 | `nocopy_worker` aligned to 128 B (Apple's line size; one worker's per-fetch `hits` write shares a line with its neighbour's) | Graviton4 (c8g.xlarge, 64 B lines), 4-8 readers on 1 / 100k keys: all within ±2%, medians of 8. The +20-50% on an M3 Pro (128 B lines) sat inside its 2-3x run-to-run noise. Padding `nocopy_seg` to 64 B and dropping reader `hot` writes: no signal above that noise either |
-| Valkey: no refetch after our own write, via `CLIENT TRACKING ON REDIRECT <listener> BCAST PREFIX p NOLOOP` on every command connection | Valkey 8.1 and 9.1 send one push per tracking connection, also when they redirect to the same client: 3 redirecting workers gave the listener 3 pushes per foreign write and 2 per own write (`NOLOOP` skips only the writer). With 32 fpm workers that is 32 pushes per write per server, which the single listener exists to avoid. Skipping our own echo in the listener instead is unsafe: a cycle's invalidations of one key are merged, so an echo can hide another server's write |
+| RESP: no refetch after our own write, via `CLIENT TRACKING ON REDIRECT <listener> BCAST PREFIX p NOLOOP` on every command connection | Valkey 8.1 and 9.1 send one push per tracking connection, also when they redirect to the same client: 3 redirecting workers gave the listener 3 pushes per foreign write and 2 per own write (`NOLOOP` skips only the writer). With 32 fpm workers that is 32 pushes per write per server, which the single listener exists to avoid. Skipping our own echo in the listener instead is unsafe: a cycle's invalidations of one key are merged, so an echo can hide another server's write |
 | One-pass `copy_out` | `zend_array_dup` of an immutable array is already one memcpy; the cost was per-key allocation (fixed by key dedupe) |
 | Persist into a private buffer, then `memcpy` + `nocopy_rebase` into the arena (no sizing pass, no fill outside the lock) | bounded with two `docker/ab.sh` variants, `write`, best of 5: what it adds (persist privately + copy + rebase) costs more than what it saves (a second `size_zval`): 1k rows +27.1 vs -17.9 µs, 10 rows +276 vs -183 ns, int +7.1 vs -2.4 ns, so writes ~15-20% slower. A growable buffer also moves pointers already written |
 | Skip `size_zval` for small values: allocate a top-level lower bound under the lock, grow into the segment's free tail up to `NOCOPY_INLINE_PUT`, persist with bounds and type checks, trim (or give back and take the sized path) | arrays that fit gain (bench rows, best of 3 x 200k puts: 1 row 90-96 -> 83-87 ns, 2 rows 152-164 -> 121-126); nested arrays whose top level looks small but that overflow 2 KB pay a wasted persist (4 rows 244-268 -> 420-624, 6 rows 349-407 -> 531-643; `ab.sh` store array 10 rows -18/-23%); the checks in `persist_*` cost the sized path 3-8% (1k rows); scalars -5-9% (their sizing is ~2 ns). Always reserving 2 KB instead lost a hot key in test 029 (wasted tails evict sooner) |

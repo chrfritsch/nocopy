@@ -4,7 +4,7 @@ Returns an array that describes the whole cache, for all processes together, not
 count since the cache was created.
 
 - Without a shared cache, every number is `0`, `shm_name` is `null`, and `off` says why.
-- With `nocopy.valkey`, the numbers describe this server's local copies only.
+- With `nocopy.resp`, the numbers describe this server's local copies only.
 
 What to watch in production: [Size and monitor the cache](../how-to/size-and-monitor.md).
 Words like segment, shard and slot: [Glossary](glossary.md).
@@ -15,7 +15,7 @@ Words like segment, shard and slot: [Glossary](glossary.md).
 |---|---|
 | `off` | `null` while this process (or thread) has the cache. Otherwise the reason it does not, for example `nocopy.shm_name is not set (e.g. /nocopy)` or `no worker slot: …`. Then reads miss, and writes and `nocopy_clear()` return `false` |
 | `shm_name` | Name of the shared-memory object in `/dev/shm`: `nocopy.shm_name`, a dot and the build id. `null` without a cache |
-| `valkey_listener` | Pid of this server's Valkey listener process, `0` if there is none |
+| `resp_listener` | Pid of this server's RESP listener process, `0` if there is none |
 | `lock_steals` | Locks taken over from a process that died while holding one (its part of the cache was then repaired). Should be `0` |
 
 ## Traffic

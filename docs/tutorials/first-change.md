@@ -3,7 +3,7 @@
 In this tutorial you make a small change to the extension's C code: `nocopy_stats()` gets a `start_time` key that says
 when the cache was created. You write a test first, watch it fail, make it pass, and run the checks CI runs.
 
-You need Docker and a checkout of this repository. No PHP, compiler or Valkey on your machine: `./dev` runs everything in
+You need Docker and a checkout of this repository. No PHP, compiler or RESP on your machine: `./dev` runs everything in
 a Linux container. Takes about 15 minutes, most of it waiting for builds.
 
 ## 1. Run the test suite once
@@ -14,7 +14,7 @@ a Linux container. Takes about 15 minutes, most of it waiting for builds.
 
 The first run builds the image (a few minutes). Every run copies the sources into the container, compiles the extension
 from clean and runs the `.phpt` tests in `tests/`. At the end you see a summary like this (the counts change as the
-suite grows, and tests that need Valkey may be skipped):
+suite grows, and tests that need RESP may be skipped):
 
 ```
 Tests skipped   :     2 (  1.9%) --------
@@ -93,11 +93,11 @@ Tests passed    :     1 (100.0%) (100.0%)
 
 ## 4. Check you broke nothing
 
-Run the whole suite, then the same suite built without the Valkey tier (the core must compile without it):
+Run the whole suite, then the same suite built without the RESP tier (the core must compile without it):
 
 ```sh
 ./dev test
-./dev novalkey
+./dev noresp
 ```
 
 Your change does not touch locking or memory reclamation. If it did, you would also run the race loops, which repeat the
@@ -137,7 +137,7 @@ If you want to keep it as a real change, also add the key to the [`nocopy_stats(
 
 - `./dev test` builds from clean and runs the suite; give it a test path to run one test.
 - A `.phpt` test: own `nocopy.shm_name`, `--CLEAN--`, expected output, and how to read its diff.
-- Which checks a change needs: `./dev novalkey` always, `./dev stress` and `./dev c` for concurrency, `./dev ci` before a pull request.
+- Which checks a change needs: `./dev noresp` always, `./dev stress` and `./dev c` for concurrency, `./dev ci` before a pull request.
 
 Next: [Develop, test and benchmark](../how-to/develop.md) for the day-to-day tasks, and
 [Architecture and invariants](../internals/architecture.md) before you change locking, eviction or the read path.

@@ -1,19 +1,19 @@
 --TEST--
-nocopy.valkey: values, integers, add, TTLs, delete and clear go to Valkey; a change by another client drops the local copy
+nocopy.resp: values, integers, add, TTLs, delete and clear go to RESP; a change by another client drops the local copy
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t050
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t050:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t050:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 apcu_clear_cache();
 var_dump(nocopy_put('a', ['x' => [1, 2]]), nocopy_get('a'), ord(vk('GET', 't050:a')[0]));
 var_dump(nocopy_put('o', new ArrayObject([1]), 0), nocopy_get('o') instanceof ArrayObject);

@@ -1,6 +1,6 @@
 # Benchmarks
 
-How nocopy compares with APCu, OPcache files, Redis/Valkey and Drupal's database cache, and what that means for your app.
+How nocopy compares with APCu, OPcache files, Redis/RESP and Drupal's database cache, and what that means for your app.
 The complete runs, with every configuration and caveat, are in the [benchmark log](../internals/benchmarks.md).
 
 ## In short
@@ -134,10 +134,10 @@ is empty after every php-fpm restart.
 
 ### Several servers, against drupal/redis
 
-All bins and cache tags shared through Valkey (or Redis) on the same host. drupal/redis with phpredis and igbinary, and
+All bins and cache tags shared through RESP (or Redis) on the same host. drupal/redis with phpredis and igbinary, and
 APCu in front of the small bins, as recommended.
 
-| | drupal/redis | nocopy + Valkey |
+| | drupal/redis | nocopy + RESP |
 |---|---:|---:|
 | Anonymous front page | 4,837 req/s | **12,538 req/s** |
 | Logged-in front page / node / JSON:API | 642 / 634 / 1,159 req/s | **1,387 / 1,152 / 1,754 req/s** |
@@ -187,7 +187,7 @@ Reproduce: `./dev tail`.
 The same requests against each cache, each given the same memory, 500-byte values, read-through (get, and put on a miss).
 Hit rate in %, higher is better. "1.5x" means the data is 1.5 times the memory.
 
-| Workload (32 MB) | nocopy | APCu | Valkey LRU | Valkey LFU |
+| Workload (32 MB) | nocopy | APCu | RESP LRU | RESP LFU |
 |---|---:|---:|---:|---:|
 | Popular keys read more often (Zipf), 1.5x | 94.6 | 86.7 | 96.1 | 96.2 |
 | The same, plus keys used only once | 89.8 | 72.5 | 80.6 | 91.7 |
@@ -198,9 +198,9 @@ Hit rate in %, higher is better. "1.5x" means the data is 1.5 times the memory.
 **What it means:**
 
 - APCu empties the whole cache when it is full, so a loop over slightly more than fits never hits.
-- Valkey fits about 15% more entries into the same memory, which is most of its lead. But each Valkey request is a network
+- RESP fits about 15% more entries into the same memory, which is most of its lead. But each RESP request is a network
   hop (4-8 µs here, against 0.2-0.7 µs for nocopy).
-- Keys used only once don't push popular keys out of nocopy (it is level with Valkey's LFU, 9 points above LRU).
+- Keys used only once don't push popular keys out of nocopy (it is level with RESP's LFU, 9 points above LRU).
 - Rewrites cost nocopy a few points: an overwritten value stays as dead space until its segment is compacted.
 
 Reproduce: `./dev hitratio`.

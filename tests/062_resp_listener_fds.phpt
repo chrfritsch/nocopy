@@ -1,18 +1,18 @@
 --TEST--
-nocopy.valkey: the listener holds nothing of the process that started it open, and exits once its arena is removed
+nocopy.resp: the listener holds nothing of the process that started it open, and exits once its arena is removed
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
+<?php require __DIR__ . '/resp_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t062-parent
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 require_once __DIR__ . '/php.inc';
-$code = '$f = fopen(PHP_BINARY, "r"); $s = stream_socket_server("tcp://127.0.0.1:0"); nocopy_put("a", 1); echo nocopy_stats()["valkey_listener"], "\n"; fgets(STDIN);';
-$p = proc_open(php_argv(['nocopy.shm_name' => '/nocopy-t062', 'nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => 't062:'], ['-r', $code]),
+$code = '$f = fopen(PHP_BINARY, "r"); $s = stream_socket_server("tcp://127.0.0.1:0"); nocopy_put("a", 1); echo nocopy_stats()["resp_listener"], "\n"; fgets(STDIN);';
+$p = proc_open(php_argv(['nocopy.shm_name' => '/nocopy-t062', 'nocopy.resp' => '127.0.0.1:6379', 'nocopy.resp_prefix' => 't062:'], ['-r', $code]),
     [0 => ['pipe', 'r'], 1 => ['pipe', 'w']], $pipes);
 $pid = (int) fgets($pipes[1]);
 $fds = array_map(fn ($f) => @readlink("/proc/$pid/fd/$f"), array_diff(scandir("/proc/$pid/fd"), ['.', '..']));

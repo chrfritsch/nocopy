@@ -6,7 +6,7 @@ services:
     arguments: ['%app.root%', '%site.path%']
     tags:
       - { name: cache_tags_invalidator }
-  # Locks and flood control in nocopy too (with nocopy.valkey: across servers).
+  # Locks and flood control in nocopy too (with nocopy.resp: across servers).
   lock:
     class: Drupal\nocopy\Lock\NocopyLockBackend
     arguments: ['%app.root%', '%site.path%']

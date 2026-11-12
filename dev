@@ -8,8 +8,8 @@ PHP=${PHP:-8.5}
 usage() { cat <<EOF
 Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are built on first use, cached after)
 
-  test [tests/0xx.phpt ...]   build + .phpt suite (Valkey tests included)
-  novalkey [tests ...]        same, built with --disable-nocopy-valkey
+  test [tests/0xx.phpt ...]   build + .phpt suite (RESP tests included)
+  noresp [tests ...]        same, built with --disable-nocopy-resp
   asan [tests ...]            same, built with ASan + UBSan and nocopy's own assertions
   debug [tests ...]           same as asan, on a debug build of PHP (the engine's assertions; built once, cached); debug fuzz [...]: the fuzzer there
   leaks [tests ...]           suite on the debug PHP without ASan, Zend allocator on: memory a request leaks fails the test; leaks fuzz [...]: the fuzzer there
@@ -18,7 +18,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   stress [loops=30]           concurrency tests in a loop, stops at first failure
   c [seconds=3]               arena alone from 8 threads, plain + ThreadSanitizer
   fuzz [iterations=20000] [seed]  random values round-tripped under ASan, copy + zero-copy (seed printed: replays the run)
-  shm                         CLI + php-fpm, then CLI + Apache mod_php share one cache by name (fpm also with Valkey)
+  shm                         CLI + php-fpm, then CLI + Apache mod_php share one cache by name (fpm also with RESP)
   frankenphp                  FrankenPHP classic + worker mode, and shm with it
   pie                         pie install from the committed tree, with and without each configure option
   symfony [version=8.*]       Symfony bundle smoke test (alone and next to APCu)
@@ -42,7 +42,7 @@ Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are bu
   drupal-bench                Drupal under nginx + fpm, 9 cache configs (long; MEM_ONLY=1 memory, ROWS_ONLY=1 its DB cache rows in an arena, PERF_ONLY=1 perf profile; CONFIGS=...)
   cg [ops...]                 cachegrind instructions per op of bench/prof.php (N, TOP, ANNOTATE=1; .cache/perf)
   perf [ops...]               perf profile of bench/prof.php loops, copy + zero mode (OPS, MODES, ANNOTATE="syms" by line; .cache/perf)
-  hitratio                    hit ratios of nocopy, APCu and Valkey at equal memory (~20 min)
+  hitratio                    hit ratios of nocopy, APCu and RESP at equal memory (~20 min)
   trace [raw.csv...]          Twitter traces with TTLs replayed read-through: nocopy vs libCacheSim's policies at equal bytes (SIZES, ALGOS, N; traces in .cache/traces, see docker/trace.sh)
 
   stub                        regenerate nocopy_arginfo.h from nocopy.stub.php
@@ -71,7 +71,7 @@ sfapp() {
 cmd=${1:-help}; [ $# -gt 0 ] && shift
 case $cmd in
   test)       img; run "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
-  novalkey)   img; run -e NOCOPY_CONFIGURE=--disable-nocopy-valkey "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
+  noresp)   img; run -e NOCOPY_CONFIGURE=--disable-nocopy-resp "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
   asan)       img; run -e NOCOPY_ASAN=1 "nocopy-linux:$PHP" /src/docker/test.sh "$@" ;;
   debug)      img debug
               if [ "$1" = fuzz ]; then shift; run -e FUZZ_VALUE "nocopy-debug:$PHP" /src/docker/fuzz.sh "$@"
@@ -102,7 +102,7 @@ case $cmd in
   apcu)       img; run "nocopy-linux:$PHP" sh -c "$B && /src/scripts/apcu-suite.sh" ;;
   drupal)     PHP=8.5; img drupal
               run -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh ;;
-  ci)         for c in layers tidy test novalkey asan debug leaks clang stress c fuzz "debug fuzz" "leaks fuzz" shm pie zts frankenphp symfony apcu; do
+  ci)         for c in layers tidy test noresp asan debug leaks clang stress c fuzz "debug fuzz" "leaks fuzz" shm pie zts frankenphp symfony apcu; do
                 echo "== $c"; ./dev $c || { echo "== $c FAILED"; exit 1; }
               done; echo "== ci: all passed" ;;
   bench)      img; run --shm-size=1g -e ONLY "nocopy-linux:$PHP" /src/docker/bench.sh "$@" ;;

@@ -12,8 +12,8 @@ nocopy_flags() {
 
 shm_rm() { rm -f "/dev/shm/nocopy-$1".*; }
 
-# A Valkey on 127.0.0.1:6379 (the 05x tests, the tier's smoke tests) unless one answers; nothing where it is not installed.
-valkey_up() {
+# A RESP on 127.0.0.1:6379 (the 05x tests, the tier's smoke tests) unless one answers; nothing where it is not installed.
+resp_up() {
   command -v valkey-server >/dev/null || return 0
   valkey-cli ping >/dev/null 2>&1 || valkey-server --daemonize yes --save '' --appendonly no >/dev/null
 }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Same hitratio.php workloads against nocopy, APCu and Valkey (allkeys-lru, allkeys-lfu), each given the same memory. In nocopy-drupal.
+# Same hitratio.php workloads against nocopy, APCu and RESP (allkeys-lru, allkeys-lfu), each given the same memory. In nocopy-drupal.
 /src/docker/build.sh >/dev/null || exit 1
 X=$(php-config --extension-dir)
 NC="-d extension=/build/modules/nocopy.so -d memory_limit=-1"

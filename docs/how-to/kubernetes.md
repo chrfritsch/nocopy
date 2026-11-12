@@ -9,9 +9,9 @@ Goal: php-fpm pods, their CLI processes and CronJobs share one cache. Install th
 |---|---|
 | php-fpm and `kubectl exec … drush` in **one container** | `nocopy.shm_name` and a `/dev/shm` volume |
 | Containers of **one pod** (php-fpm plus a CLI or worker sidecar) | the same volume mounted at `/dev/shm` in each, the same image, the same uid |
-| **Several pods**: replicas, separate deployments, CronJobs | `nocopy.valkey` as well: Valkey is the shared cache, each pod keeps local copies ([Valkey](valkey.md)) |
+| **Several pods**: replicas, separate deployments, CronJobs | `nocopy.resp` as well: RESP is the shared cache, each pod keeps local copies ([RESP](resp.md)) |
 
-Shared memory does not cross pods: anything that writes in one pod and reads in another needs Valkey. A Drupal or Symfony
+Shared memory does not cross pods: anything that writes in one pod and reads in another needs RESP. A Drupal or Symfony
 site with more than one replica, or with cron in its own pod, is in the last row.
 
 ## 1. Give the pod a `/dev/shm`
@@ -63,7 +63,7 @@ kubectl exec deploy/php -- su -s /bin/sh www-data -c 'vendor/bin/drush cr'
 
 ## 3. Configure from a ConfigMap and a Secret
 
-PHP expands `${VAR}` in ini files, so the Valkey password stays in a Secret:
+PHP expands `${VAR}` in ini files, so the RESP password stays in a Secret:
 
 ```yaml
 apiVersion: v1
@@ -73,41 +73,41 @@ data:
   nocopy.ini: |
     nocopy.shm_name=/nocopy
     nocopy.shm_size=128M
-    nocopy.valkey=${NOCOPY_VALKEY}
-    nocopy.valkey_prefix=${NOCOPY_VALKEY_PREFIX}
+    nocopy.resp=${NOCOPY_RESP}
+    nocopy.resp_prefix=${NOCOPY_RESP_PREFIX}
 ```
 
 ```yaml
       env:
-        - name: NOCOPY_VALKEY
-          valueFrom: { secretKeyRef: { name: valkey, key: url } }   # tcp://user:secret@valkey:6379
-        - name: NOCOPY_VALKEY_PREFIX
+        - name: NOCOPY_RESP
+          valueFrom: { secretKeyRef: { name: resp, key: url } }   # tcp://user:secret@resp:6379
+        - name: NOCOPY_RESP_PREFIX
           value: "mysite-production:"
       volumeMounts:
         - { name: nocopy-ini, mountPath: /usr/local/etc/php/conf.d/zz-nocopy.ini, subPath: nocopy.ini }
 ```
 
 On the official PHP images, php-fpm and the CLI read the same `conf.d`. Give CronJobs the same file and variables: a
-CronJob without `nocopy.valkey` has a cache of its own, and its writes and invalidations never reach the web pods.
+CronJob without `nocopy.resp` has a cache of its own, and its writes and invalidations never reach the web pods.
 
-- Environments that share one Valkey (staging, production) need different `nocopy.valkey_prefix` values.
+- Environments that share one RESP (staging, production) need different `nocopy.resp_prefix` values.
 - All pods of one environment need the same prefix and the same `nocopy.serializer`.
-- An unset variable expands to an empty value, and an empty `nocopy.valkey` means no Valkey.
+- An unset variable expands to an empty value, and an empty `nocopy.resp` means no RESP.
 
-## 4. Size Valkey
+## 4. Size RESP
 
-- Connections: one per php-fpm worker or CLI process, plus one listener per pod. Keep Valkey's `maxclients` above
+- Connections: one per php-fpm worker or CLI process, plus one listener per pod. Keep RESP's `maxclients` above
   `replicas × (pm.max_children + 1)` summed over every deployment, plus CronJobs.
-- Memory: set `maxmemory` below the Valkey container's limit, and `maxmemory-policy volatile-lfu` for the Drupal module
+- Memory: set `maxmemory` below the RESP container's limit, and `maxmemory-policy volatile-lfu` for the Drupal module
   ([why](../../drupal/README.md)).
 
 ## 5. Check it
 
 ```sh
-kubectl exec deploy/php -- php -r 'var_dump(nocopy_shared_with());'   # "valkey" (one pod alone: "host")
-kubectl exec deploy/php -- ps ax | grep nocopy-valkey                  # the pod's listener
+kubectl exec deploy/php -- php -r 'var_dump(nocopy_shared_with());'   # "resp" (one pod alone: "host")
+kubectl exec deploy/php -- ps ax | grep nocopy-resp                  # the pod's listener
 kubectl exec deploy/php -- df -h /dev/shm                              # the volume, not 64M
 ```
 
-Then write in one pod and read in another, as in [Valkey](valkey.md#2-restart-and-verify). Watch `nocopy_stats()` in
+Then write in one pod and read in another, as in [RESP](resp.md#2-restart-and-verify). Watch `nocopy_stats()` in
 each pod ([Size and monitor](size-and-monitor.md)): each pod has its own local copies, and so its own `used` and `evicted`.

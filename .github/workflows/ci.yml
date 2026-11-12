@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./dev test
-      - run: ./dev novalkey
+      - run: ./dev noresp
       # release build, loop: races show up only sometimes (docs/internals/architecture.md, invariants)
       - run: ./dev stress 30
       # gcc's TSan dies on the runner's 32-bit mmap ASLR ("unexpected memory mapping")

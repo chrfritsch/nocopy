@@ -77,7 +77,7 @@ as much as zero-copy reads. `0` turns it off. Negative: startup warning, the def
 
 `php` or `igbinary`. Used for values that must be serialized: objects that cannot be stored as properties (see
 [What can be stored](functions.md#what-can-be-stored)). Arrays and scalars are never serialized in the local cache.
-The Valkey tier serializes every value except integers, so there `igbinary` makes arrays 2-3x smaller.
+The RESP tier serializes every value except integers, so there `igbinary` makes arrays 2-3x smaller.
 
 `igbinary` without the igbinary extension loaded: startup warning, `php` is used.
 
@@ -89,31 +89,31 @@ nocopy picks the mode from how PHP runs:
 |---|---|
 | php-fpm, CGI, Apache, LiteSpeed, `php -S`, FrankenPHP classic mode | CLI, FrankenPHP worker scripts (from their first `frankenphp_handle_request()`) |
 
-## Valkey
+## RESP
 
-Only in builds with the Valkey tier (the default; absent with `--disable-nocopy-valkey`). How to set it up:
-[Share a cache across servers with Valkey](../how-to/valkey.md).
+Only in builds with the RESP tier (the default; absent with `--disable-nocopy-resp`). How to set it up:
+[Share a cache across servers with RESP](../how-to/resp.md).
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `nocopy.valkey` | off | Where Valkey is (formats below). `phpinfo()` hides the credentials |
-| `nocopy.valkey_prefix` | `nocopy:` | Key prefix in Valkey. Servers with the same prefix share one cache |
-| `nocopy.valkey_timeout` | `0.5` | Seconds to wait for a connection or a reply before treating Valkey as down |
-| `nocopy.valkey_tls_ca_file` | system store | PEM file with the CAs that may sign the server certificate |
-| `nocopy.valkey_tls_cert_file` | none | Client certificate (chain), for servers with `tls-auth-clients` |
-| `nocopy.valkey_tls_key_file` | none | Client key |
-| `nocopy.valkey_tls_verify` | `1` | Verify the server certificate and its host name (or IP). `0` only for tests |
+| `nocopy.resp` | off | Where RESP is (formats below). `phpinfo()` hides the credentials |
+| `nocopy.resp_prefix` | `nocopy:` | Key prefix in RESP. Servers with the same prefix share one cache |
+| `nocopy.resp_timeout` | `0.5` | Seconds to wait for a connection or a reply before treating RESP as down |
+| `nocopy.resp_tls_ca_file` | system store | PEM file with the CAs that may sign the server certificate |
+| `nocopy.resp_tls_cert_file` | none | Client certificate (chain), for servers with `tls-auth-clients` |
+| `nocopy.resp_tls_key_file` | none | Client key |
+| `nocopy.resp_tls_verify` | `1` | Verify the server certificate and its host name (or IP). `0` only for tests |
 
-`nocopy.valkey` accepts:
+`nocopy.resp` accepts:
 
 ```ini
-nocopy.valkey=10.0.0.5:6379
-nocopy.valkey=tcp://10.0.0.5:6379
-nocopy.valkey=tcp://user:secret@10.0.0.5:6379   ; ACL user
-nocopy.valkey=tcp://:secret@10.0.0.5:6379       ; password only: the "default" user
-nocopy.valkey=redis://user:secret@10.0.0.5:6379
-nocopy.valkey=unix:///run/valkey.sock
-nocopy.valkey=tls://user:secret@valkey.example.com:6380   ; or rediss://
+nocopy.resp=10.0.0.5:6379
+nocopy.resp=tcp://10.0.0.5:6379
+nocopy.resp=tcp://user:secret@10.0.0.5:6379   ; ACL user
+nocopy.resp=tcp://:secret@10.0.0.5:6379       ; password only: the "default" user
+nocopy.resp=redis://user:secret@10.0.0.5:6379
+nocopy.resp=unix:///run/resp.sock
+nocopy.resp=tls://user:secret@resp.example.com:6380   ; or rediss://
 ```
 
 ## APCu compatibility
@@ -132,8 +132,8 @@ The `nocopy_*` functions ignore both. No other `apc.*` setting has any effect.
 | `./configure` option | Effect |
 |---|---|
 | `--enable-nocopy` | Build the extension (the default with `phpize`) |
-| `--disable-nocopy-valkey` | Leave out the Valkey tier and OpenSSL; no `nocopy.valkey*` settings |
+| `--disable-nocopy-resp` | Leave out the RESP tier and OpenSSL; no `nocopy.resp*` settings |
 | `--disable-nocopy-lto` | Build without link-time optimization (on by default for shared builds when the compiler supports `-flto`; reads are 1-4% slower without) |
 
-TLS for Valkey is built in when OpenSSL 1.1.1+ (headers and `pkg-config`) is found. With PIE, pass the same options:
-`pie install chrfritsch/nocopy --disable-nocopy-valkey`.
+TLS for RESP is built in when OpenSSL 1.1.1+ (headers and `pkg-config`) is found. With PIE, pass the same options:
+`pie install chrfritsch/nocopy --disable-nocopy-resp`.

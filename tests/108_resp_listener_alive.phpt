@@ -1,23 +1,23 @@
 --TEST--
-nocopy.valkey: the listener keeps its liveness lock (an OFD lock on the arena), so workers do not take its shard locks as a dead holder's
+nocopy.resp: the listener keeps its liveness lock (an OFD lock on the arena), so workers do not take its shard locks as a dead holder's
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; if (PHP_OS_FAMILY !== 'Linux') die('skip OFD locks: Linux'); ?>
+<?php require __DIR__ . '/resp_skip.inc'; if (PHP_OS_FAMILY !== 'Linux') die('skip OFD locks: Linux'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t108
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t108:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t108:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 nocopy_put('a', 1);
 settle();
 $locks = 0;
 foreach (glob('/proc/[0-9]*/comm') as $comm) {
-    if (trim((string) @file_get_contents($comm)) !== 'nocopy-valkey') {
+    if (trim((string) @file_get_contents($comm)) !== 'nocopy-resp') {
         continue;
     }
     foreach (glob(dirname($comm) . '/fdinfo/*') as $fd) {

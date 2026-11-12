@@ -1,5 +1,5 @@
 name: nocopy
 type: module
-description: 'Cache backend and cache tag checksums on the nocopy extension (nocopy.shm_name on one server, nocopy.valkey on several).'
+description: 'Cache backend and cache tag checksums on the nocopy extension (nocopy.shm_name on one server, nocopy.resp on several).'
 package: Performance
 core_version_requirement: ^11.2

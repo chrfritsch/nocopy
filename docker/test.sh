@@ -1,13 +1,13 @@
 #!/bin/sh
 # Inside the image: build /src out of tree in /build, run the own tests (args: extra run-tests options or test paths). Exit 1 on any failure.
-# NOCOPY_CONFIGURE: extra configure flags, e.g. --disable-nocopy-valkey
+# NOCOPY_CONFIGURE: extra configure flags, e.g. --disable-nocopy-resp
 set -e
 . /src/docker/lib.sh
 /src/docker/build.sh
 cd /build
 cp -r /src/tests /build/tests && cp -r /src/apcu /build/apcu && cp -r /src/cli /build/cli
-# Valkey tests (05x) need a server on 127.0.0.1:6379; they skip without one
-valkey_up
+# RESP tests (05x) need a server on 127.0.0.1:6379; they skip without one
+resp_up
 export NOCOPY_SO=$SO
 [ -z "$NOCOPY_ASAN" ] || asan_env
 run_tests -j"$(nproc)" "${@:-/build/tests}" > /build/run.out 2>&1 || true

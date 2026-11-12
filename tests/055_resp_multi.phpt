@@ -1,24 +1,24 @@
 --TEST--
-nocopy.valkey: get_multiple serves local hits and fetches every miss in one MGET; put_multiple pipelines the SETs with the TTL
+nocopy.resp: get_multiple serves local hits and fetches every miss in one MGET; put_multiple pipelines the SETs with the TTL
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t055
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t055:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t055:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 apcu_clear_cache();
 var_dump(nocopy_put_multiple(['a' => [1, 2], 'n' => 5, 'o' => new ArrayObject([3])], 60));
 var_dump(ord(vk('GET', 't055:a')[0]), vk('GET', 't055:n'), vk('PTTL', 't055:a') > 50000);
 
-// another server's writes: only in Valkey, not local here
+// another server's writes: only in RESP, not local here
 other_server('t055:', 'nocopy_put("r1", ["x"]); nocopy_put("r2", 9);');
 settle();
 vk('CONFIG', 'RESETSTAT');

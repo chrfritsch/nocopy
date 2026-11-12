@@ -71,7 +71,7 @@ $users = nocopy_get_multiple(['user.1', 'user.2', 'user.3']);
 $missing = array_diff(['user.1', 'user.2', 'user.3'], array_keys($users));
 ```
 
-With `nocopy.valkey`, all keys missing locally are fetched from Valkey in one round trip (`MGET`).
+With `nocopy.resp`, all keys missing locally are fetched from RESP in one round trip (`MGET`).
 
 ## Write
 
@@ -113,7 +113,7 @@ nocopy_put_multiple(array $values, int $ttl = 0): bool
 ```
 
 Stores every `key => value` pair in `$values`, all with the same `$ttl`. Returns `false` if some were not stored.
-With `nocopy.valkey`, all writes go out in one pipeline.
+With `nocopy.resp`, all writes go out in one pipeline.
 
 ### `nocopy_delete`
 
@@ -130,7 +130,7 @@ nocopy_delete_multiple(array $keys): int
 ```
 
 Deletes `$keys` and returns how many of them existed. Entries that are not strings are skipped.
-With `nocopy.valkey`, one `UNLINK` command.
+With `nocopy.resp`, one `UNLINK` command.
 
 ### `nocopy_clear`
 
@@ -138,10 +138,10 @@ With `nocopy.valkey`, one `UNLINK` command.
 nocopy_clear(): bool
 ```
 
-Deletes every entry. With `nocopy.valkey`, it also deletes every key under `nocopy.valkey_prefix` in Valkey.
+Deletes every entry. With `nocopy.resp`, it also deletes every key under `nocopy.resp_prefix` in RESP.
 
 Returns `false` if not everything was cleared: the cache is off in this process (`nocopy_stats()['off']` says why), or
-Valkey could not be reached. Use this in deploy scripts so a clear that reached nothing fails loudly:
+RESP could not be reached. Use this in deploy scripts so a clear that reached nothing fails loudly:
 
 ```sh
 sudo -u www-data php -r 'exit(nocopy_clear() ? 0 : 1);'
@@ -214,12 +214,12 @@ $page = nocopy_remember('page.' . $id, function (string $key, int &$ttl) use ($i
 
 **Only one worker computes.** On a miss, the first worker takes a lease and runs the callback; the others wait for its
 result instead of all computing the same thing. If the computing worker dies, the others notice; if it is stuck, they
-stop waiting after 30 s. A recursive call for the same key does not wait for itself. With `nocopy.valkey`, this works
+stop waiting after 30 s. A recursive call for the same key does not wait for itself. With `nocopy.resp`, this works
 per server, not across the cluster.
 
 **Stale while revalidate.** While one worker recomputes an expired value, the waiting workers get the expired value
 instead, as long as it expired less than one TTL ago (so it is at most 2 × TTL old). A value that was deleted or
-invalidated is never served stale. Not with `nocopy.valkey`, and not with `$beta = 0`.
+invalidated is never served stale. Not with `nocopy.resp`, and not with `$beta = 0`.
 
 **Early refresh.** Shortly before the TTL ends, one worker recomputes the value while the others keep getting the current
 one, so a popular key usually never expires at all. The chance of refreshing rises as expiry nears, and is scaled by how
@@ -241,7 +241,7 @@ Who sees this process's writes:
 | Value | Meaning |
 |---|---|
 | `host` | Every process on this machine that uses the same `nocopy.shm_name` |
-| `valkey` | Every process, on any server, that uses the same `nocopy.valkey` and `nocopy.valkey_prefix` |
+| `resp` | Every process, on any server, that uses the same `nocopy.resp` and `nocopy.resp_prefix` |
 | `none` | No one: there is no shared cache, nothing is stored or returned |
 
 Cheap (about 15 ns), so it is fine to call on every request, for example to refuse to run with a cache that is off:
@@ -277,8 +277,8 @@ The live keys that start with `$prefix`, oldest first (to within 1-4 ms, so not 
 `size` is the entry's size in bytes; `created` and `expires` are Unix timestamps, accurate to about a second.
 
 It does not block writers, so a key that is being deleted at the same moment may be missing from the list. It looks at
-every slot in the cache, so use it in tools and admin pages, not on every request. With `nocopy.valkey` it lists what
-this server has cached locally, not every key in Valkey.
+every slot in the cache, so use it in tools and admin pages, not on every request. With `nocopy.resp` it lists what
+this server has cached locally, not every key in RESP.
 
 ## What can be stored
 

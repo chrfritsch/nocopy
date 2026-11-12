@@ -26,7 +26,7 @@ class NocopyDependencySerializationTest extends KernelTestBase {
 
   protected function setUp(): void {
     parent::setUp();
-    if (!in_array(nocopy_shared_with(), ['host', 'valkey'], TRUE)) {
+    if (!in_array(nocopy_shared_with(), ['host', 'resp'], TRUE)) {
       $this->markTestSkipped('needs a shared cache');
     }
     $this->installEntitySchema('user');

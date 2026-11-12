@@ -1,4 +1,4 @@
-/* nocopy: serialized values. What the arena cannot hold as a graph, and the Valkey tier's encoding: serialize() or igbinary. */
+/* nocopy: serialized values. What the arena cannot hold as a graph, and the RESP tier's encoding: serialize() or igbinary. */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>

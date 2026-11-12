@@ -1,5 +1,5 @@
 <?php
-// Valkey tier encodings: serialize vs igbinary, ns and bytes; writes each payload to $argv[1] for bench/codecs.c. Needs ext-igbinary.
+// RESP tier encodings: serialize vs igbinary, ns and bytes; writes each payload to $argv[1] for bench/codecs.c. Needs ext-igbinary.
 
 require __DIR__ . '/values.inc';
 $codecs = [

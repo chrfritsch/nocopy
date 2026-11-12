@@ -1,22 +1,22 @@
 --TEST--
-nocopy.valkey with nocopy.shm_name: one listener for every process on the arena; restarted when it dies, gone with the arena
+nocopy.resp with nocopy.shm_name: one listener for every process on the arena; restarted when it dies, gone with the arena
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
+<?php require __DIR__ . '/resp_skip.inc'; if (!is_dir('/proc/self')) die('skip needs /proc'); ?>
 --INI--
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t061:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t061:
 nocopy.shm_name=/nocopy-t061
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 function run(string $code): string
 {
-    return trim(php_run($code, ['nocopy.valkey' => '127.0.0.1:6379', 'nocopy.valkey_prefix' => 't061:', 'nocopy.shm_name' => '/nocopy-t061']));
+    return trim(php_run($code, ['nocopy.resp' => '127.0.0.1:6379', 'nocopy.resp_prefix' => 't061:', 'nocopy.shm_name' => '/nocopy-t061']));
 }
 function alive(int $pid): bool
 {
@@ -25,13 +25,13 @@ function alive(int $pid): bool
 }
 apcu_clear_cache();
 nocopy_put('k', 'v');
-$pid = nocopy_stats()['valkey_listener'];
+$pid = nocopy_stats()['resp_listener'];
 $seen = [];
 for ($i = 0; $i < 3; $i++) {
-    $seen[] = (int) run('nocopy_get("k"); echo nocopy_stats()["valkey_listener"];');
+    $seen[] = (int) run('nocopy_get("k"); echo nocopy_stats()["resp_listener"];');
 }
 var_dump($pid > 0, array_unique($seen) === [$pid], substr_count(vk('CLIENT', 'LIST'), 'name=nocopy-listener'));
-echo trim(file_get_contents("/proc/$pid/comm")), ' ', count(scandir("/proc/$pid/fd")) - 2, "\n"; // stdio on /dev/null, the Valkey socket, the liveness lock
+echo trim(file_get_contents("/proc/$pid/comm")), ' ', count(scandir("/proc/$pid/fd")) - 2, "\n"; // stdio on /dev/null, the RESP socket, the liveness lock
 
 // a change elsewhere reaches the arena without a call here
 vk('SET', 't061:k', '5');
@@ -42,8 +42,8 @@ var_dump(nocopy_get('k'));
 posix_kill($pid, 9);
 vk('SET', 't061:k', '6');
 usleep(1200000);
-echo run('var_dump(nocopy_get("k")); echo nocopy_stats()["valkey_listener"];'), "\n";
-$pid2 = nocopy_stats()['valkey_listener'];
+echo run('var_dump(nocopy_get("k")); echo nocopy_stats()["resp_listener"];'), "\n";
+$pid2 = nocopy_stats()['resp_listener'];
 var_dump($pid2 > 0 && $pid2 !== $pid);
 
 // the arena removed: its listener exits
@@ -57,7 +57,7 @@ var_dump(alive($pid2));
 bool(true)
 bool(true)
 int(1)
-nocopy-valkey 5
+nocopy-resp 5
 int(5)
 int(6)
 %d

@@ -8,7 +8,7 @@ nocopy installs with [PIE](https://github.com/php/pie) or from source; it is not
 - Linux (tested on amd64 and arm64)
 - PHP 8.4 or 8.5, NTS or ZTS, with `phpize`: the `php-dev` / `php-devel` package, or one of the official Docker images
 - A C compiler
-- For Valkey over TLS: OpenSSL 1.1.1+ headers and `pkg-config`
+- For RESP over TLS: OpenSSL 1.1.1+ headers and `pkg-config`
 
 ## 1. Build and install
 
@@ -24,7 +24,7 @@ the PHP it runs with. It needs `libtool` and `unzip`; `--auto-install-build-tool
 Options:
 
 ```sh
-pie install chrfritsch/nocopy --disable-nocopy-valkey   # one server only: no Valkey support, no OpenSSL needed
+pie install chrfritsch/nocopy --disable-nocopy-resp   # one server only: no RESP support, no OpenSSL needed
 pie install chrfritsch/nocopy --disable-nocopy-lto      # without link-time optimization
 ```
 
@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git libtool unz
 
 ```sh
 git clone https://github.com/chrfritsch/nocopy && cd nocopy
-phpize && ./configure && make      # ./configure --disable-nocopy-valkey for one server only
+phpize && ./configure && make      # ./configure --disable-nocopy-resp for one server only
 ```
 
 The extension is `modules/nocopy.so`. Check that it loads:

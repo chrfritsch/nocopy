@@ -2,7 +2,7 @@
 
 Words these docs use, in plain terms. The full story: [How nocopy works](../explanation/how-it-works.md).
 
-**Arena**: The block of shared memory that holds the whole cache. One per `nocopy.shm_name` (per server with Valkey). "The cache" and "the arena" mean the same thing.
+**Arena**: The block of shared memory that holds the whole cache. One per `nocopy.shm_name` (per server with RESP). "The cache" and "the arena" mean the same thing.
 
 **Zero-copy mode**: How web requests read: `nocopy_get()` returns the value that sits in shared memory, without copying it. If your code modifies it, PHP makes a private copy first, as it does for any array.
 
@@ -24,6 +24,6 @@ Words these docs use, in plain terms. The full story: [How nocopy works](../expl
 
 **Off**: The state of a process that has no shared cache (no `nocopy.shm_name`, no permission, too many processes). Reads miss, writes return `false`, nothing throws. `nocopy_stats()['off']` says why.
 
-**Listener**: With Valkey, one background process per server (`nocopy-valkey` in `ps`) that receives Valkey's change notifications and drops outdated local copies.
+**Listener**: With RESP, one background process per server (`nocopy-resp` in `ps`) that receives RESP's change notifications and drops outdated local copies.
 
 **Polyfill**: The PHP package `chrfritsch/nocopy-apcu`, which defines the `apcu_*` functions on top of nocopy.

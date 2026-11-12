@@ -4,10 +4,10 @@ PHP_ARG_ENABLE([nocopy],
     [Enable nocopy support])],
   [no])
 
-PHP_ARG_ENABLE([nocopy-valkey],
-  [whether nocopy can share its cache through Valkey],
-  [AS_HELP_STRING([--disable-nocopy-valkey],
-    [nocopy: build without the Valkey tier (nocopy.valkey), single host only])],
+PHP_ARG_ENABLE([nocopy-resp],
+  [whether nocopy can share its cache through RESP],
+  [AS_HELP_STRING([--disable-nocopy-resp],
+    [nocopy: build without the RESP tier (nocopy.resp), single host only])],
   [yes],
   [no])
 
@@ -27,20 +27,20 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
 
   dnl the arena (arena/, plain C): the same list as tests/c/run.sh
   nocopy_sources="nocopy.c arena/arena.c arena/atoms.c arena/index.c arena/layout.c arena/leases.c arena/log.c arena/policy.c arena/pool.c arena/proc.c arena/region.c arena/shard.c"
-  AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
-    AC_DEFINE([HAVE_NOCOPY_VALKEY], [1], [Define to 1 if nocopy has the Valkey tier.])
-    nocopy_sources="$nocopy_sources nocopy_valkey.c"
+  AS_VAR_IF([PHP_NOCOPY_RESP], [no],, [
+    AC_DEFINE([HAVE_NOCOPY_RESP], [1], [Define to 1 if nocopy has the RESP tier.])
+    nocopy_sources="$nocopy_sources nocopy_resp.c"
     dnl vendored libvalkey: the same list as scripts/vendor-libvalkey.sh
     lv_sources="adlist.c alloc.c async.c conn.c dict.c net.c read.c sds.c sockcompat.c valkey.c"
     dnl its public API stays out of nocopy.so's exports (its visibility.h would mark it default)
     lv_cflags="-DVALKEY_USE_THREADS -DVALKEY_VISIBILITY_H -DLIBVALKEY_API="
-    dnl TLS for nocopy.valkey (tls://): OpenSSL when found, else a build without it
+    dnl TLS for nocopy.resp (tls://): OpenSSL when found, else a build without it
     PKG_CHECK_MODULES([NOCOPY_OPENSSL], [openssl >= 1.1.1], [
       PHP_EVAL_INCLINE([$NOCOPY_OPENSSL_CFLAGS])
       PHP_EVAL_LIBLINE([$NOCOPY_OPENSSL_LIBS], [NOCOPY_SHARED_LIBADD])
-      AC_DEFINE([HAVE_NOCOPY_TLS], [1], [Define to 1 if nocopy.valkey can use TLS.])
+      AC_DEFINE([HAVE_NOCOPY_TLS], [1], [Define to 1 if nocopy.resp can use TLS.])
       lv_sources="$lv_sources tls.c"
-    ], [AC_MSG_WARN([OpenSSL not found: nocopy.valkey without TLS])])
+    ], [AC_MSG_WARN([OpenSSL not found: nocopy.resp without TLS])])
   ])
   dnl LTO inlines the arena into the fetch and store paths (ab.sh: fetches +2-4%, inc +10%); shared only, PHP itself links without it
   nocopy_lto=
@@ -72,7 +72,7 @@ AS_VAR_IF([PHP_NOCOPY], [no],, [
     [$ext_shared],,
     [-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -fvisibility=hidden $nocopy_lto $lv_cflags])
 
-  AS_VAR_IF([PHP_NOCOPY_VALKEY], [no],, [
+  AS_VAR_IF([PHP_NOCOPY_RESP], [no],, [
     lv=third_party/libvalkey
     PHP_ADD_INCLUDE([$ext_srcdir/$lv/include])
     PHP_ADD_INCLUDE([$ext_srcdir/$lv/include/valkey])

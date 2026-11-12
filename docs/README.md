@@ -1,7 +1,7 @@
 # nocopy documentation
 
 nocopy is a shared-memory cache for PHP, like APCu, that hands out cached arrays without copying them. php-fpm, the CLI
-and cron share one cache, and with Valkey, several servers do.
+and cron share one cache, and with RESP, several servers do.
 
 ## Where to start
 
@@ -21,7 +21,7 @@ The docs are split by what you need right now ([Diátaxis](https://diataxis.fr))
 | **Tutorials**: learn by doing | **How-to guides**: get a task done |
 | [Your first cache](tutorials/first-cache.md): build nocopy, cache 10,000 rows, read them from a web server in nanoseconds | [Install on a server](how-to/install.md) |
 | [Your first change](tutorials/first-change.md): change the C code, add a test, run what CI runs | [Share one cache between php-fpm and the CLI](how-to/share-between-fpm-and-cli.md) |
-| | [Share a cache across servers with Valkey](how-to/valkey.md) |
+| | [Share a cache across servers with RESP](how-to/resp.md) |
 | | [Run nocopy on Kubernetes](how-to/kubernetes.md) |
 | | [Use nocopy in Symfony](how-to/symfony.md) |
 | | [Use nocopy in Drupal](../drupal/README.md) |
@@ -30,7 +30,7 @@ The docs are split by what you need right now ([Diátaxis](https://diataxis.fr))
 | | [Develop, test and benchmark](how-to/develop.md) (contributors) |
 | **Reference**: look something up | **Explanation**: understand why |
 | [Functions](reference/functions.md) | [How nocopy works](explanation/how-it-works.md) |
-| [Configuration (php.ini)](reference/configuration.md) | [Sharing: by name and through Valkey](explanation/sharing.md) |
+| [Configuration (php.ini)](reference/configuration.md) | [Sharing: by name and through RESP](explanation/sharing.md) |
 | [`nocopy_stats()`](reference/stats.md) | [Architecture](explanation/architecture.md) |
 | [Glossary](reference/glossary.md) | [Design decisions](explanation/design-decisions.md) |
 | [APCu compatibility](reference/apcu-compatibility.md) | |

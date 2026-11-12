@@ -83,7 +83,7 @@ just-expired value while the first worker recomputes.
 ## One cache per machine, or per cluster
 
 The arena is a named shared-memory object (`nocopy.shm_name`), so php-fpm, the CLI and restarted servers all attach to the
-same cache. With `nocopy.valkey`, Valkey becomes the shared cache of several servers and each local arena holds copies
+same cache. With `nocopy.resp`, RESP becomes the shared cache of several servers and each local arena holds copies
 in front of it. Why it is designed this way: [Sharing](sharing.md).
 
 Going deeper: [Architecture](architecture.md) (the parts, a read and a write step by step, limits) and

@@ -122,7 +122,7 @@ nocopy_tpl *nocopy_tpl_make(nocopy_env *env, const nocopy_entry *e); /* NOCOPY_F
 bool nocopy_tpl_read(nocopy_env *env, nocopy_tpl *t, zval *rv);       /* false: a hook threw or an enum case is gone */
 void nocopy_tpl_free(nocopy_tpl *t);
 
-/* ---- serialized values (NOCOPY_FMT_PHP/IGB, and the Valkey tier's encoding) ---- */
+/* ---- serialized values (NOCOPY_FMT_PHP/IGB, and the RESP tier's encoding) ---- */
 
 bool nocopy_serial_setup(bool igbinary); /* MINIT: the serializer in effect is igbinary (false: php) */
 bool nocopy_serialize(zval *val, zval *out, nocopy_fmt *fmt);

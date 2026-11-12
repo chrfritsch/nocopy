@@ -1,14 +1,14 @@
 --TEST--
-nocopy.valkey: phpinfo() does not show the password
+nocopy.resp: phpinfo() does not show the password
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php if (ini_get('nocopy.valkey') === false) die('skip built without the Valkey tier'); ?>
+<?php if (ini_get('nocopy.resp') === false) die('skip built without the RESP tier'); ?>
 --INI--
 nocopy.shm_name=/nocopy-t054
-nocopy.valkey=tcp://app:secret@127.0.0.1:1
+nocopy.resp=tcp://app:secret@127.0.0.1:1
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 ob_start(); phpinfo(INFO_MODULES); $i = ob_get_clean();

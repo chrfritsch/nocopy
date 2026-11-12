@@ -1,5 +1,5 @@
 #!/bin/sh
-# Inside nocopy-drupal: build nocopy, run the Drupal module's PHPUnit tests on a shared cache (named arena copy / zero-copy, Valkey),
+# Inside nocopy-drupal: build nocopy, run the Drupal module's PHPUnit tests on a shared cache (named arena copy / zero-copy, RESP),
 # and the shared-cache check without nocopy.shm_name (no cache). /drupal caches the Drupal checkout.
 #   docker run --rm -v "$PWD":/src:ro -v nocopy-drupal-test:/drupal nocopy-drupal /src/docker/drupal-test.sh
 # EXTRA: more INI lines, e.g. EXTRA="nocopy.shm_size=1M"
@@ -14,7 +14,7 @@ cd /drupal
 rc=0
 # kernel tests run in child processes, which do not inherit -d flags: settings go to conf.d
 valkey-cli ping >/dev/null 2>&1 || valkey-server --daemonize yes --save '' --appendonly no >/dev/null
-for mode in "nocopy.shm_name=/nocopy-drupal-test" "nocopy.shm_name=/nocopy-drupal-test nocopy.valkey=127.0.0.1:6379" ""; do
+for mode in "nocopy.shm_name=/nocopy-drupal-test" "nocopy.shm_name=/nocopy-drupal-test nocopy.resp=127.0.0.1:6379" ""; do
   rm -f /dev/shm/nocopy-drupal-test.*
   echo "== mode: ${mode:-no shared cache} $EXTRA"
   only=; [ -z "$mode" ] && only="--filter NocopySharedTest"

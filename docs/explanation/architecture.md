@@ -18,12 +18,12 @@ flowchart TB
     subgraph shm["/dev/shm/nocopy.&lt;build id&gt;"]
         ARENA[(arena: slot tables + segments)]
     end
-    VK[(Valkey, optional)]
-    LIS["listener process (nocopy-valkey)"]
+    VK[(RESP, optional)]
+    LIS["listener process (nocopy-resp)"]
 
     INT --> APP --> STORE
     STORE -- "read: pointer, no lock<br/>write: shard lock" --> ARENA
-    STORE -. "with nocopy.valkey:<br/>GET / SET" .-> VK
+    STORE -. "with nocopy.resp:<br/>GET / SET" .-> VK
     VK -. "invalidations" .-> LIS
     LIS -. "drops local copies" .-> ARENA
 ```
@@ -32,8 +32,8 @@ flowchart TB
 |---|---|---|
 | Extension | The C code PHP loads: the `nocopy_*` functions, the INI settings | `nocopy.so` |
 | Arena | The cache itself: one block of shared memory that every PHP process on the server maps | `/dev/shm/<shm_name>.<build id>` |
-| Valkey tier | Optional: makes Valkey the shared cache of several servers; the arena then holds local copies | inside `nocopy.so` (left out with `--disable-nocopy-valkey`) |
-| Listener | With Valkey only: one background process per server that hears about changes and drops outdated copies | `nocopy-valkey` in `ps` |
+| RESP tier | Optional: makes RESP the shared cache of several servers; the arena then holds local copies | inside `nocopy.so` (left out with `--disable-nocopy-resp`) |
+| Listener | With RESP only: one background process per server that hears about changes and drops outdated copies | `nocopy-resp` in `ps` |
 | APCu polyfill | `apcu_*` functions written in PHP on top of `nocopy_*` | [`apcu/`](../../apcu) |
 | Symfony bundle | `cache.adapter.nocopy` | [`symfony/`](../../symfony) |
 | Drupal module | Cache backend, cache tags, locks, flood control | [`drupal/`](../../drupal) |
@@ -99,16 +99,16 @@ kernel file lock on its slot in the shared memory, and the kernel releases it wh
 - Pins of a dead process are ignored, so its segments can be reused.
 - A half-written entry is never visible: a key points at an entry only once it is complete.
 
-## With Valkey
+## With RESP
 
-With `nocopy.valkey` set, the arena becomes a local copy of what Valkey holds:
+With `nocopy.resp` set, the arena becomes a local copy of what RESP holds:
 
-- **Read:** a local hit works as above. A local miss fetches from Valkey and stores a local copy.
-- **Write:** stored locally, then sent to Valkey.
-- **Change elsewhere:** Valkey notifies each server's listener, which drops the local copy.
-- **Valkey unreachable:** nothing local is served (it could be outdated); reads miss and writes fail until it is back.
+- **Read:** a local hit works as above. A local miss fetches from RESP and stores a local copy.
+- **Write:** stored locally, then sent to RESP.
+- **Change elsewhere:** RESP notifies each server's listener, which drops the local copy.
+- **RESP unreachable:** nothing local is served (it could be outdated); reads miss and writes fail until it is back.
 
-Details: [Sharing](sharing.md#several-servers-valkey-as-the-cache-of-record).
+Details: [Sharing](sharing.md#several-servers-resp-as-the-cache-of-record).
 
 ## Limits
 

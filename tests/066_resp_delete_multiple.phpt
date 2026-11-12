@@ -1,18 +1,18 @@
 --TEST--
-nocopy.valkey: nocopy_delete_multiple sends one UNLINK and drops the local copies
+nocopy.resp: nocopy_delete_multiple sends one UNLINK and drops the local copies
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t066
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t066:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t066:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 nocopy_clear();
 nocopy_put_multiple(['a' => 1, 'b' => [2], 'c' => 3]);
 nocopy_get_multiple(['a', 'b', 'c']);

@@ -85,7 +85,7 @@ The numbers that tell you something ([all keys](../reference/stats.md)):
 | `expunges` | rare | Each one is a round of eviction because memory is short |
 | `kept_segments` | well under `segments / 4` | Long web requests (a slow database, exports) hold memory, and their later reads copy. Lower `nocopy.zero_copy_seconds`, or cap them with `request_terminate_timeout` |
 | `lock_steals` | `0` | A worker died while holding a lock (`kill -9`, OOM killer). The cache was repaired, but find out why |
-| `valkey_listener` | a pid, when you use `nocopy.valkey` | `0`: no listener, so nothing is served locally |
+| `resp_listener` | a pid, when you use `nocopy.resp` | `0`: no listener, so nothing is served locally |
 
 Counters are for the whole cache and count since it was created.
 

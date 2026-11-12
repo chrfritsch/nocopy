@@ -9,7 +9,7 @@ use Drupal\nocopy\Cache\NocopyBackend;
 use Symfony\Component\HttpFoundation\RequestStack;
 
 /**
- * Flood control in nocopy: one counter per event and identifier, counted with nocopy_inc() (atomic, also in Valkey).
+ * Flood control in nocopy: one counter per event and identifier, counted with nocopy_inc() (atomic, also in RESP).
  */
 class NocopyFlood implements FloodInterface {
 

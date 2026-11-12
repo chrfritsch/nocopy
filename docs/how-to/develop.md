@@ -1,6 +1,6 @@
 # Develop, test and benchmark
 
-Everything runs in Docker through `./dev`; you need no PHP, compiler or Valkey on your machine. CI runs the same commands.
+Everything runs in Docker through `./dev`; you need no PHP, compiler or RESP on your machine. CI runs the same commands.
 New here? Do the [first change tutorial](../tutorials/first-change.md) first. All commands: [`./dev` reference](../reference/dev-commands.md).
 
 ## Run tests
@@ -18,9 +18,9 @@ stays untouched (it is mounted read-only). A failed test prints its diff: `-` ex
 
 | You changed | Run |
 |---|---|
-| anything in C | `./dev test`, `./dev novalkey` (the core must build without the Valkey tier) |
+| anything in C | `./dev test`, `./dev noresp` (the core must build without the RESP tier) |
 | locking, pins, reclamation, slot tables, eviction | also `./dev stress 30` and `./dev c 5` |
-| `nocopy_valkey.c` | also `./dev shm` (php-fpm + FrankenPHP with Valkey, listener restarts) |
+| `nocopy_resp.c` | also `./dev shm` (php-fpm + FrankenPHP with RESP, listener restarts) |
 | `third_party/libvalkey` (only via `scripts/vendor-libvalkey.sh <tag>`, never by hand) | `./dev ci` |
 | thread handling, FrankenPHP | `./dev zts`, `./dev frankenphp` |
 | `nocopy.stub.php` (function signatures) | `./dev stub` to regenerate `nocopy_arginfo.h`, commit both |
@@ -39,8 +39,8 @@ Add `tests/0NN_what_it_checks.phpt` (next free number). Rules:
 - Its own `nocopy.shm_name=/nocopy-tNNN` in `--INI--`, and `--CLEAN--` removing `/dev/shm/nocopy-tNNN*`: tests run in parallel.
 - Tests run under the CLI, so they fetch copies. For zero-copy, run the body as a `php -S` request: `require __DIR__ . '/serve.inc'; echo serve(<<<'CODE' ... CODE);` (forwards the test's `nocopy.*` INI; 004 is an example).
 - Tests that need memory pressure use a small `nocopy.shm_size` (2M-4M, one shard).
-- Valkey tests require `valkey_skip.inc` in `--SKIPIF--` (they skip without a server) and set `nocopy.valkey=127.0.0.1:6379`
-  with their own `nocopy.valkey_prefix=tNNN:`; `valkey.inc` has helpers. Add `--CONFLICTS--` `valkey`: they share one server, so they run one at a time.
+- RESP tests require `resp_skip.inc` in `--SKIPIF--` (they skip without a server) and set `nocopy.resp=127.0.0.1:6379`
+  with their own `nocopy.resp_prefix=tNNN:`; `resp.inc` has helpers. Add `--CONFLICTS--` `resp`: they share one server, so they run one at a time.
 - Forked processes: `pcntl_fork()`; threads (ZTS only): ext-parallel. Another PHP process with this build (its own arena, another user, other settings):
   `require_once __DIR__ . '/php.inc'`, then `php_run($code, ['nocopy.shm_name' => '/nocopy-tNNN-other'])`, or `php_cmd()` / `php_argv()` for `exec` and `proc_open`.
 

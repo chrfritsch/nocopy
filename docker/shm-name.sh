@@ -1,6 +1,6 @@
 #!/bin/sh
 # nocopy.shm_name: the CLI and the web server (php-fpm, or FrankenPHP classic + worker) share one cache; it survives server restarts.
-# Then with nocopy.valkey: one listener for the host, outliving server restarts. Exit 1 on any failure.
+# Then with nocopy.resp: one listener for the host, outliving server restarts. Exit 1 on any failure.
 #   docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 sh /src/docker/shm-name.sh
 #   docker run --rm -v "$PWD":/src:ro dunglas/frankenphp:1-php8.4 sh /src/docker/shm-name.sh
 command -v gcc >/dev/null && command -v valkey-server >/dev/null || { apt-get update -qq >/dev/null; apt-get install -y -qq $PHPIZE_DEPS curl redis-server >/dev/null 2>&1; }
@@ -24,12 +24,12 @@ churn() { web put c7 >/dev/null
   echo "misses during churn: $m"; [ "$m" = 0 ] || bad=1; }
 vk=$(command -v valkey-cli || command -v redis-cli)
 listeners() { $vk client list | grep -c name=nocopy-listener; }
-lpid() { as php -r 'echo nocopy_stats()["valkey_listener"];'; }
+lpid() { as php -r 'echo nocopy_stats()["resp_listener"];'; }
 # label, expected count
 count() { n=$(listeners); printf '%-16s %s\n' "$1" "$n listener(s)"; [ "$n" = "$2" ] || { echo "  ^ FAIL"; bad=1; }; }
-# with Valkey: server hits from many workers and the CLI, one listener; it outlives a server restart, the copy stays warm
-valkey_pass() { start_vk=$1 stop_vk=$2
-  ini 'nocopy.valkey=127.0.0.1:6379'; rm -f /dev/shm/nocopy.*; $vk flushall >/dev/null
+# with RESP: server hits from many workers and the CLI, one listener; it outlives a server restart, the copy stays warm
+resp_pass() { start_vk=$1 stop_vk=$2
+  ini 'nocopy.resp=127.0.0.1:6379'; rm -f /dev/shm/nocopy.*; $vk flushall >/dev/null
   $start_vk
   check "vk cli put" "$(cli put a)" cli false
   for i in $(seq 20); do web get a >/dev/null; done
@@ -39,7 +39,7 @@ valkey_pass() { start_vk=$1 stop_vk=$2
   [ "$(lpid)" = "$p1" ] && echo "listener kept    over the restart" || { echo "listener kept: FAIL"; bad=1; }
   $vk config resetstat >/dev/null
   check "vk warm get" "$(web get a)" cli "$3"
-  $vk info commandstats | grep -q cmdstat_get && { echo "  ^ FAIL: went to Valkey"; bad=1; }
+  $vk info commandstats | grep -q cmdstat_get && { echo "  ^ FAIL: went to RESP"; bad=1; }
   kill -9 "$p1"; $vk set nocopy:a 1 >/dev/null; sleep 1.2
   case $(web get a) in *'"hit":true,"from":null'*) echo "after kill -9    missed change seen";; *) echo "after kill -9: FAIL"; bad=1;; esac
   count "restarted" 1
@@ -96,7 +96,7 @@ elif command -v php-fpm >/dev/null; then
   [ "$(stat -c %U /dev/shm/nocopy-b.*)" = nobody ] && echo "pool b owner     nobody" || { echo "pool b owner: FAIL"; bad=1; }
   churn
   stop
-  if [ -n "$vk" ]; then (valkey-server --daemonize yes --save '' >/dev/null 2>&1 || redis-server --daemonize yes --save '' >/dev/null); sleep 0.3; valkey_pass start stop true; fi
+  if [ -n "$vk" ]; then (valkey-server --daemonize yes --save '' >/dev/null 2>&1 || redis-server --daemonize yes --save '' >/dev/null); sleep 0.3; resp_pass start stop true; fi
   grep -i 'address already in use' /tmp/fpm.log && bad=1
   logcheck /tmp/fpm.log
 else
@@ -118,7 +118,7 @@ else
   redis-server --daemonize yes --save '' >/dev/null; sleep 0.3
   fp_start() { run ""; }
   fp_stop() { kill $fp; wait $fp 2>/dev/null; }
-  valkey_pass fp_start fp_stop true
+  resp_pass fp_start fp_stop true
   grep -i 'address already in use' /tmp/fp.log && bad=1
   logcheck /tmp/fp.log
 fi

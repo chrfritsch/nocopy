@@ -26,7 +26,7 @@ typedef struct {
 
 /* Creates or attaches. Unused arenas of other builds under the name are removed. Not NOCOPY_ERR_NONE: no arena. */
 nocopy_err nocopy_arena_open(const nocopy_config *cfg, nocopy_named *out);
-void nocopy_arena_unhold(void);  /* the Valkey listener maps the arena without counting as its user */
+void nocopy_arena_unhold(void);  /* the RESP listener maps the arena without counting as its user */
 bool nocopy_arena_current(void); /* false: the arena's name was removed or names another object now */
 void nocopy_arena_close(void);
 

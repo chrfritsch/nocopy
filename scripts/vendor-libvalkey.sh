@@ -8,7 +8,7 @@ DST=$ROOT/third_party/libvalkey
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 git -c advice.detachedHead=false clone -q --depth 1 --branch "$TAG" https://github.com/valkey-io/libvalkey "$TMP/lv"
 # keep in step with config.m4
-SRC="adlist alloc async conn dict net read sds sockcompat tls valkey"
+SRC="adlist alloc async conn dict net read sds sockcompat tls resp"
 rm -rf "$DST" && mkdir -p "$DST/include/valkey" "$DST/src"
 cp "$TMP/lv/COPYING" "$DST/"
 cp "$TMP/lv/include/valkey/"*.h "$DST/include/valkey/"

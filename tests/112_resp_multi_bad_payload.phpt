@@ -1,18 +1,18 @@
 --TEST--
-nocopy.valkey: a get_multiple whose later key holds a broken payload keeps the values read before it intact
+nocopy.resp: a get_multiple whose later key holds a broken payload keeps the values read before it intact
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t112
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t112:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t112:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 nocopy_clear();
 nocopy_put('a', ['x' => str_repeat('y', 40)]);
 nocopy_put('b', 'v');

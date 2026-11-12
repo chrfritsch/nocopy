@@ -110,7 +110,7 @@ switch ($cmd) {
             echo nocopy_delete_multiple(array_map(strval(...), array_keys(nocopy_keys($args[0])))), " deleted\n";
         } else {
             if (!nocopy_clear()) {
-                fwrite(STDERR, "nocopy: not cleared everywhere (Valkey unreachable?)\n");
+                fwrite(STDERR, "nocopy: not cleared everywhere (RESP unreachable?)\n");
                 exit(1);
             }
             echo "cleared\n";

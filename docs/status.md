@@ -15,7 +15,7 @@ Install with `pie install chrfritsch/nocopy` ([install guide](how-to/install.md)
 | **PHP** | 8.4 and 8.5, NTS and ZTS (thread-safe) |
 | **Web servers** | php-fpm, Apache mod_php (prefork), FrankenPHP (classic and worker mode), `php -S`, CGI, LiteSpeed. Not tested: mod_php under a threaded Apache MPM. |
 | **Long-running processes** | CLI scripts, queue workers, FrankenPHP workers (they get [copy mode](explanation/how-it-works.md#zero-copy-and-copy-mode) automatically) |
-| **Several servers** | Valkey, or Redis 6.2+, including over TLS. Not yet: Sentinel, Cluster, TLS over unix sockets. |
+| **Several servers** | RESP, or Redis 6.2+, including over TLS. Not yet: Sentinel, Cluster, TLS over unix sockets. |
 
 ### Integrations
 
@@ -33,7 +33,7 @@ Until they are on Packagist, require them from a checkout of this repository, as
 GitHub Actions runs these on every push:
 
 - **The test suite** on PHP 8.4 and 8.5, amd64 and arm64, thread-safe PHP, php-fpm and FrankenPHP, and a build without
-  Valkey support.
+  RESP support.
 - **Memory and thread checkers:** AddressSanitizer, ThreadSanitizer, a debug build of PHP, and leak checks.
 - **Concurrency:** race tests repeated 30 times in a row, and a tool that tries every order in which concurrent
   operations can interleave.
@@ -43,7 +43,7 @@ GitHub Actions runs these on every push:
   differences, [listed here](reference/apcu-compatibility.md#apcus-test-suite)).
 
 Run by hand before changes to them: the Drupal module's tests, including Drupal core's generic cache backend tests
-(on one server, with Valkey, and without a shared cache), and a 50-minute soak test under heavy churn, which shows no leak.
+(on one server, with RESP, and without a shared cache), and a 50-minute soak test under heavy churn, which shows no leak.
 
 ## Known limitations
 
@@ -51,8 +51,8 @@ Run by hand before changes to them: the Drupal module's tests, including Drupal 
   are still to come ([benchmarks](reference/benchmarks.md)).
 - **Expired entries** are removed during writes. A cache that only gets reads keeps them (they are never returned) until
   the next write. This does not cost memory, since the whole size is reserved up front anyway.
-- **Valkey:** each write makes every server fetch the value again once, so Valkey is not the place for a counter you bump on
-  every request ([details](how-to/valkey.md#good-to-know)).
+- **RESP:** each write makes every server fetch the value again once, so RESP is not the place for a counter you bump on
+  every request ([details](how-to/resp.md#good-to-know)).
 
 ## Roadmap
 
@@ -62,7 +62,7 @@ In rough order of priority:
 2. **Numbers on real hardware:** Symfony and Drupal benchmarks on a dedicated x86_64 server.
 3. **Smarter eviction when full:** skip copying entries that are about to expire anyway.
 4. **Smaller cache entries:** compression is being considered, but only where it does not slow down reads.
-5. **Valkey:** Cluster, Sentinel, TLS over unix sockets, certificate revocation checks.
+5. **RESP:** Cluster, Sentinel, TLS over unix sockets, certificate revocation checks.
 
 ## Get involved
 

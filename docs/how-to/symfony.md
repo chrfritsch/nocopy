@@ -78,14 +78,14 @@ Then load a page that uses the cache twice, and check that `nocopy_stats()['hits
   One worker computes a missing value while the others wait or get the just-expired one, and popular values are refreshed
   shortly before they expire. `expiresAfter()`, `$save = false` and `$beta` work as in Symfony. `setCallbackWrapper()` is
   not used, and `$metadata` comes back empty.
-- **Batches:** `getItems()` and deferred saves are one call each; with Valkey, one round trip.
+- **Batches:** `getItems()` and deferred saves are one call each; with RESP, one round trip.
 - **Clearing:** `clear()` bumps a namespace version instead of deleting keys. Old entries leave through eviction, or, with
-  Valkey, through a one-year TTL given to items without a lifetime.
+  RESP, through a one-year TTL given to items without a lifetime.
 - **System pools:** Symfony's system pools (validator, serializer, property info) get nocopy in front of their PHP files,
   as Symfony does with APCu. Setting `framework.cache.system` in your config overrides this.
 - **Deploys:** each new container build (deploy, `cache:clear`) starts the pools empty, as with APCu.
 - **Safety:** the adapter refuses to start in a process without a shared cache (`nocopy_shared_with()` returns `none`).
-  Set `nocopy.shm_name` (or `nocopy.valkey`) for php-fpm and the CLI, and run the console as the php-fpm user.
+  Set `nocopy.shm_name` (or `nocopy.resp`) for php-fpm and the CLI, and run the console as the php-fpm user.
 - **APCu:** the adapter only calls `nocopy_*`, so it works next to a loaded APCu.
 
 ## FrankenPHP worker mode

@@ -80,7 +80,7 @@ restarts, every cache bin and cache tag can move out of the database. Not copyin
 | 🖥️ **One cache for web and CLI** | php-fpm, Drush, `bin/console` and cron jobs all see the same cache, and it survives php-fpm restarts. |
 | 🧹 **Graceful when full** | APCu throws away the *whole* cache when memory runs out. nocopy removes the oldest, least-read entries and keeps the popular ones. |
 | 🚦 **No stampedes** | `nocopy_remember()` computes an expensive value **once**, even if 100 workers ask for it at the same moment, and refreshes it shortly before it expires. |
-| 🌐 **Several servers** | Point it at [Valkey](https://valkey.io) (the open-source Redis fork) and all servers share one cache, while each keeps a fast local copy that stays in sync automatically. No extra PHP extension needed. |
+| 🌐 **Several servers** | Point it at a RESP server such as [Valkey](https://valkey.io) or Redis and all servers share one cache, while each keeps a fast local copy that stays in sync automatically. No extra PHP extension needed. |
 | 🛡️ **Crash-safe** | A worker killed mid-write (OOM killer, `kill -9`) can't corrupt the cache: the damage is detected and repaired. |
 | 🧩 **Framework integrations** | [Symfony bundle](docs/how-to/symfony.md) (`cache.adapter.nocopy`), [Drupal module](drupal/README.md) (all cache bins and cache tags). |
 | 🔁 **Easy switch from APCu** | A [polyfill](apcu) provides the `apcu_*` functions on top of nocopy, for code you can't change yet ([differences](docs/reference/apcu-compatibility.md)). |
@@ -133,7 +133,7 @@ nocopy.shm_name=/nocopy     ; required: the cache's name, so web and CLI share i
 nocopy.shm_size=128M        ; how much memory the cache may use
 ```
 
-Step by step (Docker, Valkey over TLS, upgrades): [install guide](docs/how-to/install.md). Several servers: [Valkey guide](docs/how-to/valkey.md).
+Step by step (Docker, RESP over TLS, upgrades): [install guide](docs/how-to/install.md). Several servers: [RESP guide](docs/how-to/resp.md).
 
 ### Integrations
 
@@ -153,7 +153,7 @@ Same for `symfony/` (`chrfritsch/nocopy-bundle`), `drupal/` (`chrfritsch/nocopy-
 | New here | Using it | How it works |
 |---|---|---|
 | [Your first cache](docs/tutorials/first-cache.md) (10-minute tutorial) | [Symfony](docs/how-to/symfony.md) · [Drupal](drupal/README.md) · [Migrate from APCu](docs/how-to/migrate-from-apcu.md) | [How nocopy works](docs/explanation/how-it-works.md) |
-| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [Valkey](docs/how-to/valkey.md) · [Kubernetes](docs/how-to/kubernetes.md) | [Architecture](docs/explanation/architecture.md) |
+| [Install on a server](docs/how-to/install.md) | [Share between php-fpm and CLI](docs/how-to/share-between-fpm-and-cli.md) · [RESP](docs/how-to/resp.md) · [Kubernetes](docs/how-to/kubernetes.md) | [Architecture](docs/explanation/architecture.md) |
 | [Glossary](docs/reference/glossary.md) | [Size and monitor](docs/how-to/size-and-monitor.md) · [Configuration](docs/reference/configuration.md) · [`nocopy_stats()`](docs/reference/stats.md) | [Design decisions](docs/explanation/design-decisions.md) (with numbers) |
 
 Everything: [docs/](docs/README.md).

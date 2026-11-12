@@ -1,18 +1,18 @@
 --TEST--
-nocopy.valkey: an integer read from Valkey keeps its TTL locally (its payload carries none), single and multi reads
+nocopy.resp: an integer read from RESP keeps its TTL locally (its payload carries none), single and multi reads
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t105
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t105:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t105:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 nocopy_clear();
 function exp_in(string $k): ?int
 {

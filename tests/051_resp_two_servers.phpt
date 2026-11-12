@@ -1,19 +1,19 @@
 --TEST--
-nocopy.valkey: two servers (separate nocopy memories) share values, and each one's writes and deletes reach the other's local copies
+nocopy.resp: two servers (separate nocopy memories) share values, and each one's writes and deletes reach the other's local copies
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t051
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t051:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t051:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
 require __DIR__ . '/../apcu/apcu.php';
-require __DIR__ . '/valkey.inc';
+require __DIR__ . '/resp.inc';
 apcu_clear_cache();
 nocopy_put('k', ['v' => 1]);
 var_dump(nocopy_get('k'));

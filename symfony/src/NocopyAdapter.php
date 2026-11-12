@@ -14,12 +14,12 @@ use Symfony\Component\Cache\Exception\InvalidArgumentException;
 /** Symfony cache pool on nocopy_*: needs no APCu layer, works next to real APCu. */
 class NocopyAdapter extends AbstractAdapter
 {
-    // Valkey has no eviction of its own here: cap "forever" so versioned-out keys leave
+    // RESP has no eviction of its own here: cap "forever" so versioned-out keys leave
     private const PERM_TTL = 31536000;
 
     private static \Closure $compute;
 
-    private readonly bool $valkey;
+    private readonly bool $resp;
     private readonly int $lifetime;
 
     public function __construct(string $namespace = '', int $defaultLifetime = 0, ?string $version = null)
@@ -28,9 +28,9 @@ class NocopyAdapter extends AbstractAdapter
         if (null === $with) {
             $with = \function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none (the nocopy extension is not loaded)';
             // a process with a cache of its own would serve what other processes already changed
-            throw new CacheException(\sprintf('nocopy: this %s process does not share the cache (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.valkey (several) in the php.ini of every PHP that runs this app, and run the console as the user that starts php-fpm.', \PHP_SAPI, $with));
+            throw new CacheException(\sprintf('nocopy: this %s process does not share the cache (nocopy_shared_with(): %s). Set nocopy.shm_name (one server) or nocopy.resp (several) in the php.ini of every PHP that runs this app, and run the console as the user that starts php-fpm.', \PHP_SAPI, $with));
         }
-        $this->valkey = 'valkey' === $with;
+        $this->resp = 'resp' === $with;
         $this->lifetime = $defaultLifetime;
         self::$compute ??= \Closure::bind(static function (string $key, callable $callback, bool &$save): array {
             $item = new CacheItem();
@@ -39,7 +39,7 @@ class NocopyAdapter extends AbstractAdapter
             return [$callback($item, $save), $item->expiry];
         }, null, CacheItem::class);
         parent::__construct($namespace, $defaultLifetime);
-        // ponytail: clear() bumps a namespace version instead of deleting keys; eviction (shm) or PERM_TTL (Valkey) drops the old ones
+        // ponytail: clear() bumps a namespace version instead of deleting keys; eviction (shm) or PERM_TTL (RESP) drops the old ones
         $this->enableVersioning();
 
         if (null !== $version) {
@@ -136,17 +136,17 @@ class NocopyAdapter extends AbstractAdapter
         return nocopy_put_multiple($values, $this->ttl($lifetime));
     }
 
-    /** 'host' or 'valkey'; null: this process does not share a nocopy cache. */
+    /** 'host' or 'resp'; null: this process does not share a nocopy cache. */
     private static function sharedWith(): ?string
     {
         $with = \function_exists('nocopy_shared_with') ? nocopy_shared_with() : 'none';
 
-        return 'host' === $with || 'valkey' === $with ? $with : null;
+        return 'host' === $with || 'resp' === $with ? $with : null;
     }
 
-    /** A ttl as stored: 0 (forever) is PERM_TTL under Valkey. */
+    /** A ttl as stored: 0 (forever) is PERM_TTL under RESP. */
     private function ttl(int $ttl): int
     {
-        return 0 === $ttl && $this->valkey ? self::PERM_TTL : $ttl;
+        return 0 === $ttl && $this->resp ? self::PERM_TTL : $ttl;
     }
 }

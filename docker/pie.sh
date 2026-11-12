@@ -8,12 +8,12 @@ check() {
   pie uninstall -n chrfritsch/nocopy >/dev/null 2>&1 || true
   pie install chrfritsch/nocopy:@dev "$@" | grep -E "Configure complete|Install complete"
   php -d nocopy.shm_name=/pie-check -r 'nocopy_put("a", [1]); exit(nocopy_get("a") === [1] ? 0 : 1);'
-  vk=$(php -d nocopy.shm_name=/pie-check -r 'echo (int) array_key_exists("nocopy.valkey", ini_get_all("nocopy"));')
+  vk=$(php -d nocopy.shm_name=/pie-check -r 'echo (int) array_key_exists("nocopy.resp", ini_get_all("nocopy"));')
   rm -f /dev/shm/pie-check.*
-  echo "pie install $*: ok, valkey=$vk"
+  echo "pie install $*: ok, resp=$vk"
 }
 check
 [ "$vk" = 1 ]
-check --disable-nocopy-valkey
+check --disable-nocopy-resp
 [ "$vk" = 0 ]
 check --disable-nocopy-lto

@@ -3,7 +3,7 @@
     "type": "php-ext",
     "license": "MIT",
     "description": "Zero-copy shared-memory cache for PHP",
-    "keywords": ["cache", "shared-memory", "apcu", "valkey"],
+    "keywords": ["cache", "shared-memory", "apcu", "resp"],
     "require": {
         "php": ">=8.4"
     },
@@ -12,8 +12,8 @@
         "os-families-exclude": ["windows"],
         "configure-options": [
             {
-                "name": "disable-nocopy-valkey",
-                "description": "Build without the Valkey tier (nocopy.valkey), single host only"
+                "name": "disable-nocopy-resp",
+                "description": "Build without the RESP tier (nocopy.resp), single host only"
             },
             {
                 "name": "disable-nocopy-lto",

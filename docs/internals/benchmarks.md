@@ -110,7 +110,7 @@ here: a value fetched twice is kept as a private copy (`nocopy.local_size`) and 
 
 ## Drupal 11: where the gain comes from (`./dev drupal-bench`)
 
-2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host; median of 3 runs on the evening of 2026-11-06
+2,000 nodes, php-fpm 8 workers, MariaDB, RESP on the same host; median of 3 runs on the evening of 2026-11-06
 ([raw numbers](../../bench/results-drupal/2026-11-06-prod)). Production PHP as for Symfony (OPcache sized up, timestamps off,
 realpath cache) and `composer dump-autoload --optimize` (not `--classmap-authoritative`: Drupal adds module namespaces at
 runtime). igbinary in every config except stock, nocopy configs load the `apcu_*` polyfill as the Drupal module does.
@@ -161,13 +161,13 @@ Same runs (each config measures this before its throughput runs; `MEM_ONLY=1` st
 worker holds (its PHP heap, copies of cached values); PSS adds its share of the pages it shares (opcache, the cache's
 shared memory). Three runs, equal to 0.1 MB.
 
-| Config | Private MB / worker | PSS MB / worker | PSS, 8 workers | PHP peak per request | Valkey RSS |
+| Config | Private MB / worker | PSS MB / worker | PSS, 8 workers | PHP peak per request | RESP RSS |
 |---|---|---|---|---|---|
 | stock (APCu for 3 bins, the rest in MariaDB) | 5.2 | 13.3 | 106.5 | 3.5 | |
 | apcu-all | 4.6 | 13.6 | 108.4 | 3.5 | |
 | redis (drupal/redis 1.11) | 4.1 | 12.2 | 97.8 | 3.5 | 16.1 |
 | nocopy-all | **3.5** | 12.8 | 102.8 | **1.8** | |
-| nocopy-valkey | 3.5 | 12.7 | 101.9 | 1.8 | 16.5 |
+| nocopy-resp | 3.5 | 12.7 | 101.9 | 1.8 | 16.5 |
 
 nocopy keeps 1.1 MB less private memory per worker than APCu and 0.6 MB less than drupal/redis, and halves PHP's peak per
 request (php-fpm's `last request memory`, in 2 MB chunks): fetched values are not copied into the worker's heap. PSS includes
@@ -176,12 +176,12 @@ The arena was 11.1 MB in the morning's runs (3 pages, objects serialized with ig
 igbinary, which also stores a repeated string once (an `ArrayObject` of 1,000 equal 100-byte strings: 5 KB serialized, 144 KB
 as a graph).
 
-## Drupal 11, several servers: nocopy + Valkey vs drupal/redis
+## Drupal 11, several servers: nocopy + RESP vs drupal/redis
 
-Same runs. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
+Same runs. All bins and tags shared through RESP on the same host. Baseline: drupal/redis 1.11 with phpredis and
 igbinary, APCu chainedfast in front of bootstrap/config/discovery.
 
-| | drupal/redis | nocopy + Valkey |
+| | drupal/redis | nocopy + RESP |
 |---|---:|---:|
 | anonymous `/` | 4,837 req/s | **12,538 req/s** |
 | logged-in `/` / node / JSON:API | 642 / 634 / 1,159 req/s | **1,387 / 1,152 / 1,754 req/s** |
@@ -320,7 +320,7 @@ headers. cachesim prints miss ratios, `bench/trace.php` hit ratios. No results y
 (get, put on a miss), hit % after warm-up. Footprint (`fp`) = distinct keys' bytes / memory, `ohw` = one-off puts per
 request, `w` = share of hits rewritten.
 
-| Workload | Memory | nocopy | APCu | Valkey LRU | Valkey LFU |
+| Workload | Memory | nocopy | APCu | RESP LRU | RESP LFU |
 |---|---|---|---|---|---|
 | Zipf, fp 1.5 | 32M | 94.6 | 86.7 | 96.1 | 96.2 |
 | | 64M | 94.1 | 87.1 | 96.4 | 96.4 |
@@ -337,11 +337,11 @@ request, `w` = share of hits rewritten.
 
 - **APCu** empties the whole cache when it is full (`apc.ttl=0`, the default): 8-64 expunges per run, and a loop over
   slightly more than fits never hits.
-- **Valkey holds ~15% more entries** in the same memory: 32M filled with 500-byte values keeps 58,400 in Valkey,
+- **RESP holds ~15% more entries** in the same memory: 32M filled with 500-byte values keeps 58,400 in RESP,
   50,900 in nocopy (600-byte blocks, ~660 bytes each with the slot table and free segments). That is most of its lead on
-  plain Zipf and why `loop 1.1` fits whole. `maxmemory` counts allocated bytes only: Valkey's RSS was 38-40 MB at 32M
+  plain Zipf and why `loop 1.1` fits whole. `maxmemory` counts allocated bytes only: RESP's RSS was 38-40 MB at 32M
   and 70-71 MB at 64M, the process and allocator overhead come on top.
 - **Rewrites** cost nocopy 3 points: an overwrite leaves the old copy as dead bytes until its segment is compacted.
-  APCu and Valkey free it in place.
+  APCu and RESP free it in place.
 - **One-off keys**: nocopy (ghost list, frequency-aware merge) is level with LFU and 9 points above LRU.
-- Valkey is a network hop: 4-8 µs a request here over loopback TCP, against 0.2-0.7 µs for nocopy and APCu.
+- RESP is a network hop: 4-8 µs a request here over loopback TCP, against 0.2-0.7 µs for nocopy and APCu.

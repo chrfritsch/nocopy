@@ -8,10 +8,10 @@
 #   perf-<cfg>-<anon|auth>.dso (samples by process, library) and .sym (php-fpm's top symbols). PERF_N=4000 requests each.
 # TRACE_ONLY=1: after warm-up, strace on every php-fpm worker over 200 node page requests, anonymous and logged in:
 #   trace-<cfg>-<anon|auth>.sum (syscalls per request) and .paths (file syscalls per request by path, most first).
-# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"
+# Env: WORKERS=8 CONC=8 REQS=5000 (anonymous) REQS_AUTH=1000 (logged-in) EDITOR_T=40 (s of reader load during the editor loop) CONFIGS="stock stock-igbinary apcu-all nocopy-fast nocopy-all-dbtags nocopy-all redis redis2 nocopy-resp"
 #   (--shm-size: every nocopy config keeps its arena in /dev/shm)
 W=${WORKERS:-8}; C=${CONC:-8}; N=${REQS:-5000}; NA=${REQS_AUTH:-1000}; ET=${EDITOR_T:-40}
-CONFIGS=${CONFIGS:-"stock stock-igbinary apcu-all nocopy-fast nocopy-all-dbtags nocopy-all redis redis2 nocopy-valkey"}
+CONFIGS=${CONFIGS:-"stock stock-igbinary apcu-all nocopy-fast nocopy-all-dbtags nocopy-all redis redis2 nocopy-resp"}
 B=http://127.0.0.1:8099; B2=http://127.0.0.1:8098; D=/site/d; DRUSH="php -d memory_limit=2G $D/vendor/drush/drush/drush.php -r $D/web"
 APCU=$(find /usr/local/lib/php/extensions -name apcu.so)
 export COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1
@@ -64,7 +64,7 @@ cp /src/bench/drupal/settings.*.php /src/bench/drupal/*.services.yml /src/bench/
 $DRUSH pmu nocopy -y >/dev/null 2>&1; $DRUSH en nocopy -y >/dev/null 2>&1   # reinstall: schema changes
 echo '<?php echo function_exists("nocopy_stats") ? nocopy_stats()["used"] : 0;' > $D/web/nocopy-used.php
 # serializer probe: 1000 equal strings in an object, ~115 KB with serialize(), ~5 KB with igbinary
-# with Valkey the listener drops the writer's own fresh copy: refetch until it stays local
+# with RESP the listener drops the writer's own fresh copy: refetch until it stays local
 echo '<?php $o = new ArrayObject(array_fill(0, 1000, str_repeat("x", 100))); if (function_exists("nocopy_put")) { $k = "probe" . mt_rand(); $u = nocopy_stats()["used"]; nocopy_put($k, $o, 0); $d = nocopy_stats()["used"] - $u; for ($i = 0; !$d && $i < 200; $i++, usleep(1000)) { $u = nocopy_stats()["used"]; nocopy_get($k); $d = nocopy_stats()["used"] - $u; } echo $d; exit; } apcu_store("probe", $o); foreach (new APCUIterator("/^probe$/") as $e) echo $e["mem_size"];' > $D/web/serializer-probe.php
 chown -R www-data $D/web/sites/default/files
 DRUSH="runuser -u www-data -- env HOME=/tmp $DRUSH"   # as php-fpm's user: with nocopy loaded, root would create the cache its workers refuse
@@ -88,7 +88,7 @@ nginx
 questions() { mariadb -N -e "SHOW GLOBAL STATUS LIKE 'Questions'" | awk '{print $2}'; }
 fpm_start() { php-fpm -D; for i in $(seq 20); do curl -s -o /dev/null "$B/nocopy-used.php" && return; sleep 0.5; done; }
 fpm_stop() { pkill -QUIT php-fpm; while pgrep php-fpm >/dev/null; do sleep 0.2; done; }
-# a second web server: its own php-fpm master, so its own nocopy memory, on the same database and Valkey
+# a second web server: its own php-fpm master, so its own nocopy memory, on the same database and RESP
 fpmb_start() {
   printf '[global]\npid=/tmp/fpm-b.pid\nerror_log=/tmp/fpm-b.log\n[www]\nuser=www-data\ngroup=www-data\nlisten=127.0.0.1:9002\npm=static\npm.max_children=%s\naccess.log=/dev/null\n' "$W" > /tmp/fpm-b.conf
   php-fpm -D -y /tmp/fpm-b.conf; for i in $(seq 20); do curl -s -o /dev/null "$B2/nocopy-used.php" && return; sleep 0.5; done; }
@@ -122,11 +122,11 @@ nocopy.shm_name=/nocopy-bench"; SET=all ;;
 extension=igbinary
 apc.serializer=igbinary
 extension=redis"; SET=redis ;;
-    nocopy-valkey) EXT="extension=/build/modules/nocopy.so
+    nocopy-resp) EXT="extension=/build/modules/nocopy.so
 extension=igbinary
 nocopy.serializer=igbinary
 nocopy.shm_name=/nocopy-bench
-nocopy.valkey=127.0.0.1:6379"; SET=all ;;
+nocopy.resp=127.0.0.1:6379"; SET=all ;;
   esac
   echo "== $cfg"
   rm -rf $D/web/modules/contrib/redis && cp -r /site/redis$([ $cfg = redis2 ] && echo 2 || echo 1) $D/web/modules/contrib/redis
@@ -156,7 +156,7 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
     continue
   fi
 
-  # per worker, MB: RSS, PSS (shared pages split among their users), private (USS); PHP peak of its last request; Valkey's RSS
+  # per worker, MB: RSS, PSS (shared pages split among their users), private (USS); PHP peak of its last request; RESP's RSS
   for u in $URLS; do ab -q -n 400 -c "$C" "$B$u" >/dev/null 2>&1; ab -q -n 400 -c "$C" -C "$SID" "$B$u" >/dev/null 2>&1; done
   m=$(pgrep -f 'php-fpm: master' | head -1)
   for p in $(pgrep -P "$m"); do awk '/^Rss/{r=$2} /^Pss:/{s=$2} /^Private_(Clean|Dirty)/{u+=$2} END{print r, s, u}' /proc/$p/smaps_rollup; done > /tmp/mem.txt
@@ -222,7 +222,7 @@ nocopy.valkey=127.0.0.1:6379"; SET=all ;;
   cat /out/cli.tsv.$cfg
 
   # shared configs: a second server joins (first requests on an empty local memory), then a web save on A must show on B
-  case $cfg in redis|redis2|nocopy-valkey)
+  case $cfg in redis|redis2|nocopy-resp)
     fpmb_start
     for i in $(seq 30); do curl -s -o /dev/null -b /tmp/ck -w '%{time_total}\n' "$B2/"; done > /tmp/b.txt
     /src/bench/drupal/editor.sh "$B" /tmp/ck /tmp/ed1.txt "$NODE" >/dev/null 2>&1 || echo "SAVE ON A FAILED ($cfg)"
@@ -254,6 +254,6 @@ rm -f /usr/local/etc/php/conf.d/zz-bench.ini
 { printf 'config\tfirst_ms\tp50_ms_requests_6_30\tlogged_in_sees_save_on_a\tanonymous_sees_save_on_a\n'; cat /out/server2.tsv.* 2>/dev/null; } > /out/server2.tsv
 { printf 'config\tanonymous_sees_cli_save\tlogged_in_sees_cli_save\n'; cat /out/cli.tsv.* 2>/dev/null; } > /out/cli.tsv
 { printf 'config\tprobe_bytes\n'; cat /out/serializer.tsv.* 2>/dev/null; } > /out/serializer.tsv
-{ printf 'config\tworkers\trss_mb\tpss_mb\tprivate_mb\tpss_total_mb\tphp_peak_mb\tvalkey_rss_mb\n'; cat /out/mem.tsv.* 2>/dev/null; } > /out/mem.tsv
+{ printf 'config\tworkers\trss_mb\tpss_mb\tprivate_mb\tpss_total_mb\tphp_peak_mb\tresp_rss_mb\n'; cat /out/mem.tsv.* 2>/dev/null; } > /out/mem.tsv
 rm -f /out/mem.tsv.* /out/editor.tsv.* /out/coldstart.tsv.* /out/serializer.tsv.* /out/cli.tsv.* /out/server2.tsv.*
 mariadb-admin shutdown

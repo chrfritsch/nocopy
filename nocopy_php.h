@@ -1,4 +1,4 @@
-/* The PHP store on top of the arena: module state, the store API (nocopy_store.c) and the detour (the Valkey tier's seam, nocopy_valkey.h).
+/* The PHP store on top of the arena: module state, the store API (nocopy_store.c) and the detour (the RESP tier's seam, nocopy_resp.h).
  * Values in and out of blocks: nocopy_value.h. nocopy_* and the module: nocopy.c. */
 
 #ifndef NOCOPY_PHP_H
@@ -9,13 +9,13 @@
 #include "arena/nocopy_arena.h"
 #include "nocopy_value.h"
 #include "nocopy_kept.h"
-#include "nocopy_valkey.h"
+#include "nocopy_resp.h"
 
 /* ---- the arena header's user area: the same address in every process that maps it ---- */
 
 typedef struct {
 	nocopy_value_shared value; /* the value layer's: every entry's empty array */
-	nocopy_vk_shared vk; /* the Valkey tier's */
+	nocopy_vk_shared vk; /* the RESP tier's */
 } nocopy_shared;
 _Static_assert(sizeof(nocopy_shared) <= NOCOPY_USER_BYTES, "nocopy_shared outgrew the arena's user area");
 #define NOCOPY_SHARED ((nocopy_shared *) nocopy_user_area())
@@ -29,7 +29,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	int nleases;
 	nocopy_env env; /* the value layer's */
 	nocopy_kept_cache kept; /* copy mode's kept copies */
-	nocopy_vk vk; /* the Valkey tier's connection */
+	nocopy_vk vk; /* the RESP tier's connection */
 	const struct nocopy_detour_ops *detour; /* where the store ops go: NULL the local store */
 	const char *off; /* why this process (thread) has no cache, NULL: it has one */
 ZEND_END_MODULE_GLOBALS(nocopy)
@@ -41,7 +41,7 @@ ZEND_EXTERN_MODULE_GLOBALS(nocopy)
 
 typedef struct {
 	zend_long ttl; /* 0: none */
-	time_t expires; /* instead of ttl: the last second it lives (a Valkey fill keeps the remote expiry) */
+	time_t expires; /* instead of ttl: the last second it lives (a RESP fill keeps the remote expiry) */
 	bool add_only; /* fail if a live entry exists */
 } nocopy_opts;
 
@@ -49,7 +49,7 @@ void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
 nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o);
 bool nocopy_fetch(zend_string *key, zval *rv);
-/* Batches: the local misses in one Valkey round trip, the writes in one pipeline. out: key => value. */
+/* Batches: the local misses in one RESP round trip, the writes in one pipeline. out: key => value. */
 void nocopy_fetch_multi(HashTable *keys, HashTable *out);
 bool nocopy_store_multi(HashTable *vals, const nocopy_opts *o); /* false: a value was not stored */
 bool nocopy_drop(zend_string *key);
@@ -59,10 +59,10 @@ bool nocopy_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long
 bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw);
 /* Fetch, or run fn once across all workers (lease) and store its result with o. beta > 0: XFetch early refresh. */
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv); /* fn: a valid callable */
-bool nocopy_clear_all(void); /* nocopy_clear: Valkey's keys under the prefix too; false: not everything was cleared */
+bool nocopy_clear_all(void); /* nocopy_clear: RESP's keys under the prefix too; false: not everything was cleared */
 void nocopy_list_keys(zend_string *prefix, HashTable *out); /* this host's entries under prefix, oldest first: key => size, created, expires */
 
-/* The local store alone, for the Valkey tier. */
+/* The local store alone, for the RESP tier. */
 nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
 bool nocopy_drop_local(const char *k, size_t len); /* needs an arena */

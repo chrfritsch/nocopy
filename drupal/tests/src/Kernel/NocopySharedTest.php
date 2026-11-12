@@ -23,7 +23,7 @@ class NocopySharedTest extends KernelTestBase {
   protected static $modules = ['nocopy'];
 
   protected function shared(): bool {
-    return in_array(nocopy_shared_with(), ['host', 'valkey'], TRUE);
+    return in_array(nocopy_shared_with(), ['host', 'resp'], TRUE);
   }
 
   public function testBackendNeedsSharedCache(): void {

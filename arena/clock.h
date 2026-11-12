@@ -34,7 +34,7 @@ static inline time_t nocopy_now(void)
 	return ts.tv_sec;
 }
 
-/* A local second as unix time, and back: for key listings and the Valkey payload (within a second). 0 stays 0 (never). */
+/* A local second as unix time, and back: for key listings and the RESP payload (within a second). 0 stays 0 (never). */
 static inline time_t nocopy_wall_offset(void) { return time(NULL) - nocopy_now(); }
 static inline time_t nocopy_to_wall(time_t t) { return t ? t + nocopy_wall_offset() : 0; }
 static inline time_t nocopy_from_wall(time_t t)

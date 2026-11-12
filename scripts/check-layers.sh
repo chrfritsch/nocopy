@@ -47,31 +47,31 @@ for f in nocopy_kept.c nocopy_kept.h; do
 	grep -nE '#include "nocopy_php\.h"|\bNOCOPY_(G|SHARED)\b' "$f" | sed "s|^|check-layers: $f: module state in the kept copies: |" | grep . && bad=1
 done
 # Above the value layer: no name of nocopy_value_int.h (nocopy.c's one translation unit would let them through).
-outer="nocopy.c nocopy_store.c nocopy_kept.c nocopy_kept.h nocopy_valkey.c nocopy_valkey.h nocopy_php.h"
+outer="nocopy.c nocopy_store.c nocopy_kept.c nocopy_kept.h nocopy_resp.c nocopy_resp.h nocopy_php.h"
 int=$( { sed -n 's/^#define \([A-Za-z_0-9]*\).*/\1/p' nocopy_value_int.h; sed -n 's/^}[ ]*\([a-z_0-9]*\);.*/\1/p;s/^typedef .*} *\([a-z_0-9]*\);.*/\1/p' nocopy_value_int.h
 	grep -E '^[a-z]' nocopy_value_int.h | grep -v '^typedef' | sed -n 's/^[^(]*[^a-z_0-9]\([a-z_0-9]*\)(.*/\1/p'; } | grep -v '^NOCOPY_VALUE_INT_H$' | grep . | paste -sd'|' -)
 for f in $outer; do
 	[ -f "$f" ] && grep -nwE "$int" "$f" | sed "s|^|check-layers: $f: value layer internal: |" | grep . && bad=1
 done
-# The arena's data operations: the store's (and the Valkey tier's nocopy_clear), not the module's.
+# The arena's data operations: the store's (and the RESP tier's nocopy_clear), not the module's.
 data='\bnocopy_(find(_ex)?|each|borrow_(begin|end)|keep|count|put_(begin|commit|abort)|delete|update|clear|lease_(take|drop)|atom_[a-z_]+)\('
 grep -nE "$data" nocopy.c | sed 's/^/check-layers: nocopy.c: arena data through the store: /' | grep . && bad=1
-grep -nE "$data" nocopy_valkey.c | grep -v '\bnocopy_clear()' | sed 's/^/check-layers: nocopy_valkey.c: local copies through the store: /' | grep . && bad=1
-# The Valkey tier: the store reaches it through nocopy_detour, the module through nocopy_valkey.h's calls, and nobody else at all.
+grep -nE "$data" nocopy_resp.c | grep -v '\bnocopy_clear()' | sed 's/^/check-layers: nocopy_resp.c: local copies through the store: /' | grep . && bad=1
+# The RESP tier: the store reaches it through nocopy_detour, the module through nocopy_resp.h's calls, and nobody else at all.
 for f in *.c *.h; do
 	case $f in
-	nocopy_valkey.c | nocopy_valkey.h) continue ;;
+	nocopy_resp.c | nocopy_resp.h) continue ;;
 	nocopy.c) ok='nocopy_vk_(minit|mshutdown|route|new_request|close|listener)\b|\bnocopy_vk\b' ;;
 	nocopy_php.h) ok='\bnocopy_vk(_shared)?\b' ;;
 	*) ok='^$' ;;
 	esac
-	grep -noE '\bnocopy_vk[a-z_]*\b|\bHAVE_NOCOPY_VALKEY\b' "$f" | grep -vE "$ok" | sed "s|^|check-layers: $f: Valkey outside nocopy_valkey.h: |" | grep . && bad=1
-	[ "$f" != nocopy_php.h ] && grep -q '#include "nocopy_valkey.h"' "$f" && no "$f includes nocopy_valkey.h: nocopy_php.h does"
+	grep -noE '\bnocopy_vk[a-z_]*\b|\bHAVE_NOCOPY_RESP\b' "$f" | grep -vE "$ok" | sed "s|^|check-layers: $f: RESP outside nocopy_resp.h: |" | grep . && bad=1
+	[ "$f" != nocopy_php.h ] && grep -q '#include "nocopy_resp.h"' "$f" && no "$f includes nocopy_resp.h: nocopy_php.h does"
 done
-# The local store's pieces are the Valkey tier's.
+# The local store's pieces are the RESP tier's.
 for f in *.c; do
-	case $f in nocopy_store.c | nocopy_valkey.c) continue ;; esac
-	grep -nE '\bnocopy_((put|fetch|drop)_local|store_each)\b' "$f" | sed "s|^|check-layers: $f: the local store is the Valkey tier's: |" | grep . && bad=1
+	case $f in nocopy_store.c | nocopy_resp.c) continue ;; esac
+	grep -nE '\bnocopy_((put|fetch|drop)_local|store_each)\b' "$f" | sed "s|^|check-layers: $f: the local store is the RESP tier's: |" | grep . && bad=1
 done
 [ $bad = 0 ] && echo "check-layers: ok"
 exit $bad

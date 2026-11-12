@@ -10,8 +10,8 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 
 | Command | What it runs | Image |
 |---|---|---|
-| `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests) on all cores, with a Valkey server for the 05x tests | `nocopy-linux:$PHP` |
-| `./dev novalkey [tests …]` | same, built with `--disable-nocopy-valkey` | `nocopy-linux:$PHP` |
+| `./dev test [tests/0NN.phpt …]` | `.phpt` suite (or the given tests) on all cores, with a RESP server for the 05x tests | `nocopy-linux:$PHP` |
+| `./dev noresp [tests …]` | same, built with `--disable-nocopy-resp` | `nocopy-linux:$PHP` |
 | `./dev asan [tests …]` | same, built with AddressSanitizer + UBSan (libasan preloaded into the uninstrumented php, `USE_ZEND_ALLOC=0`, no leak check) and `-DNOCOPY_DEBUG`: nocopy's own assertions (`NC_ASSERT`: a write filled exactly the planned bytes and consumed the tape; every pointer in the written block stays in it, or is the empty array or an atom; keys carry their hash; no graph marker reaches userland), which a release PHP's `ZEND_ASSERT` drops | `nocopy-linux:$PHP` |
 | `./dev debug [tests …]` | same as `asan`, on PHP built with `--enable-debug` (pcntl, posix, session, igbinary): the engine's own assertions, among them a refcount changed on an immutable array or interned string (`ZEND_RC_DEBUG`) and hash-table consistency. `./dev debug fuzz [iterations] [seed]`: the fuzzer on that build. The image builds PHP once (minutes), then is cached | `nocopy-debug:$PHP` |
 | `./dev leaks [tests …]` | the suite on that debug PHP without ASan, so the Zend allocator runs: it reports memory a request allocated with `emalloc` and did not free (`=== Total N memory leaks detected ===`), which fails the test, CLI and `php -S` alike (`serve()` passes the server's report on). Built with `-DNOCOPY_DEBUG`. `./dev leaks fuzz [iterations] [seed]`: the fuzzer there. Persistent memory (`malloc`, `pemalloc`) is not covered | `nocopy-debug:$PHP` |
@@ -20,15 +20,15 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev stress [loops=30]` | concurrency tests (011, 015, 018, 021, 022) in a loop on a release build, stops at the first failure or hang | `nocopy-linux:$PHP` |
 | `./dev c [seconds=3]` | the arena alone (`tests/c/`) from 8 threads, plain and ThreadSanitizer, then (stress) a clear must give every segment back; then the repair, atom, merge and crash tests and the interleaving explorer (`sched.c`) | `nocopy-linux:$PHP` |
 | `./dev fuzz [iterations=20000] [seed]` | `tests/fuzz.php` on an ASan + UBSan build, copy mode then zero-copy: random values (every object kind, dates, shared references, cycles, deep nesting) stored over 1024 keys in a 4 MB arena, so merges move them and evict; every fetch must `serialize()` as `unserialize(serialize())` of what was stored; after each mode a fresh process clears the arena and every segment must be back in the pool (`tests/empty.inc`). Prints the seed; the same iterations and seed replay the run, `FUZZ_VALUE=<iteration>` dumps the value one iteration made | `nocopy-linux:$PHP` |
-| `./dev shm` | CLI and php-fpm share one cache by name, survive reloads and restarts, churn without misses; then the same with Valkey; then CLI and Apache mod_php (parent as root, children `www-data`) | `nocopy-linux:$PHP`, `php:$PHP-apache` |
-| `./dev pie` | `pie install` (PIE 1.5.5) from the committed tree as a path repository: default, `--disable-nocopy-valkey`, `--disable-nocopy-lto`; each loads and round-trips a value | `nocopy-linux:$PHP` |
+| `./dev shm` | CLI and php-fpm share one cache by name, survive reloads and restarts, churn without misses; then the same with RESP; then CLI and Apache mod_php (parent as root, children `www-data`) | `nocopy-linux:$PHP`, `php:$PHP-apache` |
+| `./dev pie` | `pie install` (PIE 1.5.5) from the committed tree as a path repository: default, `--disable-nocopy-resp`, `--disable-nocopy-lto`; each loads and round-trips a value | `nocopy-linux:$PHP` |
 | `./dev frankenphp` | FrankenPHP classic and worker mode; then the `shm` checks under FrankenPHP | `dunglas/frankenphp:1-php8.4` |
 | `./dev symfony [version=8.*]` | Symfony bundle smoke test, alone and next to APCu; installs `symfony/framework-bundle` into `.cache/` | `nocopy-linux:$PHP` |
 | `./dev apcu` | APCu's own test suite against the polyfill; fails on any failure beyond the 13 known ones | `nocopy-linux:$PHP` |
-| `./dev drupal` | Drupal module PHPUnit tests in 3 modes: shared (CLI: copy mode), Valkey, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
+| `./dev drupal` | Drupal module PHPUnit tests in 3 modes: shared (CLI: copy mode), RESP, no shared cache. Drupal checkout kept in volume `nocopy-drupal-test` | `nocopy-drupal` |
 | `./dev tidy` | clang-tidy over the extension's C sources, checks in `.clang-tidy`; any finding fails | `nocopy-linux:$PHP` |
-| `./dev layers` | the layers' boundaries (`scripts/check-layers.sh`). Arena: include order, `layout.h` only in `arena.c`/`layout.c`, outside `arena/` only `arena/nocopy_arena.h` and no `ar_` name. Values: no module state (`nocopy_php.h`, `NOCOPY_G`) in the value units, `nocopy_value_int.h` only in them, no allocator or user-code call in `nocopy_write.c`. Above: no module state in `nocopy_kept.c|h`, no `nocopy_value_int.h` name outside the value units, no arena data operation in `nocopy.c` (in `nocopy_valkey.c` only `nocopy_clear`), Valkey only through `nocopy_valkey.h` (`nocopy.c`, `nocopy_php.h`), `*_local`/`nocopy_store_each` only in the store and the tier | host |
-| `./dev ci` | `layers tidy test novalkey asan debug leaks clang stress c fuzz "debug fuzz" "leaks fuzz" shm pie zts frankenphp symfony apcu`, stops at the first failure | |
+| `./dev layers` | the layers' boundaries (`scripts/check-layers.sh`). Arena: include order, `layout.h` only in `arena.c`/`layout.c`, outside `arena/` only `arena/nocopy_arena.h` and no `ar_` name. Values: no module state (`nocopy_php.h`, `NOCOPY_G`) in the value units, `nocopy_value_int.h` only in them, no allocator or user-code call in `nocopy_write.c`. Above: no module state in `nocopy_kept.c|h`, no `nocopy_value_int.h` name outside the value units, no arena data operation in `nocopy.c` (in `nocopy_resp.c` only `nocopy_clear`), RESP only through `nocopy_resp.h` (`nocopy.c`, `nocopy_php.h`), `*_local`/`nocopy_store_each` only in the store and the tier | host |
+| `./dev ci` | `layers tidy test noresp asan debug leaks clang stress c fuzz "debug fuzz" "leaks fuzz" shm pie zts frankenphp symfony apcu`, stops at the first failure | |
 
 ## Benchmarks
 
@@ -42,7 +42,7 @@ CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same
 | `./dev tail [workers=8] [secs=10] [scenarios]` | `bench/tail.php`: get/put latency p50..p99.99 and max under `fit`, `evict`, `contend`; APCu, nocopy copy and zero-copy (`bench/tail.php` alone: `TAIL_IDLE=n` adds n sleeping slot holders) |
 | `./dev big ["1G 4G"] [secs=20]` | `bench/big.php`: arena create time, fill until eviction, then 4 readers + 4 writers of new keys: get/put percentiles, pauses over 1/10/50 ms, MB moved per eviction round |
 | `./dev soak [minutes=60] [workers=8] [interval_s=30]` | `bench/soak.php` on a 256M arena: shifting Zipf working set, mixed sizes and TTLs, deletes, counters; one line per interval (hit %, percentiles, arena stats, worker RSS) |
-| `./dev hitratio` | `docker/hitratio-compare.sh`: read-through hit ratios of nocopy, APCu and Valkey (LRU, LFU) at equal memory over Zipf, one-off and loop workloads (~20 min) |
+| `./dev hitratio` | `docker/hitratio-compare.sh`: read-through hit ratios of nocopy, APCu and RESP (LRU, LFU) at equal memory over Zipf, one-off and loop workloads (~20 min) |
 | `./dev stampede [workers secs ttl compute_ms]` | `bench/stampede.php`: naive vs `apcu_entry` vs `nocopy_remember` |
 | `./dev sfget [bundle src dir]` | Symfony bundle's `get()` against `AbstractAdapter`'s, then its PSR-6 reads (`getItem`, `hasItem`, `getItems`) against the bare `nocopy_get`, ns per call, best of 5 (`bench/sfget.php`; CLI, so copy mode and without Symfony's lock). Needs `.cache/sf-$PHP-8`, which `./dev symfony` leaves | `nocopy-linux:$PHP` |
 | `./dev drupal-get [module dir]` | `NocopyBackend::get()` / `getMultiple()` against the bare `nocopy_get`, ns per call, best of 5 (`bench/drupal/get.php`; CLI, so copy mode). Needs the checkout `./dev drupal` leaves in `nocopy-drupal-test`; a module dir under `/src` (e.g. an older tree in `.cache/`) compares versions | `nocopy-drupal` |
@@ -67,10 +67,10 @@ usage in their headers and in [Develop, test and benchmark](../how-to/develop.md
 
 | Path | Role |
 |---|---|
-| `docker/Dockerfile` | `nocopy-linux`: official `php:<PHP>-fpm` + nginx, Valkey, git, OpenSSL headers, clang + clang-tidy + compiler-rt, pcntl, APCu and igbinary (built, not loaded). PECL extensions in all Dockerfiles come as release tarballs from `pecl.php.net/get` pinned by `ADD --checksum` (no `pecl`, no PIE): bump version and sha256 together |
+| `docker/Dockerfile` | `nocopy-linux`: official `php:<PHP>-fpm` + nginx, RESP, git, OpenSSL headers, clang + clang-tidy + compiler-rt, pcntl, APCu and igbinary (built, not loaded). PECL extensions in all Dockerfiles come as release tarballs from `pecl.php.net/get` pinned by `ADD --checksum` (no `pecl`, no PIE): bump version and sha256 together |
 | `docker/Dockerfile.debug` | `nocopy-debug`: `nocopy-linux:<PHP>` + PHP from the image's own source with `--enable-debug` in `/opt/php-debug`, first in `PATH`, igbinary built for it |
 | `docker/Dockerfile.zts` | `nocopy-zts`: `php:8.4-zts` + ext-parallel |
 | `docker/Dockerfile.drupal` | `nocopy-drupal`: `nocopy-linux:8.5` + Drupal's extensions, MariaDB, composer |
 | `docker/build.sh` | in-container build of `/src` into `/build/modules/nocopy.so` with `-Wall -Wextra -Werror` (`NOCOPY_CONFIGURE` for configure flags, `NOCOPY_ASAN=1` for sanitizers and `NOCOPY_DEBUG`) |
-| `docker/lib.sh` | sourced by the in-container scripts: the module's path (`SO`), `nocopy_flags <name> [setting=value …]` (php flags for nocopy on the arena `/nocopy-<name>`), `shm_rm <name>`, `apcu_so`, `valkey_up`, `asan_env`, `run_tests` (`TIMEOUT` seconds) |
+| `docker/lib.sh` | sourced by the in-container scripts: the module's path (`SO`), `nocopy_flags <name> [setting=value …]` (php flags for nocopy on the arena `/nocopy-<name>`), `shm_rm <name>`, `apcu_so`, `resp_up`, `asan_env`, `run_tests` (`TIMEOUT` seconds) |
 | `docker/*.sh` | the in-container scripts the commands above run |

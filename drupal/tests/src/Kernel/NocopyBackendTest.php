@@ -100,9 +100,9 @@ class NocopyBackendTest extends GenericCacheBackendUnitTestBase {
     $this->assertFalse($b->get('k'));
   }
 
-  public function testPermanentTtlOnlyWithValkey(): void {
+  public function testPermanentTtlOnlyWithRESP(): void {
     $ttl = fn (string $bin) => (fn ($expire) => $this->ttl($expire))->call($this->createCacheBackend($bin), CacheBackendInterface::CACHE_PERMANENT);
-    $this->assertSame(nocopy_shared_with() === 'valkey' ? 31536000 : 0, $ttl('render'));
+    $this->assertSame(nocopy_shared_with() === 'resp' ? 31536000 : 0, $ttl('render'));
     $this->assertSame(0, $ttl('config'));
   }
 

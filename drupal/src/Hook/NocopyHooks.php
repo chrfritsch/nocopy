@@ -15,12 +15,12 @@ class NocopyHooks {
   #[Hook('runtime_requirements')]
   public function runtimeRequirements(): array {
     $with = function_exists('nocopy_shared_with') ? nocopy_shared_with() : NULL;
-    if ($with !== 'host' && $with !== 'valkey') {
+    if ($with !== 'host' && $with !== 'resp') {
       return ['nocopy' => [
         'title' => 'nocopy',
         'value' => $with === NULL ? $this->t('Extension not loaded') : $this->t('No shared cache'),
         'severity' => RequirementSeverity::Warning,
-        'description' => $this->t('Set nocopy.shm_name (one server) or nocopy.valkey (several) in php.ini. Without it nocopy caches nothing.'),
+        'description' => $this->t('Set nocopy.shm_name (one server) or nocopy.resp (several) in php.ini. Without it nocopy caches nothing.'),
       ]];
     }
     $stats = nocopy_stats();

@@ -25,26 +25,26 @@ function nocopy_inc(string $key, int $step = 1, int $ttl = 0): int|false {}
 /** Replaces the integer $old with $new atomically. */
 function nocopy_cas(string $key, int $old, int $new): bool {}
 
-/** Removes every entry (with nocopy.valkey: every key under the prefix too). */
+/** Removes every entry (with nocopy.resp: every key under the prefix too). */
 function nocopy_clear(): bool {}
 
 function nocopy_delete(string $key): bool {}
 
-/** How many of $keys existed; with nocopy.valkey, one UNLINK. */
+/** How many of $keys existed; with nocopy.resp, one UNLINK. */
 function nocopy_delete_multiple(array $keys): int {}
 
-/** The hits as key => value; with nocopy.valkey, every local miss in one round trip. */
+/** The hits as key => value; with nocopy.resp, every local miss in one round trip. */
 function nocopy_get_multiple(array $keys): array {}
 
-/** key => value, one $ttl for all; with nocopy.valkey, one pipeline. false: some were not stored. */
+/** key => value, one $ttl for all; with nocopy.resp, one pipeline. false: some were not stored. */
 function nocopy_put_multiple(array $values, int $ttl = 0): bool {}
 
 /** Fetch, or compute once across workers and store; a user callback gets ($key, &$ttl), $ttl < 0 skips the store. $beta > 0 refreshes early (XFetch). */
 function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $beta = 1.0): mixed {}
 
 /**
- * Who sees this process's writes: "host" (every process on this machine that attached to nocopy.shm_name), "valkey" (every process on the
- * same nocopy.valkey and prefix), "none" (nocopy.shm_name not set or not attached: nothing is kept or served).
+ * Who sees this process's writes: "host" (every process on this machine that attached to nocopy.shm_name), "resp" (every process on the
+ * same nocopy.resp and prefix), "none" (nocopy.shm_name not set or not attached: nothing is kept or served).
  */
 function nocopy_shared_with(): string {}
 

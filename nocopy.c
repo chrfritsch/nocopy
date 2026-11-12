@@ -43,7 +43,7 @@ static zend_long ini_hint = 4096;
 static char *shm_name; /* nocopy.shm_name: required, the arena every process attaches to */
 static char shm_attached[64]; /* the object mapped; empty: none (nocopy_attached() false: unavailable) */
 static char off_why[400] = "the module is not started"; /* why this process has no arena */
-static const nocopy_detour_ops *proc_route = &nocopy_no_arena; /* this process's: the local store (NULL), Valkey, or off */
+static const nocopy_detour_ops *proc_route = &nocopy_no_arena; /* this process's: the local store (NULL), RESP, or off */
 #define OFF_NOTE "The cache is off in this process: fetches miss, writes and clears fail"
 static const char no_slot[] = "no worker slot: 1024 processes and threads use this cache, or this process had no file descriptor left for its liveness lock";
 static bool sapi_zero_copy;
@@ -346,7 +346,7 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "shared_arrays", s.shared_arrays);
 	add_assoc_long(return_value, "shared_arrays_used", s.shared_arrays_used);
 	add_str_or_null(return_value, "shm_name", shm_attached[0] ? shm_attached : NULL);
-	add_assoc_long(return_value, "valkey_listener", nocopy_vk_listener());
+	add_assoc_long(return_value, "resp_listener", nocopy_vk_listener());
 	add_str_or_null(return_value, "off", NOCOPY_G(off));
 }
 
@@ -612,7 +612,7 @@ static void route_thread(void)
 	NOCOPY_G(off) = on ? NULL : nocopy_attached() ? no_slot : off_why;
 }
 
-/* Where the store ops go: the local store (NULL), else no arena, else Valkey. */
+/* Where the store ops go: the local store (NULL), else no arena, else RESP. */
 static void route(void)
 {
 	proc_route = nocopy_attached() ? nocopy_vk_route() : &nocopy_no_arena;

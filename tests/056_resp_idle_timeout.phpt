@@ -1,19 +1,19 @@
 --TEST--
-nocopy.valkey: an idle connection survives Valkey's `timeout` (subscribed clients are exempt) and keeps receiving invalidations
+nocopy.resp: an idle connection survives RESP's `timeout` (subscribed clients are exempt) and keeps receiving invalidations
 --EXTENSIONS--
 nocopy
 --SKIPIF--
-<?php require __DIR__ . '/valkey_skip.inc'; ?>
+<?php require __DIR__ . '/resp_skip.inc'; ?>
 --INI--
 nocopy.shm_name=/nocopy-t056
-nocopy.valkey=127.0.0.1:6379
-nocopy.valkey_prefix=t056:
+nocopy.resp=127.0.0.1:6379
+nocopy.resp_prefix=t056:
 --CONFLICTS--
-valkey
+resp
 --FILE--
 <?php
-require __DIR__ . '/valkey.inc';
-// own short-lived connections: the timeout closes idle ones, valkey.inc's included
+require __DIR__ . '/resp.inc';
+// own short-lived connections: the timeout closes idle ones, resp.inc's included
 function cmd(string ...$a) {
     $s = fsockopen('127.0.0.1', 6379);
     $c = '*' . count($a) . "\r\n";
