@@ -4,7 +4,7 @@ Why nocopy is built the way it is, with every measurement behind each choice, an
 contributors (and their agents): read this before proposing a change in these areas, since the obvious alternative has
 often been measured already. The user-facing summary is [Design decisions](../explanation/design-decisions.md).
 
-Numbers are from Linux in Docker on arm64 unless noted ([benchmarks](../reference/benchmarks.md)). History is in `git log`.
+Numbers are from Linux in Docker on arm64 unless noted ([benchmarks](benchmarks.md)). History is in `git log`.
 
 ## Memory lifetime
 

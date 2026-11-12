@@ -1,356 +1,221 @@
-# Benchmark results
+# Benchmarks
 
-**In short:**
+How nocopy compares with APCu, OPcache files, Redis/Valkey and Drupal's database cache, and what that means for your app.
+The complete runs, with every configuration and caveat, are in the [benchmark log](../internals/benchmarks.md).
+
+## In short
 
 - **Reads cost the same whatever the size.** An int, a 100-byte string and a 1,000-row array each take about 12 ns. APCu
   needs 28 ns for the int and 200 µs for the array, because it copies every element.
-- **Many workers don't slow it down.** Reads take no lock: 8 workers read 350 M values per second, against 3.7 M with APCu.
-- **Writes are 2-3x faster than APCu**, and writers to different parts of the cache don't wait for each other.
+- **Many workers don't slow it down.** Reads take no lock: 8 workers read 350 million values per second, against 3.7 million
+  with APCu.
+- **Writes are 2-3x faster than APCu.**
 - **Whole apps:** a cache-heavy Symfony page goes from 25% to about 100% of what the server can do for a page with no cache
-  at all. Drupal 11 gains 1.3-2.6x, mostly because every cache bin leaves the database.
+  at all. Drupal 11 serves 1.3-2.6x the requests, mostly because every cache bin leaves the database.
 - **No gain** for pages that barely touch the cache.
 
-The details, with how to reproduce each number, follow.
+**Setup:** Linux in Docker on an Apple M3 Pro (arm64, 11 CPUs for the VM), PHP 8.5 with production settings, November
+2026. The read results hold on AWS Graviton4. Numbers on dedicated x86_64 hardware are still to come. A VM adds noise, so
+small differences (under ~5%) mean nothing.
 
-Linux in Docker on arm64, PHP 8.5, release builds. Reproduce with `./dev bench`, `./dev sfbench` and `./dev drupal-bench`
-([how](../how-to/develop.md#benchmark)). Numbers on a dedicated x86_64 box are still to come ([status](../status.md)).
+## Single operations
 
-## Micro benchmarks (`./dev bench`)
+Time per call, lower is better. "Copy mode" is how CLI scripts and FrankenPHP workers read; "zero-copy" is how php-fpm
+requests read ([the two modes](../explanation/how-it-works.md#zero-copy-and-copy-mode)).
 
-| | APCu | nocopy (copy) | nocopy (zero-copy) |
+| | APCu | nocopy, copy mode | nocopy, zero-copy |
 |---|---:|---:|---:|
-| fetch int / 100 B string | 28.2 / 34.4 ns | 11.6 / 19.5 ns | 11.0 / 11.5 ns |
-| fetch array, 1k rows | 200 µs | 13 ns (kept copy) | **12 ns** |
-| store int / 100 B string | 55.3 / 86.0 ns | 27.3 / 28.5 ns | same as copy |
-| store array, 1k rows | 191 µs | 59 µs | same as copy |
-| store object | 329 ns | 174 ns | same as copy |
-| inc counter | 22.6 ns | 11.1 ns | same as copy |
-| parallel fetch int, 8 workers | 3.7 M ops/s | 266 M ops/s | **350 M ops/s** |
-| parallel store int, 8 workers (own key each) | 10.4 M ops/s | 141 M ops/s | same as copy |
-| 4 readers fetch int while 4 writers store | 6.9 M ops/s | 134 M ops/s | same as copy |
+| Read an int | 28.2 ns | 11.6 ns | 11.0 ns |
+| Read a 100-byte string | 34.4 ns | 19.5 ns | 11.5 ns |
+| Read a 1,000-row array | 200 µs | 13 ns ¹ | **12 ns** |
+| Write an int | 55.3 ns | 27.3 ns | 27.3 ns |
+| Write a 1,000-row array | 191 µs | 59 µs | 59 µs |
+| Write an object | 329 ns | 174 ns | 174 ns |
+| Increment a counter | 22.6 ns | 11.1 ns | 11.1 ns |
 
-Host: Apple M3 Pro, Docker VM with 11 CPUs and 16 GB. Reads 2026-11-06, writes (`./dev bench write contend mixed`) 2026-11-08. Copy mode reuses a kept private copy of an unchanged entry (`nocopy.local_size`): that is what the bench's
-repeated fetch measures; the first fetch of 1k rows costs ~68 µs.
+¹ A repeated read reuses the kept copy (`nocopy.local_size`); the first read of 1,000 rows in copy mode takes ~68 µs.
 
-**Cross-check on Graviton4** (AWS c8g.xlarge, Kubernetes pod capped at 3 vCPU, PHP 8.5.12, same `docker/bench.sh`, 2026-11-05):
-absolute times are higher for both, the ratios hold.
+**With 8 workers at once**, in operations per second, higher is better:
 
-| | APCu | nocopy (zero-copy) | ratio here / above |
-|---|---:|---:|---:|
-| fetch int | 95.1 ns | 22.6 ns | 4.2x / 2.2x |
-| fetch array, 1k rows | 264 µs | 22.9 ns | ~11,500x / ~15,500x |
-| fetch array, 10k rows | 2.96 ms | 22.9 ns | size still irrelevant |
-| parallel fetch int, 8 workers | 3.6 M ops/s | 104 M ops/s | 29x / 58x (3 vCPU cap) |
-| 4 readers + 1 writer, reader throughput | 8.1 k ops/s | 1.63 M ops/s | |
+| | APCu | nocopy |
+|---|---:|---:|
+| Reads (same int) | 3.7 M | **350 M** |
+| Writes (each worker its own key) | 10.4 M | **141 M** |
+| 4 readers while 4 writers write | 6.9 M | **134 M** |
 
-## Symfony (`./dev sfbench`)
+**Reading several keys at once** with `nocopy_get_multiple()` is about twice as fast as a loop: 10 keys 142 ns instead of
+292 ns, 100 keys 1.3 µs instead of 2.8 µs.
 
-`bench/sfapp` behind nginx + php-fpm, 8 static workers, `ab`, median of 3 (2026-11-06). PHP set up as Symfony's
-[performance guide](https://symfony.com/doc/current/performance.html) recommends: OPcache sized up, timestamps off, realpath
-cache, preload, `--classmap-authoritative`, `.container.dumper.inline_factories`. One run, evening of 2026-11-06, with objects
-stored as graph nodes (the morning's run before them: nocopy 15,295 / 16,285 / 17,467 / 8,964, APCu within 5% of today).
+Reproduce: `./dev bench`.
 
-| req/s | APCu (Symfony's marshaller) | APCu (no marshaller) | nocopy (bundle) |
-|---|---:|---:|---:|
-| cache-heavy page (`products?page=3`) | 3,167 | 4,542 | **17,430** |
-| cache-heavy page (`product/77`) | 3,205 | 4,416 | **15,801** |
-| no cache (`hello`) | 14,521 | 18,182 | 16,660 |
-| validator (`validate`)¹ | 9,100 | 9,347 | 9,047 |
-| `products` as a share of `hello` | 22% | 25% | **~100%** |
-| `product/77` as a share of `hello` | 22% | 24% | **95%** |
+## Symfony
+
+A Symfony app behind nginx and php-fpm (8 workers), with the PHP settings from Symfony's performance guide. Requests per
+second, higher is better. `hello` uses no cache at all: it is the most this server can do.
+
+| req/s | APCu (raw pool, no marshaller) | nocopy (bundle) |
+|---|---:|---:|
+| Cache-heavy page (`products?page=3`) | 4,542 | **17,430** |
+| Cache-heavy page (`product/77`) | 4,416 | **15,801** |
+| No cache (`hello`) | 18,182 | 16,660 |
+| Validator page (`validate`) | 9,347 | 9,047 |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="symfony-ceiling-dark.svg">
   <img alt="Symfony cache-heavy pages: nocopy 17,430 and 15,801 req/s, about all of an empty page (~17,000); APCu 4,542 and 4,416 req/s, 25% and 24%" src="symfony-ceiling.svg" width="720">
 </picture>
 
-Chart from `bench/sfchart.py` (numbers inside it). `hello` returns `ok` with no cache: it is what the host serves with the cache costing nothing. nocopy's cache-heavy pages
-reach 95-100% of it (`products` above nocopy's own `hello` is run-to-run noise, ~5%), so a faster nocopy has nothing left to add: the ratio to APCu is capped by the host, not by nocopy.
-¹ A later run, with the bundle putting nocopy in front of Symfony's system pools. Before, those pools ran on PHP files alone
-(Symfony chains APCu in front only when APCu is loaded) and `validate` was 12-20% below APCu: 9,286 / 10,252 / 8,182. Pages that barely touch the cache gain nothing. Before the production settings (2026-11-05): 3,815 (APCu) vs 8,924 req/s
-(nocopy) on `products`, with a `hello` ceiling of ~9,400.
+**What it means:** with nocopy, a page that reads big cached arrays is about as fast as a page that reads nothing; with
+APCu it runs at a quarter of that. Pages that barely use the cache (`validate`) are the same with both.
 
-### Against OPcache files (`PhpFilesAdapter`)
+Reproduce: `./dev sfbench`.
 
-Symfony's `PhpFilesAdapter` (its system pools' backend) writes each value as a PHP file; OPcache then serves the arrays from
-shared memory without a copy too. Same `./dev sfbench`, a third pool on it (`RAW=files`), one run 2026-11-07:
+### FrankenPHP worker mode
 
-| req/s | APCu (raw) | PHP files (OPcache) | nocopy (raw) |
+The same app, booted once per worker, 8 workers. nocopy runs in copy mode here and reuses its kept copies.
+
+| req/s | APCu | PHP files (OPcache) | nocopy |
 |---|---:|---:|---:|
-| `hello` | 14,922 | 15,690 | 16,790 |
-| `products?page=3` | 3,985 | 14,348 | 14,534 |
-| `product/77` | 4,118 | 14,549 | 14,910 |
+| Cache-heavy page (`products?page=3`) | 3,608-3,864 | 15,899-16,320 | **16,140-17,308** |
+| Cache-heavy page (`product/77`) | 3,559-3,777 | 17,634-18,208 | **17,113-17,325** |
+| No cache (`hello`) | 17,354-18,111 | 17,588-18,282 | 18,396-18,560 |
 
-Both reach the `hello` ceiling: on a page that reads one big array, OPcache files are as good. Where they differ
-(`./dev opcache`: both zero-copy, one `php -S` request, `opcache.file_update_protection=0` so new files are cached at once;
-two runs, equal within 10%):
+**What it means:** keep `nocopy.local_size` large enough for your hot data. With it turned off (`0`), the cache-heavy pages
+drop to 5,300-6,000 req/s, still 1.5x APCu.
+
+Reproduce: `./dev fpbench`.
+
+### Compared with OPcache files (`PhpFilesAdapter`)
+
+Symfony can also cache values as PHP files that OPcache then serves without copying. On a page that only reads, both reach
+the server's limit (about 14,500 req/s in that run). The difference is in single operations:
 
 | | PHP file in OPcache | nocopy |
 |---|---:|---:|
-| fetch array, 1k rows | 52 ns | 13 ns |
-| fetch 1 of 1,000 small keys | 112 ns | 43 ns |
-| store a 1-row array (write, invalidate, compile on next include) | 32-39 µs | 0.11 µs |
-| store a 1k-row array | 2.3 ms | 73 µs |
-| OPcache memory wasted per rewrite of the 1k-row array | 385 KB | 0 |
+| Read a 1,000-row array | 52 ns | 13 ns |
+| Read 1 of 1,000 small keys | 112 ns | 43 ns |
+| Write a 1-row array | 32-39 µs | 0.11 µs |
+| Write a 1,000-row array | 2.3 ms | 73 µs |
+| OPcache memory wasted per rewrite of the 1,000-row array | 385 KB | 0 |
 
-- Each rewrite leaves the old script in OPcache as wasted memory; at `opcache.max_wasted_percentage` (default 5%) OPcache
-  restarts and every script of the app is compiled again. Files also never evict and are per server.
-- So OPcache files fit data written once per deploy (config, routes, metadata: what Symfony uses them for); nocopy fits
-  data written at runtime, and still reads 2.5-4x faster.
+**What it means:** OPcache files suit data written once per deploy (config, routes, metadata). Every rewrite wastes OPcache
+memory, and when too much is wasted OPcache restarts and recompiles the whole app. nocopy suits data written at runtime.
 
-### FrankenPHP worker mode (`./dev fpbench`)
+## Drupal 11
 
-The same app booted once per worker (`frankenphp_handle_request()` loop), FrankenPHP 1.13.5 on PHP 8.5 ZTS, 8 workers, same
-OPcache settings, `ab`, median of 3; two runs on 2026-11-07. nocopy runs in [copy mode](../explanation/how-it-works.md#zero-copy-and-copy-mode)
-here: a value fetched twice is kept as a private copy (`nocopy.local_size`) and reused while the entry is unchanged.
+A Drupal site with 2,000 nodes, php-fpm with 8 workers, MariaDB, production PHP settings. Requests per second, higher is
+better.
 
-| req/s, run 1 / run 2 | APCu (no marshaller) | PHP files (OPcache) | nocopy | nocopy, `local_size=0` |
-|---|---:|---:|---:|---:|
-| `hello` | 17,354 / 18,111 | 18,282 / 17,588 | 18,396 / 18,560 | 16,304 / 18,658 |
-| `products?page=3` | 3,864 / 3,608 | 16,320 / 15,899 | **17,308 / 16,140** | 5,974 / 5,873 |
-| `product/77` | 3,777 / 3,559 | 18,208 / 17,634 | **17,325 / 17,113** | 5,906 / 5,324 |
-| `validate` | 13,194 / 12,131 | 12,628 / 13,050 | 13,843 / 13,791 | 12,573 / 12,149 |
+### One server
 
-- nocopy's cache-heavy pages reach 87-94% of `hello` (APCu 19-22%): in long-running workers the kept copy makes a repeated
-  fetch cost what zero-copy does under php-fpm. Through Symfony's marshaller (default pool) the same: 16,143-17,617 vs APCu 2,297-2,540.
-- Without kept copies every request copies the 2,000-row array out: 5.3-6.0k req/s, still 1.5x APCu, which unserializes it.
-- `PhpFilesAdapter` keeps what it included in the pool object, which lives as long as the worker: as fast here, with the
-  same limits on writes as under php-fpm ([above](#against-opcache-files-phpfilesadapter)).
+| req/s | Drupal as shipped | nocopy module |
+|---|---:|---:|
+| Anonymous front page | 4,671 | **12,145** |
+| Logged-in front page | 797 | **1,365** |
+| Logged-in node page | 835 | **1,122** |
+| Logged-in JSON:API list of 20 articles | 1,200 | **2,084** |
+| Database queries per request, anonymous / logged-in | 7 / 18-31 | **0 / 7** |
+| Editor: save / edit form / view after save | 31 / 48 / 42 ms | **21 / 32 / 19 ms** |
 
-## Drupal 11: where the gain comes from (`./dev drupal-bench`)
+### Where the gain comes from
 
-2,000 nodes, php-fpm 8 workers, MariaDB, Valkey on the same host; median of 3 runs on the evening of 2026-11-06
-([raw numbers](../../bench/results-drupal/2026-11-06-prod)). Production PHP as for Symfony (OPcache sized up, timestamps off,
-realpath cache) and `composer dump-autoload --optimize` (not `--classmap-authoritative`: Drupal adds module namespaces at
-runtime). igbinary in every config except stock, nocopy configs load the `apcu_*` polyfill as the Drupal module does.
-Pages: the front page, a node, a term and a JSON:API list of 20 articles (`/jsonapi/node/article?page[limit]=20`). Each row
-changes one thing against the one above it:
+Each step changes one thing:
 
-| | anonymous `/` | logged-in `/` / node / JSON:API | DB statements anon / logged-in | first request after fpm restart | Drush save visible on the web |
-|---|---:|---:|---:|---:|:---:|
-| stock: DB bins, APCu fast layer | 4,671 req/s | 797 / 835 / 1,200 req/s | 7 / 18-31 | 225 ms | yes |
-| apcu-all: all bins in APCu, tags in DB | 5,883 req/s | 1,098 / 1,038 / 1,382 req/s | 5 / 10-13 | 629 ms | **no** |
-| nocopy-all-dbtags: all bins in nocopy, tags in DB | 8,009 req/s | 1,269 / **1,141** / 1,777 req/s | 5 / 10-13 | 203 ms | yes |
-| nocopy-all: bins and tags in nocopy | **12,145 req/s** | **1,365** / 1,122 / **2,084 req/s** | **0 / 7** | 201 ms | yes |
+| Step | Anonymous | Logged-in node |
+|---|---:|---:|
+| Drupal as shipped (database cache, APCu for 3 bins) | 4,671 | 835 |
+| All cache bins in APCu | 5,883 (+26%) | 1,038 (+24%) |
+| All cache bins in nocopy (no copying on read) | 8,009 (+36%) | 1,141 (+10%) |
+| Cache tags in nocopy too | 12,145 (+52%) | 1,122 (-2%) |
 
-- **Bins out of the database** (stock → apcu-all): +26% anonymous, +38% / +24% / +15% logged-in. Any memory cache gets this.
-- **No copy on read** (apcu-all → nocopy-all-dbtags): +36% anonymous, +16% / +10% / +29% logged-in. JSON:API gains most:
-  its cached normalizations are objects (`CacheableNormalization`), rebuilt from their stored properties instead of unserialized.
-- **Tags out of the database** (nocopy-all-dbtags → nocopy-all): +52% anonymous (the page cache hit needs no query at
-  all); logged-in +8% / -2% / +17%.
-- apcu-all is only a measuring point: Drush and cron write to their own APCu, so their saves never reach php-fpm, and
-  the cache starts empty after every fpm restart. What nocopy adds over it is one cache for every process that survives
-  restarts, which is what makes moving all bins off the database safe.
+**What it means:** moving the cache out of the database brings the most. That is only safe because php-fpm, Drush and cron
+share one nocopy cache that survives restarts: with "all bins in APCu", a Drush save never reaches the web, and the cache
+is empty after every php-fpm restart.
 
-Against the morning's runs ([raw](../../bench/results-drupal/2026-11-06): no production PHP, objects still serialized),
-stock gained most from the production settings (anonymous 3,814 -> 4,671 req/s, logged-in node 702 -> 835), so nocopy-all's lead
-over it shrank from 2.9x / 1.5x to 2.6x / 1.3x (anonymous `/` / logged-in node).
+### Several servers, against drupal/redis
 
-Editor loop under reader load (p50; save / edit form / view after save) and readers served meanwhile:
-
-| | stock | apcu-all | nocopy-all-dbtags | nocopy-all |
-|---|---:|---:|---:|---:|
-| editor | 31 / 48 / 42 ms | 31 / 34 / 21 ms | 28 / 33 / 20 ms | **21 / 32 / 19 ms** |
-| readers | 508 req/s | 631 req/s | 742 req/s | **770 req/s** |
-
-Without the `apcu_*` polyfill Drupal's class loader and FileCache find no `apcu_fetch()` and Composer checks the file system
-for every class (strace: 807 `faccessat` per logged-in request, 65 with the polyfill, 68 with APCu). nocopy-all without and with
-it, median of 3 interleaved runs in the morning's setup (req/s): logged-in `/` 986 -> 1,290, node 1,042 -> 1,266, term 1,039 -> 1,326; anonymous `/`
-8,536 -> 11,568, node 9,180 -> 12,803, term 10,551 -> 12,159.
-
-Not in the table (a full run of all configs in the morning's setup, [full](../../bench/results-drupal/2026-11-06/full), stock there
-4,221 / 906 req/s): stock + igbinary is the same as stock (4,407 / 1,009 req/s), and so is nocopy as chainedfast's fast layer
-(`nocopy-fast` 4,454 / 997 req/s). Chainedfast asks the database for each bin's last write on every request, and those bins were
-never the bottleneck.
-
-### Memory per php-fpm worker
-
-Same runs (each config measures this before its throughput runs; `MEM_ONLY=1` stops there): 8 workers, after warm-up and
-400 anonymous + 400 logged-in requests to each of the 4 pages, from `/proc/<pid>/smaps_rollup`. Private = pages only that
-worker holds (its PHP heap, copies of cached values); PSS adds its share of the pages it shares (opcache, the cache's
-shared memory). Three runs, equal to 0.1 MB.
-
-| Config | Private MB / worker | PSS MB / worker | PSS, 8 workers | PHP peak per request | Valkey RSS |
-|---|---|---|---|---|---|
-| stock (APCu for 3 bins, the rest in MariaDB) | 5.2 | 13.3 | 106.5 | 3.5 | |
-| apcu-all | 4.6 | 13.6 | 108.4 | 3.5 | |
-| redis (drupal/redis 1.11) | 4.1 | 12.2 | 97.8 | 3.5 | 16.1 |
-| nocopy-all | **3.5** | 12.8 | 102.8 | **1.8** | |
-| nocopy-valkey | 3.5 | 12.7 | 101.9 | 1.8 | 16.5 |
-
-nocopy keeps 1.1 MB less private memory per worker than APCu and 0.6 MB less than drupal/redis, and halves PHP's peak per
-request (php-fpm's `last request memory`, in 2 MB chunks): fetched values are not copied into the worker's heap. PSS includes
-each worker's share of the arena (19.7 MB in use after warm-up, 2.5 MB per worker), which is why it is above drupal/redis's.
-The arena was 11.1 MB in the morning's runs (3 pages, objects serialized with igbinary): object graphs take more room than
-igbinary, which also stores a repeated string once (an `ArrayObject` of 1,000 equal 100-byte strings: 5 KB serialized, 144 KB
-as a graph).
-
-## Drupal 11, several servers: nocopy + Valkey vs drupal/redis
-
-Same runs. All bins and tags shared through Valkey on the same host. Baseline: drupal/redis 1.11 with phpredis and
-igbinary, APCu chainedfast in front of bootstrap/config/discovery.
+All bins and cache tags shared through Valkey (or Redis) on the same host. drupal/redis with phpredis and igbinary, and
+APCu in front of the small bins, as recommended.
 
 | | drupal/redis | nocopy + Valkey |
 |---|---:|---:|
-| anonymous `/` | 4,837 req/s | **12,538 req/s** |
-| logged-in `/` / node / JSON:API | 642 / 634 / 1,159 req/s | **1,387 / 1,152 / 1,754 req/s** |
-| editor: save / edit form / view after save (p50) | 27 / 41 / 32 ms | **22 / 32 / 21 ms** |
-| readers served during editing | 395 req/s | **776 req/s** |
-| first request after fpm restart | 217 ms | 200 ms |
-| second server joining: first request / p50 of requests 6-30 | 222 / 9.4 ms | 221 / **5.7 ms** |
+| Anonymous front page | 4,837 req/s | **12,538 req/s** |
+| Logged-in front page / node / JSON:API | 642 / 634 / 1,159 req/s | **1,387 / 1,152 / 1,754 req/s** |
+| Editor: save / edit form / view after save | 27 / 41 / 32 ms | **22 / 32 / 21 ms** |
+| A second server joining: typical request after warm-up | 9.4 ms | **5.7 ms** |
 
-Both have 0 / 7 database statements per anonymous / logged-in request: the difference is reading local zero-copy copies
-instead of a network round trip and unserialize per item. drupal/redis 2.0-alpha2 is no faster than 1.11 (morning's full run: 2,826 / 636
-vs 2,750 / 532 req/s). A web save on server A and a Drush save both show up on server B in both setups.
+**What it means:** both run the same database queries; nocopy reads local copies without a network round trip or
+unserializing.
 
-## Tail latency (`./dev tail`)
+### Memory per php-fpm worker
 
-`bench/tail.php`: 8 forked CLI workers time every get and put (log histogram, ~4% resolution), 10 s per scenario, 64M
-memory each, same keys and values for both (3 in 4 a 500-byte string, 1 in 4 a 10-row array: 600 B / 4.5 KB in nocopy).
-nocopy in copy mode (CLI); 2026-11-07, Docker on arm64 (11 cores), second of two runs, p99.99 moved up to 1.6x between them.
-
-| µs, get / put | | p50 | p99 | p99.9 | p99.99 | ops/s |
-|---|---|---:|---:|---:|---:|---:|
-| **fit**: Zipf reads, keys fill half of nocopy, 1% rewritten | APCu | 0.4 / 2.5 | 6.6 / 3,846 | 66 / 6,469 | 326 / 9,976 | 2.0 M / 20 k |
-| | nocopy | 0.3 / 0.6 | **3.2 / 7.8** | **7.8 / 85** | **68 / 422** | 7.1 M / 71 k |
-| **evict**: read-through over 1.5x nocopy's memory, 20% rewritten | APCu¹ | 0.6 / 1.1 | 28 / 1,617 | 58 / 4,016 | 131 / 6,469 | 0.56 M / 113 k |
-| | nocopy (3.7 M evicted) | 0.5 / 0.6 | **4.1 / 48** | **10 / 194** | **66 / 597** | 3.6 M / 1.0 M |
-| **contend**: 4 readers, 4 writers on 64 hot 100-row arrays | APCu | 22 / 37 | 78 / 163 | 202 / 2,008 | 1,483 / 5,209 | 160 k / 106 k |
-| | nocopy | 11 / 7.5 | 53 / 30 | 211 / 163 | 1,763 / 1,689 | 308 k / 379 k |
-
-- APCu's puts wait behind its write lock while readers run: p99 of 1.6-3.8 ms. nocopy's stay under 50 µs at p99.
-- **Eviction** costs nocopy's gets nothing visible (p99.9 8 -> 10 µs) and its puts 0.2 -> 0.6 ms at p99.99.
-- **Contention** is where nocopy is no better at the far tail: 1-1.8 ms at p99.99 for both ops, as APCu's reads. With
-  4 workers instead of 8 it drops to 0.15-0.2 ms (APCu 0.3 ms); not the shard lock: readers take none, and 8 processes timing a pure-PHP op without any cache show the same tail in this VM (p99.99 1.42 ms at 8 workers, 0.14 ms at 4; 2026-11-11).
-- Max is 2-30 ms for everyone in every scenario: VM scheduling, not the store. Bare metal is still to come.
-- Zero-copy (one `php -S` request per run) gives the same get percentiles but evicts even in **fit**: each 10 s request keeps
-  up to `nsegs/4` segments pinned until it ends ([pins](../internals/architecture.md#reads-lock-free-and-pins)), 8 of them pin the arena. php-fpm requests are short.
-
-¹ APCu stores the arrays serialized (smaller), so the same keys fit and it never expunged: its rows show no eviction cost.
-
-### Many workers
-
-`reclaim()` ORs every claimed worker slot's pin bitmap before it frees a segment, so its cost grows with processes. The
-arena has at most 256 segments (bigger arenas get bigger segments), so a bitmap is 4 words and 1,024 slots are 32 KB to
-read. Measured 2026-11-07 with `TAIL_IDLE=n ./dev tail`-style runs: 8 busy workers plus n processes that hold a slot and sleep.
-
-| put p99.99, µs | idle 0 | 56 | 248 | 1,000 |
-|---|---:|---:|---:|---:|
-| 64M, evict | 921 | 710 | 1,360 | 1,764 |
-| 1G, rewrites (no eviction) | 163 | 262 | 597 | 710 |
-| 1G again, two runs each: slots only / slots + idle pins | 163-441 | | | 185-326 / 441-597 |
-
-p99, p99.9 and throughput stay flat in every row. Slots alone cost nothing measurable; idle processes that also pin (CLI
-workers between calls: php-fpm drops pins at request end) add at most ~1.5x at p99.99, inside the run-to-run spread.
-`./dev sfbench` with 256 fpm workers and 64 concurrent requests gives the same req/s as with 8 (nocopy 16,706 / 15,418 on
-`products` / `product/77`, APCu raw 4,545 / 4,320).
-
-## Soak (`./dev soak`)
-
-`bench/soak.php`: 8 long-lived CLI workers (copy mode) on a 256M arena, one line per minute. Per op 88% read-through gets
-(Zipf; the key set shifts every 5 minutes, a third of it stays), 8% puts, 2% deletes, 2% `nocopy_inc`; values 100 B-20 KB
-strings and arrays, 0.5-2 MB on cold keys; TTL none / 30 s / 300 s. 2026-11-07, Docker on arm64.
-
-**Heavy churn**, key set 2x the arena, 50 minutes (stopped there: flat since minute 2), first vs last 10 minutes:
-
-| | hit % | gets/s | get p99.9 | put p99 / p99.99 | used MB / entries | worker private RSS |
-|---|---:|---:|---:|---:|---:|---:|
-| minutes 2-11 | 81.2 | 1.99 M | 48 µs | 137 µs / 1.37 ms | 179 / 24.1 k | 22.9 MB |
-| minutes 41-50 | 81.1 | 1.96 M | 49 µs | 138 µs / 1.50 ms | 179 / 23.9 k | 23.0 MB |
-
-No leak in long-lived copy-mode workers, no fragmentation building up, 0 lock steals. ~370,000 misses/s are each re-put and
-evict an entry; merge moves about as many bytes forward (~2.8 GB/s), which holds put p99 at ~137 µs. Put max was 13-37 ms
-per minute (VM), once 160 ms.
-
-**TTLs and a read-only stretch**, key set half the arena (`SOAK_FP=0.5`), writes stopped at minute 6 (`SOAK_RO_AT=6`):
-
-| minute | hit % | gets/s | used MB | entries | expired |
-|---:|---:|---:|---:|---:|---:|
-| 5 | 97.6 | 2.38 M | 156.7 | 21,270 | 0 |
-| 6 (writes stop) | 97.6 | 2.29 M | 144.3 | 19,556 | 239 |
-| 8-10 | 66.5 | 4.75 M | 144.3 | 19,556 | 0 |
-
-- Expiry runs only on writes (each write steps its shard's expiry cursor; a failed allocation runs a large step before any
-  eviction). Without writes, expired entries keep their bytes and count in `entries`, and reads just miss them. The memory is
-  reserved up front anyway, and the next writes expire before they evict.
-- With 8% rewrites (each key rewritten ~10 times a second) live bytes stay at 55-60% of the arena and merge still evicts:
-  an overwritten copy is dead space until its segment is compacted (as in [hit ratio](#against-apcu-and-redis)).
-  Most expiring entries were evicted before their TTL passed (`expired` in the hundreds, `evicted` ~400k a minute).
-
-## Large arenas (`./dev big`)
-
-`bench/big.php`: fill the arena (3 in 4 a 500-byte string, 1 in 4 a 10-row array) until it evicts, then 4 readers (skewed
-over the stored keys) and 4 writers of new keys, so every write evicts, for 20 s. 2026-11-07, Docker on arm64 (16 GB VM).
-
-| | 256M | 1G | 2G | 4G | 8G¹ |
-|---|---:|---:|---:|---:|---:|
-| segment size | 1 MB | 4 MB | 8 MB | 16 MB | 32 MB |
-| create (first process) / attach | 37 / 8 ms | 88 / 7 ms | | 321 / 7 ms | 523 / 6 ms |
-| fill until eviction | 0.2 s | 0.9 s | | 4.2 s | 8.9 s |
-| gets/s, get p99.99 | 6.3 M, 51 µs | 4.2-4.5 M, 71-89 µs | 3.7 M, 93 µs | 3.4-3.7 M, 97-149 µs | 0.9-1.2 M, 1.1-1.5 ms |
-| eviction rounds/s, MB moved per round | 438, 0.6 | 107-111, 3.3-3.5 | 51, 7.3 | 23, 14.6 | 4-5, 24-26 |
-| puts over 10 ms / over 50 ms (20 s) | | 446 / 0 | 2,059 / 0 | 1,860 / 0-7 | 333-391 / 313-376 |
-| put max | 21 ms | 21-25 ms | 37 ms | 51-111 ms | 239-354 ms |
-
-- **An eviction round holds its shard's lock for as long as it takes to move up to a segment's worth of entries**, so
-  writers to that shard waited in proportion to the segment size: ~10-25 ms at 1G, up to ~50-110 ms at 4G. Reads never wait
-  (no get over 50 ms at any size up to 4G). The table above is from before segments were capped at 4 MB.
-- **Since segments stop at 4 MB** (bigger arenas get more of them), 2G and 4G behave like 1G: 4 MB segments, ~3.7 MB moved
-  per round, ~95 rounds/s; puts over 10 ms 501 (2G) / 646-658 (4G), none over 50 ms, put max 26-42 ms; put p99.99 4.6-4.8 ms
-  (more, shorter rounds); gets 4.1-4.2 M/s, get p99.99 89-93 µs. Create 131 ms (2G), 255-280 ms (4G).
-- Create time is `posix_fallocate` of the whole arena, ~65 ms per GB, once per server start. Attaching costs nothing.
-- ¹ 8G does not fit this VM: 1.7 GB of swap was in use during the run, so its slower reads and longer pauses are not the store alone.
-
-## Batches (`nocopy_get_multiple` / `put_multiple`), one host
-
-| | PHP loop of single calls | `*_multiple` |
+| | Private memory per worker | PHP peak per request |
 |---|---:|---:|
-| get 10 keys | 292 ns | 142 ns |
-| get 100 keys | 2.8 µs | 1.3 µs |
-| put 100 keys | 9.3 µs | 8.3 µs |
+| Drupal as shipped | 5.2 MB | 3.5 MB |
+| drupal/redis | 4.1 MB | 3.5 MB |
+| nocopy | **3.5 MB** | **1.8 MB** |
 
-## Hit ratio
+Fetched values are not copied into the worker's memory, so each worker uses less. The cache itself used 19.7 MB of shared
+memory after warm-up.
 
-`bench/hitratio.php` measures read-through hit ratios under Zipf and loop workloads (optionally next to a few hot big values, which load some shards more than others); results back the eviction choices in
-[Design decisions](../internals/design-decisions.md#eviction).
+Reproduce: `./dev drupal-bench`.
 
-### Twitter traces
+## Response times under load
 
-`./dev trace` replays production traces with TTLs (Twitter, OSDI'20; cluster4: TTLs 60 s-1 d mixed, cluster42: 300/600 s)
-read-through: every get or set is a get, a miss puts the value with the key's TTL. The clock is the trace's (libfaketime),
-so entries expire as they did in production. libCacheSim's `cachesim` runs the same requests through LRU, SIEVE, S3-FIFO,
-LeCaR and ARC at the same byte size; it counts key + value bytes only, nocopy's sizes include its slot tables and block
-headers. cachesim prints miss ratios, `bench/trace.php` hit ratios. No results yet.
+8 CLI workers time every read and write for 10 seconds. Microseconds, read / write; lower is better. p99 means 99% of
+operations were faster.
 
-### Against APCu and Redis
+| Scenario | | p50 | p99 | p99.9 |
+|---|---|---:|---:|---:|
+| Data fits in memory, 1% rewritten | APCu | 0.4 / 2.5 | 6.6 / 3,846 | 66 / 6,469 |
+| | nocopy | 0.3 / 0.6 | **3.2 / 7.8** | **7.8 / 85** |
+| 1.5x more data than memory, 20% rewritten | APCu | 0.6 / 1.1 | 28 / 1,617 | 58 / 4,016 |
+| | nocopy | 0.5 / 0.6 | **4.1 / 48** | **10 / 194** |
+| 4 readers and 4 writers on the same 64 arrays | APCu | 22 / 37 | 78 / 163 | 202 / 2,008 |
+| | nocopy | 11 / 7.5 | **53 / 30** | 211 / 163 |
 
-`./dev hitratio`: the same request sequence against each store, each given the same memory (`nocopy.shm_size`,
-`apc.shm_size`, Valkey 8.1 `maxmemory`, which uses the same eviction as Redis 7.2). 500-byte values, read-through
-(get, put on a miss), hit % after warm-up. Footprint (`fp`) = distinct keys' bytes / memory, `ohw` = one-off puts per
-request, `w` = share of hits rewritten.
+**What it means:** with APCu, writes wait for readers and take milliseconds at p99; nocopy's stay under 50 µs. Evicting
+under memory pressure barely shows. At the extreme tail (1 in 10,000) both take 1-2 ms when 8 workers compete; the same
+happens without any cache in this VM, so that is the VM's scheduler.
 
-| Workload | Memory | nocopy | APCu | Valkey LRU | Valkey LFU |
-|---|---|---|---|---|---|
-| Zipf, fp 1.5 | 32M | 94.6 | 86.7 | 96.1 | 96.2 |
-| | 64M | 94.1 | 87.1 | 96.4 | 96.4 |
-| Zipf, fp 1.5, 0.5 one-off puts | 32M | 89.8 | 72.5 | 80.6 | 91.7 |
-| | 64M | 91.6 | 73.6 | 82.4 | 90.7 |
-| Zipf, fp 3 | 32M | 87.2 | 78.0 | 87.7 | 89.1 |
-| | 64M | 86.3 | 79.1 | 88.5 | 89.6 |
-| Zipf, fp 1.5, 20% of hits rewritten | 32M | 91.4 | 86.7 | 96.1 | 96.2 |
-| | 64M | 90.9 | 87.1 | 96.4 | 96.5 |
-| Loop, fp 1.1 | 32M | 72.0 | 0 | 100 | 100 |
-| | 64M | 76.2 | 0 | 100 | 100 |
-| Loop, fp 1.5 | 32M | 28.8 | 0 | 48.9 | 63.9 |
-| | 64M | 49.3 | 0 | 37.6 | 64.5 |
+Many processes don't slow it down: with 1,000 idle processes attached, or 256 php-fpm workers, throughput stays the same.
 
-- **APCu** empties the whole cache when it is full (`apc.ttl=0`, the default): 8-64 expunges per run, and a loop over
-  slightly more than fits never hits.
-- **Valkey holds ~15% more entries** in the same memory: 32M filled with 500-byte values keeps 58,400 in Valkey,
-  50,900 in nocopy (600-byte blocks, ~660 bytes each with the slot table and free segments). That is most of its lead on
-  plain Zipf and why `loop 1.1` fits whole. `maxmemory` counts allocated bytes only: Valkey's RSS was 38-40 MB at 32M
-  and 70-71 MB at 64M, the process and allocator overhead come on top.
-- **Rewrites** cost nocopy 3 points: an overwrite leaves the old copy as dead bytes until its segment is compacted.
-  APCu and Valkey free it in place.
-- **One-off keys**: nocopy (ghost list, frequency-aware merge) is level with LFU and 9 points above LRU.
-- Valkey is a network hop: 4-8 µs a request here over loopback TCP, against 0.2-0.7 µs for nocopy and APCu.
+Reproduce: `./dev tail`.
+
+## Hit rate when memory is full
+
+The same requests against each cache, each given the same memory, 500-byte values, read-through (get, and put on a miss).
+Hit rate in %, higher is better. "1.5x" means the data is 1.5 times the memory.
+
+| Workload (32 MB) | nocopy | APCu | Valkey LRU | Valkey LFU |
+|---|---:|---:|---:|---:|
+| Popular keys read more often (Zipf), 1.5x | 94.6 | 86.7 | 96.1 | 96.2 |
+| The same, plus keys used only once | 89.8 | 72.5 | 80.6 | 91.7 |
+| Zipf, 3x | 87.2 | 78.0 | 87.7 | 89.1 |
+| Zipf, 1.5x, 20% of hits rewritten | 91.4 | 86.7 | 96.1 | 96.2 |
+| All keys in a loop, 1.1x | 72.0 | 0 | 100 | 100 |
+
+**What it means:**
+
+- APCu empties the whole cache when it is full, so a loop over slightly more than fits never hits.
+- Valkey fits about 15% more entries into the same memory, which is most of its lead. But each Valkey request is a network
+  hop (4-8 µs here, against 0.2-0.7 µs for nocopy).
+- Keys used only once don't push popular keys out of nocopy (it is level with Valkey's LFU, 9 points above LRU).
+- Rewrites cost nocopy a few points: an overwritten value stays as dead space until its segment is compacted.
+
+Reproduce: `./dev hitratio`.
+
+## Long runs and large caches
+
+- **50 minutes under heavy churn** (8 workers, data 2x the cache, ~370,000 evictions a second): hit rate, speed and memory
+  were the same in the last 10 minutes as in the first. No leak, no fragmentation building up.
+- **Large caches:** creating the cache costs ~65 ms per GB, once per server start; attaching costs nothing. Up to 4 GB,
+  reads stay at about 4 million per second with 4 readers and 4 writers, and writes pause at most 26-42 ms while memory is
+  being freed.
+
+Reproduce: `./dev soak`, `./dev big`.
+
+## Run them yourself
+
+All benchmarks run in Docker through `./dev`; no PHP needed on your machine. The commands and their options:
+[`./dev` commands](dev-commands.md) and [Develop, test and benchmark](../how-to/develop.md#benchmark).

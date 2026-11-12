@@ -34,7 +34,7 @@ The docs are split by what you need right now ([Diátaxis](https://diataxis.fr))
 | [`nocopy_stats()`](reference/stats.md) | [Architecture](explanation/architecture.md) |
 | [Glossary](reference/glossary.md) | [Design decisions](explanation/design-decisions.md) |
 | [APCu compatibility](reference/apcu-compatibility.md) | |
-| [Benchmark results](reference/benchmarks.md) | |
+| [Benchmarks](reference/benchmarks.md) | |
 | [`./dev` commands](reference/dev-commands.md) (contributors) | |
 
 ## For contributors
@@ -44,5 +44,6 @@ Changing the C code? Read these first (they are written for contributors and the
 - [Internals](internals/architecture.md): code layers, memory layout, locking, eviction, and the invariants every change must keep
 - [Design log](internals/design-decisions.md): every decision with its measurements, and the ideas that were tried and dropped
 - [Status log](internals/status.md): what was verified when, and the open work in detail
+- [Benchmark log](internals/benchmarks.md): every benchmark run in full, with setup and caveats
 
 Release state, what is supported and what is planned: [Status and roadmap](status.md).

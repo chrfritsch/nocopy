@@ -68,13 +68,13 @@ Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licen
 | `./dev drupal` | 3 modes OK (zero-copy mode dropped: phpunit is CLI) |
 | `./dev drupal-bench` | 9 configs, production PHP, JSON:API page; 6-config breakdown published 2026-11-06 evening, median of 3 ([results](../../bench/results-drupal/2026-11-06-prod)) |
 | `./dev ci` (8.5; 2026-11-07, segments capped at 4 MB, bitmaps and segment table behind the slot tables) | all passed |
-| `./dev big` (2026-11-07: 256M-8G, again 1G-4G with segments capped at 4 MB) | published ([results](../reference/benchmarks.md#large-arenas-dev-big)): 4G now pauses writers like 1G (max 26-42 ms, was 51-111); reads unaffected |
-| `./dev fpbench` (2026-11-07, twice) | published ([results](../reference/benchmarks.md#frankenphp-worker-mode-dev-fpbench)): nocopy 87-94% of `hello` in worker mode, APCu 19-22% |
-| `./dev soak` (2026-11-07: 50 min heavy churn, 30 + 10 min TTLs with a read-only stretch) | published ([results](../reference/benchmarks.md#soak-dev-soak)): flat, no leak; expired entries stay until the next write |
-| `./dev tail` with up to 1,000 idle slot holders, `./dev sfbench` with 256 fpm workers (2026-11-07) | published ([results](../reference/benchmarks.md#many-workers)): no scaling cost |
-| `./dev opcache`, `./dev sfbench` with a `PhpFilesAdapter` pool (2026-11-07) | published ([results](../reference/benchmarks.md#against-opcache-files-phpfilesadapter)): same req/s on read-only pages, nocopy reads 2.5-4x and writes 30-300x faster |
-| `./dev tail` (2026-11-07, 8 and 4 workers, twice at 8) | published ([results](../reference/benchmarks.md#tail-latency-dev-tail)); p99.99 under 8-way contention is 1-1.8 ms, level with APCu: the VM's scheduler (a cache-free control has the same tail, 2026-11-11), open only on bare metal |
-| `./dev sfbench` | published 2026-11-06 (evening, objects as graph nodes), with Symfony's production PHP settings ([results](../reference/benchmarks.md#symfony-dev-sfbench)) |
+| `./dev big` (2026-11-07: 256M-8G, again 1G-4G with segments capped at 4 MB) | published ([results](benchmarks.md#large-arenas-dev-big)): 4G now pauses writers like 1G (max 26-42 ms, was 51-111); reads unaffected |
+| `./dev fpbench` (2026-11-07, twice) | published ([results](benchmarks.md#frankenphp-worker-mode-dev-fpbench)): nocopy 87-94% of `hello` in worker mode, APCu 19-22% |
+| `./dev soak` (2026-11-07: 50 min heavy churn, 30 + 10 min TTLs with a read-only stretch) | published ([results](benchmarks.md#soak-dev-soak)): flat, no leak; expired entries stay until the next write |
+| `./dev tail` with up to 1,000 idle slot holders, `./dev sfbench` with 256 fpm workers (2026-11-07) | published ([results](benchmarks.md#many-workers)): no scaling cost |
+| `./dev opcache`, `./dev sfbench` with a `PhpFilesAdapter` pool (2026-11-07) | published ([results](benchmarks.md#against-opcache-files-phpfilesadapter)): same req/s on read-only pages, nocopy reads 2.5-4x and writes 30-300x faster |
+| `./dev tail` (2026-11-07, 8 and 4 workers, twice at 8) | published ([results](benchmarks.md#tail-latency-dev-tail)); p99.99 under 8-way contention is 1-1.8 ms, level with APCu: the VM's scheduler (a cache-free control has the same tail, 2026-11-11), open only on bare metal |
+| `./dev sfbench` | published 2026-11-06 (evening, objects as graph nodes), with Symfony's production PHP settings ([results](benchmarks.md#symfony-dev-sfbench)) |
 
 ## Roadmap (rough priority)
 

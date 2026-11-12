@@ -70,7 +70,7 @@ stored properties without unserializing; `Serializable` objects and most interna
 
 On Drupal, most of the gain comes from something else: because php-fpm, Drush and cron share one cache that survives
 restarts, every cache bin and cache tag can move out of the database. Not copying adds little there
-([breakdown](docs/reference/benchmarks.md#drupal-11-where-the-gain-comes-from-dev-drupal-bench)).
+([breakdown](docs/reference/benchmarks.md#where-the-gain-comes-from)).
 
 ## What you get
 
