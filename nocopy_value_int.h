@@ -195,11 +195,18 @@ bool nc_date_native(zend_object *o);           /* stored as K_DATE: initialized,
 bool nc_date_zone_name(zend_object *o, zval *z); /* its zone's ID or abbreviation (false: null, an offset) */
 bool nc_date_out(nocopy_env *env, zend_object *obj, const nc_obj *n); /* false: the zone is gone */
 
-/* microseconds | zone type << 20 | dst << 24 | UTC offset << 32 */
+/* A K_DATE node's props[1]: microseconds | zone type << DW_TYPE | dst << DW_DST | UTC offset << DW_OFF */
+#define DW_TYPE 20
+#define DW_DST 24
+#define DW_OFF 32
 static zend_always_inline uint64_t date_word(const timelib_time *t)
 {
-	return (uint64_t) t->us | (uint64_t) t->zone_type << 20 | (uint64_t) (t->dst != 0) << 24 | (uint64_t) (uint32_t) t->z << 32;
+	return (uint64_t) t->us | (uint64_t) t->zone_type << DW_TYPE | (uint64_t) (t->dst != 0) << DW_DST | (uint64_t) (uint32_t) t->z << DW_OFF;
 }
+static zend_always_inline int date_word_us(uint64_t w) { return (int) (w & ((1u << DW_TYPE) - 1)); }
+static zend_always_inline int date_word_type(uint64_t w) { return (int) (w >> DW_TYPE) & 0xf; }
+static zend_always_inline int date_word_dst(uint64_t w) { return (int) (w >> DW_DST) & 1; }
+static zend_always_inline int32_t date_word_offset(uint64_t w) { return (int32_t) (w >> DW_OFF); }
 
 /* ---- building (nocopy_build.c): one walk into a private buffer; user code may run ---- */
 

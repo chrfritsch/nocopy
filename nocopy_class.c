@@ -196,15 +196,15 @@ bool nc_date_out(nocopy_env *env, zend_object *obj, const nc_obj *n)
 {
 	static zend_function *tz_set;
 	uint64_t w = (uint64_t) Z_LVAL(n->props[1]);
-	int type = (int) (w >> 20) & 0xf;
-	int32_t z = (int32_t) (w >> 32);
+	int type = date_word_type(w);
+	int32_t z = date_word_offset(w);
 	zend_object *d = obj; /* date_timezone_set() takes only a DateTime: an immutable one is built in one and takes its time */
 	if (obj->ce != php_date_get_date_ce()) {
 		zval t;
 		object_init_ex(&t, php_date_get_date_ce());
 		d = Z_OBJ(t);
 	}
-	php_date_initialize_from_ts_long(php_date_obj_from_obj(d), Z_LVAL(n->props[0]), (int) (w & 0xfffff));
+	php_date_initialize_from_ts_long(php_date_obj_from_obj(d), Z_LVAL(n->props[0]), date_word_us(w));
 	bool ok = true;
 	if (type != TIMELIB_ZONETYPE_OFFSET || z) {
 		zval args[2], rv;
@@ -214,7 +214,7 @@ bool nc_date_out(nocopy_env *env, zend_object *obj, const nc_obj *n)
 			ok = (tz->tzi.tz = date_tz(env, Z_STR(n->props[2]))) != NULL;
 		} else if (type == TIMELIB_ZONETYPE_ABBR) {
 			tz->tzi.z.utc_offset = z;
-			tz->tzi.z.dst = (int) (w >> 24) & 1;
+			tz->tzi.z.dst = date_word_dst(w);
 			tz->tzi.z.abbr = timelib_strdup(Z_STRVAL(n->props[2]));
 		} else {
 			tz->tzi.utc_offset = z;
