@@ -1062,15 +1062,25 @@ static __attribute__((noinline)) build_status build_ref(nc_builder *b, zval *v, 
 	return BUILD_OK;
 }
 
-/* Below an object or a reference, arrays start regions of their own. */
-#define OUT_OF_REGION(b, call) do { \
-	nc_share *s_ = (b)->sh; \
-	uint32_t hend_ = s_ ? s_->hend : 0; \
-	if (s_) { s_->hend = s_->hc; } \
-	build_status st_ = (call); \
-	if (s_) { s_->hend = hend_; } \
-	return st_; \
-} while (0)
+/* Below an object or a reference, arrays start regions of their own: the current one ends here until region_back. */
+static zend_always_inline uint32_t region_leave(nc_builder *b)
+{
+	nc_share *s = b->sh;
+	if (!s) {
+		return 0;
+	}
+	uint32_t hend = s->hend;
+	s->hend = s->hc;
+	return hend;
+}
+
+static zend_always_inline build_status region_back(nc_builder *b, uint32_t hend, build_status st)
+{
+	if (b->sh) {
+		b->sh->hend = hend;
+	}
+	return st;
+}
 
 /* Rewrites the copy *v so everything it points to is in the buffer (as offsets), the empty array or an atom. */
 static build_status build_zval(nc_builder *b, zval *v, int depth)
@@ -1095,16 +1105,20 @@ static build_status build_zval(nc_builder *b, zval *v, int depth)
 			b->obj |= outer;
 			return st;
 		}
-		case IS_REFERENCE:
+		case IS_REFERENCE: {
+			uint32_t hend = region_leave(b);
 			if (Z_REFCOUNT_P(v) > 1) {
-				OUT_OF_REGION(b, build_ref(b, v, depth));
+				return region_back(b, hend, build_ref(b, v, depth));
 			}
 			ZVAL_COPY_VALUE(v, Z_REFVAL_P(v));
-			OUT_OF_REGION(b, build_zval(b, v, depth + 1));
+			return region_back(b, hend, build_zval(b, v, depth + 1));
+		}
 		case IS_RESOURCE:
 			return BUILD_RESOURCE;
-		case IS_OBJECT:
-			OUT_OF_REGION(b, build_object(b, v, depth));
+		case IS_OBJECT: {
+			uint32_t hend = region_leave(b);
+			return region_back(b, hend, build_object(b, v, depth));
+		}
 		default:
 			return BUILD_OBJECT;
 	}
