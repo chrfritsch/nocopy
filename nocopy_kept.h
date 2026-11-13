@@ -6,8 +6,9 @@
 
 #include "nocopy_value.h"
 
-#define NOCOPY_KEPT 4096 /* 1024 sets of NOCOPY_KEPT_WAYS */
+#define NOCOPY_KEPT_SET_BITS 10 /* 1024 sets */
 #define NOCOPY_KEPT_WAYS 4
+#define NOCOPY_KEPT (NOCOPY_KEPT_WAYS << NOCOPY_KEPT_SET_BITS)
 
 struct nocopy_kept {
 	const nocopy_entry *e;	/* kept copy's entry, NULL none */
@@ -40,8 +41,8 @@ static zend_always_inline nocopy_kept *nocopy_kept_way(nocopy_kept_cache *k, con
 	if (UNEXPECTED(!k->ways)) {
 		k->ways = ecalloc(NOCOPY_KEPT, sizeof(nocopy_kept));
 	}
-	nocopy_kept *set = &k->ways[((((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> 54) * NOCOPY_KEPT_WAYS], *victim = set;
-	int best = 4;
+	nocopy_kept *set = &k->ways[((((uintptr_t) e >> 3) * 0x9E3779B97F4A7C15ULL) >> (64 - NOCOPY_KEPT_SET_BITS)) * NOCOPY_KEPT_WAYS], *victim = set;
+	int best = 4; /* worse than any rank below */
 	for (int i = 0; i < NOCOPY_KEPT_WAYS; i++) {
 		nocopy_kept *l = &set[i];
 		if (l->e == e || l->seen == e) {
