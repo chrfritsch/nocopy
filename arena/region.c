@@ -119,6 +119,30 @@ static open_result open_fail(int fd, opening *o, const char *why)
 	return OPEN_FAIL;
 }
 
+/* Every page reserved now: a sparse tmpfs file over /dev/shm's limit (Docker: 64M) would SIGBUS on first touch. NULL, or why not. */
+static const char *reserve_pages(int fd, size_t size)
+{
+#ifdef __linux__
+	int r = posix_fallocate(fd, 0, (off_t) size);
+	return r == ENOSPC ? "not enough room in /dev/shm (Docker: --shm-size)" : r ? "posix_fallocate failed" : NULL;
+#else
+	return ftruncate(fd, (off_t) size) ? "ftruncate failed" : NULL;
+#endif
+}
+
+/* fd mapped at a random base in one of the windows, or NULL. */
+static void *map_random(int fd, size_t size)
+{
+	void *p = NULL;
+	for (size_t i = 0; !p && i < sizeof windows / sizeof windows[0]; i++) {
+		for (int tries = 0; !p && tries < 8; tries++) { /* taken here: another try; beyond the address space: the next window */
+			uintptr_t b = random_base(windows[i].lo, windows[i].hi, size);
+			p = b ? map_at(fd, size, b) : NULL;
+		}
+	}
+	return p;
+}
+
 /* fd: just created (O_EXCL), empty. */
 static open_result create_new(const char *name, int fd, opening *o)
 {
@@ -126,20 +150,8 @@ static open_result create_new(const char *name, int fd, opening *o)
 		close(fd);
 		return OPEN_RETRY; /* removed as unused before we held it */
 	}
-#ifdef __linux__
-	/* reserve every page now: a sparse tmpfs file over /dev/shm's limit (Docker: 64M) would SIGBUS on first touch */
-	int r = posix_fallocate(fd, 0, (off_t) o->size);
-	o->err = r == ENOSPC ? "not enough room in /dev/shm (Docker: --shm-size)" : r ? "posix_fallocate failed" : NULL;
-#else
-	o->err = ftruncate(fd, (off_t) o->size) ? "ftruncate failed" : NULL;
-#endif
-	void *p = NULL;
-	for (size_t i = 0; !o->err && !p && i < sizeof windows / sizeof windows[0]; i++) {
-		for (int tries = 0; !p && tries < 8; tries++) { /* taken here: another try; beyond the address space: the next window */
-			uintptr_t b = random_base(windows[i].lo, windows[i].hi, o->size);
-			p = b ? map_at(fd, o->size, b) : NULL;
-		}
-	}
+	o->err = reserve_pages(fd, o->size);
+	void *p = o->err ? NULL : map_random(fd, o->size);
 	if (!p) {
 		o->err = o->err ? o->err : "no free address for it";
 		shm_unlink(name);
@@ -158,28 +170,33 @@ static open_result create_new(const char *name, int fd, opening *o)
 	return OPEN_OK;
 }
 
+/* A copy of fd's header, all zero while the object is too short or cannot be mapped. */
+static ar_region_hdr peek_header(int fd)
+{
+	ar_region_hdr hdr = {0};
+	struct stat st;
+	if (fstat(fd, &st) != 0 || (size_t) st.st_size < sizeof hdr) {
+		return hdr;
+	}
+	ar_region_hdr *q = mmap(NULL, sizeof hdr, PROT_READ, MAP_SHARED, fd, 0);
+	if (q != MAP_FAILED) {
+		hdr.magic = __atomic_load_n(&q->magic, __ATOMIC_ACQUIRE);
+		hdr.abi = q->abi;
+		hdr.base = q->base;
+		hdr.size = q->size;
+		munmap(q, sizeof hdr);
+	}
+	return hdr;
+}
+
 /* fd: an existing object, maybe still being initialized by its creator. */
 static open_result attach(const char *name, int fd, opening *o)
 {
-	ar_region_hdr hdr = {0};
 	if (!owned(fd)) {
 		return open_fail(fd, o, "it is owned by another user or open to others");
 	}
-	for (int waited = 0;; waited++) {
-		struct stat st;
-		if (fstat(fd, &st) == 0 && (size_t) st.st_size >= sizeof hdr) {
-			ar_region_hdr *q = mmap(NULL, sizeof hdr, PROT_READ, MAP_SHARED, fd, 0);
-			if (q != MAP_FAILED) {
-				hdr.magic = __atomic_load_n(&q->magic, __ATOMIC_ACQUIRE);
-				hdr.abi = q->abi;
-				hdr.base = q->base;
-				hdr.size = q->size;
-				munmap(q, sizeof hdr);
-			}
-		}
-		if (hdr.magic == AR_MAGIC) {
-			break;
-		}
+	ar_region_hdr hdr;
+	for (int waited = 0; (hdr = peek_header(fd)).magic != AR_MAGIC; waited++) {
 		if (remove_unused(name, fd)) {
 			close(fd);
 			return OPEN_RETRY; /* its creator died before it was set up */

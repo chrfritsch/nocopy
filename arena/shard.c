@@ -39,26 +39,45 @@ void ar_shards_adopt(ar_shard *shards, uint32_t n, ar_slot *tables, uint16_t *gh
 
 /* ---- locks and entries (shard locked unless noted) ---- */
 
+/* Lock-order checks (test and debug builds): one shard lock at a time, or all of them in index order (lock_all). */
 #if AR_CHECKS
-static __thread uint32_t held; /* shard locks this thread holds: one, or all in index order (lock_all) */
+static __thread uint32_t held; /* shard locks this thread holds */
 static __thread bool all;
-#endif
+
+static void note_locking_all(void)
+{
+	AR_ASSERT(!held);
+	all = true;
+}
+
+static void note_locking(const ar_shard *sh)
+{
+	AR_ASSERT(!held || (all && sh->idx == held));
+	held++;
+}
+
+static void note_unlocking(void)
+{
+	AR_ASSERT(held);
+	all = --held && all;
+}
 
 void ar_shards_forget_held(void)
 {
-#if AR_CHECKS
 	held = 0;
 	all = false;
-#endif
 }
+#else
+static void note_locking_all(void) {}
+static void note_locking(const ar_shard *sh) { (void) sh; }
+static void note_unlocking(void) {}
+void ar_shards_forget_held(void) {}
+#endif
 
 static void shard_lock(ar_shard *sh)
 {
 	uint64_t dead;
-#if AR_CHECKS
-	AR_ASSERT(!held || (all && sh->idx == held));
-	held++;
-#endif
+	note_locking(sh);
 	if (ar_lock_acquire(&sh->lock, &dead) == AR_STOLEN) {
 		repair(sh);
 	}
@@ -66,10 +85,7 @@ static void shard_lock(ar_shard *sh)
 
 static void shard_unlock(ar_shard *sh)
 {
-#if AR_CHECKS
-	AR_ASSERT(held);
-	all = --held && all;
-#endif
+	note_unlocking();
 	ar_lock_release(&sh->lock);
 }
 
@@ -171,21 +187,29 @@ static bool relocate(nocopy_entry *old, uint8_t hot, void *arg)
 	return true;
 }
 
-static bool merge(ar_shard *sh, bool evict_only)
+static ar_merge merge_of(ar_shard *sh)
 {
-	ar_merge m = {.log = &sh->log, .pol = &sh->pol, .ghosts = ghosts[sh->idx], .last_seq = sh->last_seq,
+	return (ar_merge) {.log = &sh->log, .pol = &sh->pol, .ghosts = ghosts[sh->idx], .last_seq = sh->last_seq,
 		.relocate = relocate, .unlink = unlink_entry, .arg = sh};
-	return ar_policy_merge(&m, evict_only);
+}
+
+static bool compact_or_evict(ar_shard *sh)
+{
+	ar_merge m = merge_of(sh);
+	return ar_policy_merge(&m);
+}
+
+static bool evict(ar_shard *sh)
+{
+	ar_merge m = merge_of(sh);
+	return ar_policy_evict(&m);
 }
 
 static bool expire_step(ar_shard *sh, time_t now, int budget) { return ar_log_expire_step(&sh->log, now, budget, unlink_entry, sh); }
 
 static void lock_all(void)
 {
-#if AR_CHECKS
-	AR_ASSERT(!held);
-	all = true;
-#endif
+	note_locking_all();
 	for (uint32_t i = 0; i < nshards; i++) { /* in index order: two holders of all never deadlock */
 		shard_lock(&ar_shards[i]);
 	}
@@ -202,7 +226,7 @@ static void unlock_all(void)
  * dependency; their bits would otherwise stay until a write fills them (a rarely used TTL bucket: never). */
 static void drop_idle_deps(uint8_t bits)
 {
-	uint64_t idle[NOCOPY_SEG_WORDS] = {0}, held[NOCOPY_SEG_WORDS];
+	uint64_t idle[NOCOPY_SEG_WORDS] = {0}, pinned[NOCOPY_SEG_WORDS];
 	bool any = false;
 	for (uint32_t s = 0; s < ar_nsegs; s++) {
 		const ar_seg *g = &ar_segs[s];
@@ -214,15 +238,15 @@ static void drop_idle_deps(uint8_t bits)
 	if (!any) {
 		return;
 	}
-	ar_pool_pinned(idle, held, nocopy_now()); /* a reader may still hold a dead entry's pointers into the atoms */
+	ar_pool_pinned(idle, pinned, nocopy_now()); /* a reader may still hold a dead entry's pointers into the atoms */
 	for (uint32_t s = 0; s < ar_nsegs; s++) {
-		if (ar_segs_has(idle, s) && !ar_segs_has(held, s)) {
+		if (ar_segs_has(idle, s) && !ar_segs_has(pinned, s)) {
 			ar_seg_deps_drop(s, bits);
 		}
 	}
 }
 
-bool ar_shards_deps(uint8_t bits)
+bool ar_shards_still_depend(uint8_t bits)
 {
 	lock_all();
 	for (uint32_t i = 0; i < nshards; i++) {
@@ -233,6 +257,9 @@ bool ar_shards_deps(uint8_t bits)
 	unlock_all();
 	return used;
 }
+
+/* Below 15/16 of its share: may take segments back from a shard holding more. */
+static bool below_share(const ar_shard *sh) { return sh->log.nown < fair_segs - fair_segs / 16; }
 
 /* sh locked, below its share, and the pool is dry: the shard holding the most evicts once to give segments back.
  * Drops sh's lock meanwhile (one lock at a time). false: nobody holds more than its share. */
@@ -254,7 +281,7 @@ static __attribute__((cold, noinline)) bool rebalance(ar_shard *sh)
 	AR_HOOK("rebalance.unlocked");
 	shard_lock(big);
 	ar_log_reclaim(&big->log);
-	if (big->log.nown > fair_segs && merge(big, false)) {
+	if (big->log.nown > fair_segs && compact_or_evict(big)) {
 		ar_log_reclaim(&big->log);
 	}
 	AR_HOOK("rebalance.merged");
@@ -262,6 +289,12 @@ static __attribute__((cold, noinline)) bool rebalance(ar_shard *sh)
 	shard_lock(sh);
 	return true;
 }
+
+#define EXPIRE_PER_WRITE 64       /* entries each write's expiry step looks at */
+#define EXPIRE_UNDER_PRESSURE 4096 /* the same when an allocation failed: catch up before copying live data */
+
+/* Bounds each room-making loop: a round that frees nothing must not spin forever. */
+static uint32_t max_rounds(void) { return 2 * fair_segs; }
 
 static nocopy_entry *reclaim_alloc(ar_shard *sh, size_t total, int b, time_t exp)
 {
@@ -279,19 +312,19 @@ static nocopy_entry *alloc_relocking(ar_shard *sh, size_t total, time_t exp, tim
 	}
 	int b = ar_log_bucket(exp ? (exp > now ? exp - now : 1) : 0); /* exp == now is not bucket 0, which never expires */
 	if (sh->log.exp_idle != now) { /* the common case: nothing left to expire this second */
-		expire_step(sh, now, 64);
+		expire_step(sh, now, EXPIRE_PER_WRITE);
 	}
 	nocopy_entry *e = ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
 	if (!e) {
 		e = reclaim_alloc(sh, total, b, exp);
 	}
-	while (!e && expire_step(sh, now, 4096)) { /* under pressure: catch up on expiry before copying live data */
+	while (!e && expire_step(sh, now, EXPIRE_UNDER_PRESSURE)) {
 		e = reclaim_alloc(sh, total, b, exp);
 	}
-	for (uint32_t tries = 2 * fair_segs; !e && tries && sh->log.nown < fair_segs - fair_segs / 16 && rebalance(sh); tries--) {
+	for (uint32_t tries = max_rounds(); !e && tries && below_share(sh) && rebalance(sh); tries--) {
 		e = ar_log_alloc(&sh->log, total, b, exp, sh->last_seq, false);
 	}
-	for (uint32_t tries = 2 * fair_segs; !e && tries && merge(sh, false); tries--) {
+	for (uint32_t tries = max_rounds(); !e && tries && compact_or_evict(sh); tries--) {
 		e = reclaim_alloc(sh, total, b, exp);
 	}
 	return e;
@@ -300,7 +333,7 @@ static nocopy_entry *alloc_relocking(ar_shard *sh, size_t total, time_t exp, tim
 /* The slot table is full: evict whole segments' worth of entries until a slot is free. False if none could be. */
 static bool slot_room(ar_shard *sh)
 {
-	for (uint32_t tries = 2 * fair_segs; ar_index_full(ix_of(sh)) && tries && merge(sh, true); tries--) {}
+	for (uint32_t tries = max_rounds(); ar_index_full(ix_of(sh)) && tries && evict(sh); tries--) {}
 	return !ar_index_full(ix_of(sh));
 }
 
@@ -507,6 +540,42 @@ static const char *verify_index(ar_shard *sh)
 	return NULL;
 }
 
+/* s's entries end exactly at used, and live counts exactly the linked ones. */
+static const char *verify_entries(ar_shard *sh, uint32_t s)
+{
+	const ar_seg *g = &ar_segs[s];
+	size_t sum = 0;
+	AR_SEG_FOREACH(s, e) {
+		size_t off = (size_t) ((char *) e - ar_seg_start(s));
+		if (nocopy_entry_size(e) < sizeof *e || off + nocopy_entry_size(e) > g->used) {
+			BROKEN("shard %u segment %u: an entry at %zu does not end inside used", sh->idx, s, off);
+		}
+		if (e->live) {
+			if (!ar_index_find(ix_of(sh), slot_for(e))) {
+				BROKEN("shard %u segment %u: a live entry at %zu no slot holds", sh->idx, s, off);
+			}
+			sum += nocopy_entry_size(e);
+		}
+	}
+	if (sum != g->live) {
+		BROKEN("shard %u segment %u: live %zu, its linked entries %zu", sh->idx, s, g->live, sum);
+	}
+	return NULL;
+}
+
+/* Each bucket's open segment, if any, is the shard's, open, and of that bucket. */
+static const char *verify_open_segments(const ar_shard *sh)
+{
+	const ar_log *lg = &sh->log;
+	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+		int32_t c = lg->cur[b];
+		if (c >= 0 && (!ar_log_owns(lg, (uint32_t) c) || ar_segs[c].state != SEG_OPEN || ar_segs[c].bucket != b)) {
+			BROKEN("shard %u: bucket %d's open segment %d is not open, its own or of that bucket", sh->idx, b, c);
+		}
+	}
+	return NULL;
+}
+
 /* Each segment the pool gives the shard: in its index, set up, its entries walked to exactly `used`, live bytes those of linked entries. */
 static const char *verify_log(ar_shard *sh)
 {
@@ -550,21 +619,9 @@ static const char *verify_log(ar_shard *sh)
 			}
 			continue;
 		}
-		size_t sum = 0, off = 0;
-		AR_SEG_FOREACH(s, e) {
-			off = (size_t) ((char *) e - ar_seg_start(s));
-			if (nocopy_entry_size(e) < sizeof *e || off + nocopy_entry_size(e) > g->used) {
-				BROKEN("shard %u segment %u: an entry at %zu does not end inside used", i, s, off);
-			}
-			if (e->live) {
-				if (!ar_index_find(ix_of(sh), slot_for(e))) {
-					BROKEN("shard %u segment %u: a live entry at %zu no slot holds", i, s, off);
-				}
-				sum += nocopy_entry_size(e);
-			}
-		}
-		if (sum != g->live) {
-			BROKEN("shard %u segment %u: live %zu, its linked entries %zu", i, s, g->live, sum);
+		const char *bad = verify_entries(sh, s);
+		if (bad) {
+			return bad;
 		}
 		if (g->state == SEG_SEALED && !g->live) {
 			BROKEN("shard %u segment %u: sealed and empty but not dead (ar_log_check)", i, s);
@@ -575,13 +632,25 @@ static const char *verify_log(ar_shard *sh)
 		BROKEN("shard %u: run cut short, or nown %u/%u, ndead %u/%u, live %llu/%llu", i, lg->nown, own, lg->ndead, ndead,
 			(unsigned long long) lg->live_bytes, (unsigned long long) live);
 	}
-	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-		int32_t c = lg->cur[b];
-		if (c >= 0 && (!ar_log_owns(lg, (uint32_t) c) || ar_segs[c].state != SEG_OPEN || ar_segs[c].bucket != b)) {
-			BROKEN("shard %u: bucket %d's open segment %d is not open, its own or of that bucket", i, b, c);
+	return verify_open_segments(sh);
+}
+
+/* Each segment no shard holds is zeroed; each held one belongs to a shard that exists. */
+static const char *verify_pool(void)
+{
+	for (uint32_t s = 0; s < ar_nsegs; s++) {
+		uint8_t t = ar_pool_tenant(s);
+		if (t > nshards || (!t && (ar_segs[s].state != SEG_FREE || ar_segs[s].used || ar_segs[s].live))) {
+			BROKEN("segment %u: tenant %u, state %u: a free segment not zeroed, or no such shard", s, t, ar_segs[s].state);
 		}
 	}
 	return NULL;
+}
+
+static const char *verify_shard(ar_shard *sh)
+{
+	const char *bad = verify_index(sh);
+	return bad ? bad : verify_log(sh);
 }
 
 const char *ar_shards_verify(void)
@@ -589,16 +658,9 @@ const char *ar_shards_verify(void)
 	const char *bad = NULL;
 	lock_all();
 	for (uint32_t i = 0; i < nshards && !bad; i++) {
-		bad = verify_index(&ar_shards[i]);
-		bad = bad ? bad : verify_log(&ar_shards[i]);
+		bad = verify_shard(&ar_shards[i]);
 	}
-	for (uint32_t s = 0; s < ar_nsegs && !bad; s++) {
-		uint8_t t = ar_pool_tenant(s);
-		if (t > nshards || (!t && (ar_segs[s].state != SEG_FREE || ar_segs[s].used || ar_segs[s].live))) {
-			snprintf(why, sizeof why, "segment %u: tenant %u, state %u: a free segment not zeroed, or no such shard", s, t, ar_segs[s].state);
-			bad = why;
-		}
-	}
+	bad = bad ? bad : verify_pool();
 	unlock_all();
 	return bad;
 }

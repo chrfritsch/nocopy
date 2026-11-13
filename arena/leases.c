@@ -19,24 +19,36 @@ static void lock(ar_lease_table *t)
 	(void) ar_lock_acquire(&t->lock, &dead);
 }
 
+typedef struct {
+	ar_lease *held; /* h's unexpired lease, or NULL */
+	ar_lease *free; /* the first free lease before it, or NULL */
+} lease_search;
+
+static lease_search find_lease(ar_lease_table *t, uint64_t h, time_t now)
+{
+	lease_search found = {NULL, NULL};
+	for (int i = 0; i < NOCOPY_LEASES; i++) {
+		ar_lease *x = &t->l[i];
+		if (x->owner && x->until >= now) {
+			if (x->h == h) {
+				found.held = x;
+				return found;
+			}
+		} else if (!found.free) {
+			found.free = x;
+		}
+	}
+	return found;
+}
+
 int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
 {
 	ar_lease_table *t = table_of(h);
 	uint64_t dead = 0; /* holder found dead on the first pass: replace it if it still holds */
 	for (;;) {
 		lock(t);
-		ar_lease *l = NULL, *free = NULL;
-		for (int i = 0; i < NOCOPY_LEASES; i++) {
-			ar_lease *x = &t->l[i];
-			if (x->owner && x->until >= now) {
-				if (x->h == h) {
-					l = x;
-					break;
-				}
-			} else if (!free) {
-				free = x;
-			}
-		}
+		lease_search found = find_lease(t, h, now);
+		ar_lease *l = found.held, *free = found.free;
 		int r = NOCOPY_LEASE_TAKEN;
 		if (l && l->owner == ar_self && l->slot == slot) {
 			r = NOCOPY_LEASE_MINE;

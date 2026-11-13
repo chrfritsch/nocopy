@@ -137,7 +137,7 @@ void ar_pins_publish(const ar_pins_t *r)
 uint32_t ar_pool_kept_count(void)
 {
 	uint64_t all[NOCOPY_SEG_WORDS] = {0};
-	uint32_t nw = ar_worker_high(), nwords = ar_seg_words, n = 0;
+	uint32_t nw = ar_worker_high(), nwords = ar_seg_words;
 	time_t now = nocopy_now();
 	for (uint32_t i = 0; i < nw; i++) {
 		uint64_t b[NOCOPY_SEG_WORDS], any = 0;
@@ -151,10 +151,7 @@ uint32_t ar_pool_kept_count(void)
 			all[w] |= b[w];
 		}
 	}
-	for (uint32_t w = 0; w < nwords; w++) {
-		n += (uint32_t) __builtin_popcountll(all[w]);
-	}
-	return n;
+	return ar_segs_count(all, nwords);
 }
 
 /* Distinct segments, not a sum: concurrent requests keep the same hot ones. ponytail: the union is looked at every
@@ -201,14 +198,11 @@ void ar_pool_ask_unpin(void) { __atomic_add_fetch(ar_unpin_gen, 1, __ATOMIC_RELA
 uint32_t ar_pool_pinned_count(void)
 {
 	uint64_t held[NOCOPY_SEG_WORDS] = {0};
-	uint32_t nw = ar_worker_high(), n = 0;
+	uint32_t nw = ar_worker_high();
 	for (uint32_t i = 0; i < nw; i++) {
 		for (uint32_t w = 0; w < ar_seg_words; w++) {
 			held[w] |= __atomic_load_n(&ar_pins_of((int) i)[w], __ATOMIC_SEQ_CST);
 		}
 	}
-	for (uint32_t w = 0; w < ar_seg_words; w++) {
-		n += (uint32_t) __builtin_popcountll(held[w]);
-	}
-	return n;
+	return ar_segs_count(held, ar_seg_words);
 }

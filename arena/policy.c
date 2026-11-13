@@ -21,8 +21,10 @@ void ar_policy_count_expunge(void) { __atomic_add_fetch(expunges, 1, __ATOMIC_RE
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
  * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */
-static uint16_t *ghost_cell(uint16_t *ghosts, uint64_t h) { return &ghosts[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 24) & ghost_mask]; }
+static uint16_t *ghost_cell(uint16_t *ghosts, uint64_t h) { return &ghosts[(uint32_t) (ar_fib_mix(h) >> 24) & ghost_mask]; }
 static uint16_t ghost_tag(uint64_t h) { return (uint16_t) h | 1; }
+
+#define GHOST_HOT 2 /* a returning key survives two merges unread */
 
 uint8_t ar_policy_admit(ar_policy *pol, uint16_t *ghosts, uint64_t h)
 {
@@ -32,7 +34,7 @@ uint8_t ar_policy_admit(ar_policy *pol, uint16_t *ghosts, uint64_t h)
 	}
 	*c = 0;
 	pol->ghost_hits++;
-	return 2;
+	return GHOST_HOT;
 }
 
 /* ---- merge ---- */
@@ -120,25 +122,35 @@ static uint32_t pick_oldest(const ar_merge *m, uint32_t *v, bool *spared, uint32
 	return 1;
 }
 
+static int32_t seg_reads(uint32_t s) { return __atomic_load_n(&ar_segs[s].reads, __ATOMIC_RELAXED); }
+
+/* The index of the least-read segment among c[from..n-1]. */
+static uint32_t least_read(const uint32_t *c, uint32_t from, uint32_t n)
+{
+	uint32_t least = from;
+	for (uint32_t i = from + 1; i < n; i++) {
+		if (seg_reads(c[i]) < seg_reads(c[least])) {
+			least = i;
+		}
+	}
+	return least;
+}
+
 /* Eviction victims: of the PICK_N oldest, the oldest (so every segment is merged in time) and the MERGE_N - 1 least read. */
 static uint32_t pick_victims(const ar_merge *m, uint32_t *v, bool *spared)
 {
 	uint32_t c[PICK_N];
 	uint32_t nc = pick_oldest(m, c, spared, PICK_N);
-	for (uint32_t n = 1; n < MERGE_N && n < nc; n++) {
-		uint32_t b = n;
-		for (uint32_t i = n + 1; i < nc; i++) {
-			if (__atomic_load_n(&ar_segs[c[i]].reads, __ATOMIC_RELAXED) < __atomic_load_n(&ar_segs[c[b]].reads, __ATOMIC_RELAXED)) {
-				b = i;
-			}
-		}
-		uint32_t t = c[n];
-		c[n] = c[b];
-		c[b] = t;
+	uint32_t nv = nc < MERGE_N ? nc : MERGE_N;
+	if (nv) {
+		v[0] = c[0];
 	}
-	nc = nc < MERGE_N ? nc : MERGE_N;
-	memcpy(v, c, nc * sizeof *c);
-	return nc;
+	for (uint32_t n = 1; n < nv; n++) {
+		uint32_t least = least_read(c, n, nc);
+		v[n] = c[least];
+		c[least] = c[n];
+	}
+	return nv;
 }
 
 /* Lossy merge ranking: levels >= the returned cut all fit the budget; level cut - 1 gets *spare (first come). */
@@ -212,7 +224,7 @@ static bool move_survivors(const ar_merge *m, uint32_t s, ar_moving *mv)
 	return true;
 }
 
-/* Unlinks what s still holds: expired entries count as expired, the rest as evicted (leaving a ghost). *lost: the round was counted. */
+/* Unlinks what s still holds: expired entries count as expired, the rest as evicted (ghost). *lost: the round was counted. */
 static void evict_rest(const ar_merge *m, uint32_t s, bool *lost)
 {
 	AR_SEG_FOREACH(s, e) {
@@ -234,40 +246,56 @@ static void evict_rest(const ar_merge *m, uint32_t s, bool *lost)
 	}
 }
 
-bool ar_policy_merge(const ar_merge *m, bool evict_only)
+/* Victim by victim (a finished one may be given back, never walked again); out of room, the rest stays where it is. */
+static void compact(const ar_merge *m, const uint32_t *v, uint32_t nv, size_t live)
 {
-	uint32_t v[MERGE_N], nv = 0;
-	size_t budget = 0;
-	if (!evict_only) {
-		nv = pick_sparse(m->log, v, &budget);
-	}
-	bool lossy = !nv;
-	if (lossy) {
-		bool spared;
-		nv = pick_victims(m, v, &spared);
-		if (spared) {
-			return true;
-		}
-		if (!nv) {
-			return false;
-		}
-		budget = nv > 2 ? ar_seg_size : 0; /* survivors fill at most one segment: frees at least one */
-	}
-	AR_HOOK("merge.picked");
-	/* victim by victim: one that is done is dead, and move_one may give it back, so it is not walked again */
-	ar_moving mv = {.budget = budget, .lossy = lossy, .cut = 1};
-	if (lossy && budget) {
-		mv.cut = rank_cut(v, nv, budget, &mv.spare);
-	}
+	ar_moving mv = {.budget = live, .cut = 1};
 	uint64_t before = m->pol->evacuated;
 	bool lost = false;
 	for (uint32_t i = 0; i < nv; i++) {
-		if (!move_survivors(m, v[i], &mv) && !lossy) {
+		if (!move_survivors(m, v[i], &mv)) {
 			if (!i && m->pol->evacuated == before) {
 				evict_rest(m, v[0], &lost); /* not one entry could move: the sparsest victim makes the room */
 			}
-			return true; /* else the rest stays where it is: compaction loses nothing */
+			return;
 		}
+		AR_HOOK("merge.moved");
+		evict_rest(m, v[i], &lost);
+	}
+}
+
+bool ar_policy_merge(const ar_merge *m)
+{
+	uint32_t v[MERGE_N];
+	size_t live;
+	uint32_t nv = pick_sparse(m->log, v, &live);
+	if (!nv) {
+		return ar_policy_evict(m);
+	}
+	AR_HOOK("merge.picked");
+	compact(m, v, nv, live);
+	return true;
+}
+
+bool ar_policy_evict(const ar_merge *m)
+{
+	uint32_t v[MERGE_N];
+	bool spared;
+	uint32_t nv = pick_victims(m, v, &spared);
+	if (spared) {
+		return true;
+	}
+	if (!nv) {
+		return false;
+	}
+	AR_HOOK("merge.picked");
+	ar_moving mv = {.budget = nv > 2 ? ar_seg_size : 0, .lossy = true, .cut = 1}; /* survivors fill at most one segment: frees at least one */
+	if (mv.budget) {
+		mv.cut = rank_cut(v, nv, mv.budget, &mv.spare);
+	}
+	bool lost = false;
+	for (uint32_t i = 0; i < nv; i++) {
+		move_survivors(m, v[i], &mv);
 		AR_HOOK("merge.moved");
 		evict_rest(m, v[i], &lost);
 	}

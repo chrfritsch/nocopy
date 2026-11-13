@@ -49,9 +49,10 @@ typedef struct {
 	void *arg;
 } ar_merge;
 
-/* One round: compacts sparse segments losslessly, else evicts the oldest, keeping their most-read entries.
- * evict_only: the slot table is full, compaction would free none. False if there was nothing to merge.
+/* One round: compacts sparse segments losslessly, else evicts (ar_policy_evict). False if there was nothing to merge.
  * Victims that readers pin die but stay allocated until unpinned; the next round moves on. */
-bool ar_policy_merge(const ar_merge *m, bool evict_only);
+bool ar_policy_merge(const ar_merge *m);
+/* One round that evicts the oldest segments, keeping their most-read entries: for a full slot table, where compaction frees no slot. */
+bool ar_policy_evict(const ar_merge *m);
 
 #endif

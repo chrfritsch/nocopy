@@ -60,7 +60,7 @@ static inline __attribute__((always_inline)) void *nocopy_atom_find(const nocopy
 /* Doorkeeper (TinyLFU): true on the second sighting of h, so strings met once take no room. Direct-mapped, racy. */
 static inline bool nocopy_atom_admit(uint64_t h)
 {
-	uint32_t *c = &ar_atom_dk[(uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 32) & (2 * ar_atom_mask + 1)], t = (uint32_t) h | 1;
+	uint32_t *c = &ar_atom_dk[(uint32_t) (ar_fib_mix(h) >> 32) & (2 * ar_atom_mask + 1)], t = (uint32_t) h | 1;
 	if (__atomic_load_n(c, __ATOMIC_RELAXED) == t) {
 		return true;
 	}

@@ -173,9 +173,10 @@ bool ar_log_expire_step(ar_log *lg, time_t now, int budget, void (*unlink)(nocop
 	return did;
 }
 
-void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg), void *arg)
+/* owner[] is the truth: a claim or release may have stopped halfway. */
+static void rebuild_own(ar_log *lg)
 {
-	memset(lg->own, 0, sizeof lg->own); /* owner[] is the truth: a claim or release may have stopped halfway */
+	memset(lg->own, 0, sizeof lg->own);
 	uint32_t nown = 0;
 	for (uint32_t s = 0; s < ar_nsegs; s++) {
 		if (ar_pool_tenant(s) == lg->tenant) {
@@ -184,12 +185,63 @@ void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg)
 		}
 	}
 	__atomic_store_n(&lg->nown, nown, __ATOMIC_RELAXED);
+}
+
+static void forget_lost_open_segments(ar_log *lg)
+{
 	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
 		int32_t c = lg->cur[b];
 		if (c >= 0 && (!ar_log_owns(lg, (uint32_t) c) || ar_segs[c].state != SEG_OPEN)) {
 			lg->cur[b] = -1;
 		}
 	}
+}
+
+static bool is_open_segment(const ar_log *lg, uint32_t s)
+{
+	for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
+		if (lg->cur[b] == (int32_t) s) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Cuts s's run to the segments lg still holds (give() releases a whole run: never more than it holds). Returns its length. */
+static uint32_t rebuild_run(ar_log *lg, uint32_t s)
+{
+	ar_seg *g = &ar_segs[s];
+	uint32_t k = 1;
+	while (k < g->run && s + k < ar_nsegs && ar_log_owns(lg, s + k)) {
+		k++;
+	}
+	g->run = k;
+	for (uint32_t j = s + 1; j < s + k; j++) {
+		ar_seg_set(j, SEG_CONT);
+	}
+	return k;
+}
+
+/* Each entry's live flag from linked(e), and s's live bytes their sum. Stops at a header without a size. */
+static size_t relink_entries(uint32_t s, bool (*linked)(const nocopy_entry *e, void *arg), void *arg)
+{
+	size_t live = 0;
+	for (char *p = ar_seg_start(s), *end = p + ar_segs[s].used; p < end;) {
+		nocopy_entry *e = (nocopy_entry *) p;
+		if (nocopy_entry_size(e) < sizeof *e) {
+			break;
+		}
+		e->live = linked(e, arg);
+		live += e->live ? nocopy_entry_size(e) : 0;
+		p += nocopy_entry_size(e);
+	}
+	return live;
+}
+
+void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg), void *arg)
+{
+	rebuild_own(lg);
+	forget_lost_open_segments(lg);
 	lg->ndead = 0;
 	lg->live_bytes = 0;
 	for (uint32_t s = ar_log_next(lg, 0); s != AR_NONE;) {
@@ -199,33 +251,13 @@ void ar_log_rebuild(ar_log *lg, bool (*linked)(const nocopy_entry *e, void *arg)
 			s = ar_log_next(lg, s + 1);
 			continue;
 		}
-		uint32_t k = 1;
-		while (k < g->run && s + k < ar_nsegs && ar_log_owns(lg, s + k)) {
-			k++;
-		}
-		g->run = k; /* give() releases run segments: never more than it holds */
-		for (uint32_t j = s + 1; j < s + k; j++) {
-			ar_seg_set(j, SEG_CONT);
-		}
-		bool installed = false;
-		for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-			installed |= lg->cur[b] == (int32_t) s;
-		}
-		if (g->state == SEG_OPEN && !installed) {
+		uint32_t k = rebuild_run(lg, s);
+		if (g->state == SEG_OPEN && !is_open_segment(lg, s)) {
 			ar_seg_set(s, SEG_SEALED);
 		}
 		g->pending = 0;
 		if (g->state != SEG_DEAD) {
-			g->live = 0;
-			for (char *p = ar_seg_start(s), *end = p + g->used; p < end;) {
-				nocopy_entry *e = (nocopy_entry *) p;
-				if (nocopy_entry_size(e) < sizeof *e) {
-					break;
-				}
-				e->live = linked(e, arg);
-				g->live += e->live ? nocopy_entry_size(e) : 0;
-				p += nocopy_entry_size(e);
-			}
+			g->live = relink_entries(s, linked, arg);
 			lg->live_bytes += g->live;
 		}
 		s = ar_log_next(lg, s + k);

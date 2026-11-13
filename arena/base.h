@@ -48,8 +48,11 @@ __attribute__((noreturn, cold)) void ar_assert_fail(const char *what, const char
 AR_HIDDEN extern char *ar_base;
 AR_HIDDEN extern size_t ar_size;
 
-/* Which of mask + 1 parts (shards, lease tables) a key hash belongs to: Fibonacci mix, top bits. */
-static inline uint32_t ar_part(uint64_t h, uint32_t mask) { return (uint32_t) ((h * 0x9E3779B97F4A7C15ULL) >> 56) & mask; }
+/* Fibonacci hashing: spreads a key hash's bits into the high ones, which callers take as an index. */
+static inline uint64_t ar_fib_mix(uint64_t h) { return h * 0x9E3779B97F4A7C15ULL; }
+
+/* Which of mask + 1 parts (shards, lease tables) a key hash belongs to: top bits. */
+static inline uint32_t ar_part(uint64_t h, uint32_t mask) { return (uint32_t) (ar_fib_mix(h) >> 56) & mask; }
 
 static inline uint32_t ar_off8(const void *p) { return (uint32_t) (((const char *) p - ar_base) >> 3); }
 static inline void *ar_at8(uint32_t off8) { return ar_base + ((size_t) off8 << 3); }
@@ -73,6 +76,14 @@ static inline void ar_cpu_relax(void)
 
 /* Segment sets: bitmaps of NOCOPY_SEG_WORDS words (pins, ownership, reclaim's sets). */
 static inline uint64_t ar_segbit(uint32_t s) { return (uint64_t) 1 << (s & 63); }
+static inline uint32_t ar_segs_count(const uint64_t *m, uint32_t nwords)
+{
+	uint32_t n = 0;
+	for (uint32_t w = 0; w < nwords; w++) {
+		n += (uint32_t) __builtin_popcountll(m[w]);
+	}
+	return n;
+}
 static inline bool ar_segs_has(const uint64_t *m, uint32_t s) { return m[s >> 6] >> (s & 63) & 1; }
 static inline void ar_segs_add(uint64_t *m, uint32_t s) { m[s >> 6] |= ar_segbit(s); }
 static inline void ar_segs_del(uint64_t *m, uint32_t s) { m[s >> 6] &= ~ar_segbit(s); }

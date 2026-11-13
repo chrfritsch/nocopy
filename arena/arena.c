@@ -6,11 +6,7 @@
 char *ar_user;
 nocopy_clock_fn ar_clock_fake;
 
-typedef struct {
-	const ar_layout *l;
-} creating;
-
-static void init(void *mem, void *arg) { ar_layout_init(mem, ((creating *) arg)->l); }
+static void init(void *mem, void *layout) { ar_layout_init(mem, layout); }
 
 nocopy_err nocopy_arena_open(const nocopy_config *cfg, nocopy_named *out)
 {
@@ -21,8 +17,7 @@ nocopy_err nocopy_arena_open(const nocopy_config *cfg, nocopy_named *out)
 		return err;
 	}
 	void *mem;
-	creating c = {.l = &l};
-	err = ar_region_open(cfg->name, cfg->abi, l.size, init, &c, out, &mem);
+	err = ar_region_open(cfg->name, cfg->abi, l.size, init, &l, out, &mem);
 	if (err.code != NOCOPY_ERR_NONE) {
 		return err;
 	}
