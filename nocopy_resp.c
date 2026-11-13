@@ -984,8 +984,13 @@ static int64_t vk_px(time_t expires)
 	return ms > 0 ? ms : 1;
 }
 
-#define VK_HDR 14 /* 0x00, flags (VK_IGB), int64 expires, uint32 compute ms; then the serialized value. Integers: decimal, for INCRBY */
-#define VK_IGB 2  /* the value is igbinary's (a wire format: RESP may hold values older builds wrote) */
+/* A wire format (RESP may hold values older builds wrote): 0x00, flags, int64 expires, uint32 compute ms, the serialized value. Integers: decimal, for INCRBY. */
+#define VK_FLAGS 1
+#define VK_EXPIRES 2
+#define VK_MS (VK_EXPIRES + 8)
+#define VK_HDR (VK_MS + 4)
+_Static_assert(VK_HDR == 14, "the RESP payload header is a wire format");
+#define VK_IGB 2 /* flag: the value is igbinary's */
 
 static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 {
@@ -1001,9 +1006,9 @@ static zend_string *vk_encode(zval *val, time_t expires, uint32_t user)
 	char *b = ZSTR_VAL(s);
 	int64_t x = expires;
 	b[0] = 0;
-	b[1] = fmt == NOCOPY_FMT_IGB ? VK_IGB : 0;
-	memcpy(b + 2, &x, 8);
-	memcpy(b + 10, &user, 4);
+	b[VK_FLAGS] = fmt == NOCOPY_FMT_IGB ? VK_IGB : 0;
+	memcpy(b + VK_EXPIRES, &x, sizeof x);
+	memcpy(b + VK_MS, &user, sizeof user);
 	memcpy(b + VK_HDR, Z_STRVAL(ser), Z_STRLEN(ser) + 1);
 	zval_ptr_dtor(&ser);
 	return s;
@@ -1028,10 +1033,10 @@ static bool vk_decode(const zend_string *raw, zval *rv, time_t *expires, uint32_
 		return false;
 	}
 	int64_t x;
-	memcpy(&x, b + 2, 8);
-	memcpy(user, b + 10, 4);
+	memcpy(&x, b + VK_EXPIRES, sizeof x);
+	memcpy(user, b + VK_MS, sizeof *user);
 	*expires = (time_t) x;
-	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[1] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
+	return nocopy_unserialize(rv, b + VK_HDR, n - VK_HDR, b[VK_FLAGS] & VK_IGB ? NOCOPY_FMT_IGB : NOCOPY_FMT_PHP);
 }
 
 /* An integer's last whole second in RESP from its PTTL, so our copy never outlives it. 0: never; -1: keep no copy. */
