@@ -204,7 +204,7 @@ static uint64_t hash_array(nc_share *sh, zend_array *a, int depth, size_t *up)
 		hv_grow(sh);
 	}
 	uint32_t i = sh->hn++;
-	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(data_size(a));
+	size_t n = array_bytes(a);
 	uint64_t h = H_SEED, c;
 	if (HT_IS_PACKED(a)) {
 		for (uint32_t k = 0; k < a->nNumUsed; k++) {
@@ -232,7 +232,7 @@ static uint64_t hash_array(nc_share *sh, zend_array *a, int depth, size_t *up)
 /* Too small to share: under NC_SHARE_MIN bytes with its keys, and only scalars in it. */
 static zend_always_inline bool unshareable(const zend_array *a)
 {
-	size_t n = SALIGN(sizeof(zend_array)) + SALIGN(data_size(a));
+	size_t n = array_bytes(a);
 	if (n >= NC_SHARE_MIN) {
 		return false;
 	}

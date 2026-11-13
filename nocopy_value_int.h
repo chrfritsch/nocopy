@@ -80,6 +80,9 @@ static zend_always_inline size_t data_size(const zend_array *a)
 	return HT_IS_PACKED(a) ? HT_PACKED_USED_SIZE(a) : map_size(a);
 }
 
+/* The bytes of a in the block, keys and values apart. */
+static zend_always_inline size_t array_bytes(const zend_array *a) { return SALIGN(sizeof(zend_array)) + SALIGN(data_size(a)); }
+
 /* ---- the string table: equal strings stored once per value ---- */
 
 #define NC_STRTAB 256
