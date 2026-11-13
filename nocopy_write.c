@@ -113,7 +113,8 @@ void nc_share_check(char *p, const nc_builder *b)
 {
 	checker c = {.base = p, .size = b->bn, .atoms = nocopy_atom_bit(b->av), .shared = true};
 	zval v;
-	ZVAL_ARR(&v, (zend_array *) (p + (uintptr_t) Z_ARR(b->root)));
+	Z_ARR(v) = (zend_array *) (p + (uintptr_t) Z_ARR(b->root));
+	Z_TYPE_INFO(v) = IS_ARRAY; /* immutable, as a block stores it: ZVAL_ARR would add the refcounted flags */
 	check_zval(&c, &v);
 }
 #endif
