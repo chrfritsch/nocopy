@@ -185,7 +185,7 @@ static zend_object *object_make(nocopy_env *env, zend_class_entry *ce, nc_kind k
 			if (!cc || !(ZEND_CLASS_CONST_FLAGS(cc) & ZEND_CLASS_CONST_IS_CASE)) {
 				return NULL;
 			}
-			zend_object *o = zend_enum_get_case(ce, Z_STR(n->props[0]));
+			zend_object *o = Z_TYPE(cc->value) == IS_OBJECT ? Z_OBJ(cc->value) : zend_enum_get_case(ce, Z_STR(n->props[0]));
 			GC_ADDREF(o);
 			return o;
 		}

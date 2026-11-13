@@ -58,7 +58,8 @@ class NocopyLockBackend extends LockBackendAbstract {
     $v = $this->locks[$name] ?? nocopy_get($this->prefix . $name);
     unset($this->locks[$name]);
     if (is_int($v) && $v !== 0 && ($v & self::OWNER_MASK) === $this->owner()) {
-      nocopy_cas($this->prefix . $name, $v, 0);
+      // FALSE: it expired and another request holds it now, nothing to release.
+      $released = nocopy_cas($this->prefix . $name, $v, 0);
     }
   }
 

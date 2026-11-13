@@ -7,7 +7,7 @@
 Simple `put` / `get` functions, one cache shared by every PHP worker on the machine, and no copying on read.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![PHP 8.4 | 8.5](https://img.shields.io/badge/PHP-8.4%20%7C%208.5-777bb4.svg)
+![PHP 8.4 | 8.5 | 8.6](https://img.shields.io/badge/PHP-8.4%20%7C%208.5%20%7C%208.6-777bb4.svg)
 ![NTS and ZTS](https://img.shields.io/badge/NTS%20%2B%20ZTS-FrankenPHP-555.svg)
 ![Linux amd64 | arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-555.svg)
 

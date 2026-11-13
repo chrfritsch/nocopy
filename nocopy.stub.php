@@ -2,6 +2,7 @@
 
 /**
  * @generate-class-entries
+ * @generate-legacy-arginfo 80400
  */
 
 /**
@@ -23,6 +24,7 @@ function nocopy_add(string $key, mixed $value, int $ttl = 0): bool {}
 function nocopy_inc(string $key, int $step = 1, int $ttl = 0): int|false {}
 
 /** Replaces the integer $old with $new atomically. */
+#[\NoDiscard]
 function nocopy_cas(string $key, int $old, int $new): bool {}
 
 /** Removes every entry (with nocopy.resp: every key under the prefix too). */
@@ -34,6 +36,7 @@ function nocopy_delete(string $key): bool {}
 function nocopy_delete_multiple(array $keys): int {}
 
 /** The hits as key => value; with nocopy.resp, every local miss in one round trip. */
+#[\NoDiscard]
 function nocopy_get_multiple(array $keys): array {}
 
 /** key => value, one $ttl for all; with nocopy.resp, one pipeline. false: some were not stored. */
@@ -46,9 +49,12 @@ function nocopy_remember(string $key, callable $callback, int $ttl = 0, float $b
  * Who sees this process's writes: "host" (every process on this machine that attached to nocopy.shm_name), "resp" (every process on the
  * same nocopy.resp and prefix), "none" (nocopy.shm_name not set or not attached: nothing is kept or served).
  */
+#[\NoDiscard]
 function nocopy_shared_with(): string {}
 
+#[\NoDiscard]
 function nocopy_stats(): array {}
 
 /** Live keys of this host's arena starting with $prefix, oldest first (to the clock tick, 1-4 ms): key => ['size' => bytes, 'created' => unix time, 'expires' => unix time, 0 never]. */
+#[\NoDiscard]
 function nocopy_keys(string $prefix = ""): array {}
