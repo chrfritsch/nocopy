@@ -54,6 +54,7 @@ int nocopy_lease_take(uint64_t h, int32_t slot, time_t now, time_t ttl)
 			return r;
 		}
 		dead = o;
+		AR_HOOK("lease.dead");
 	}
 }
 

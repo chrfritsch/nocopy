@@ -134,6 +134,28 @@ static void turn(int to)
 	pthread_mutex_unlock(&mu);
 }
 
+/* Steps the arena takes only under a shard lock: some shard's must be held (threads share an owner id, so not whose). */
+static bool under_lock(const char *at)
+{
+	static const char *const p[] = {"put.", "commit.", "delete.", "merge.", "move.", "rebalance.merged", "clear.emptied"};
+	for (size_t i = 0; i < sizeof p / sizeof *p; i++) {
+		if (!strncmp(at, p[i], strlen(p[i]))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool any_shard_locked(void)
+{
+	for (uint32_t i = 0; i < ar_hdr->nshards; i++) {
+		if (__atomic_load_n(&ar_shards[i].lock.holder, __ATOMIC_RELAXED)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /* A step of a scheduled thread: the hook of every AR_HOOK, and of a scenario's own steps. */
 static void step(const char *at)
 {
@@ -146,6 +168,9 @@ static void step(const char *at)
 	trace[nsteps].t = (int8_t) me;
 	trace[nsteps++].at = at;
 	count(at);
+	if (under_lock(at) && !any_shard_locked()) {
+		fail("a step that needs its shard's lock ran without one");
+	}
 	if (verbose) {
 		printf("  T%d %s\n", me, at);
 	}
@@ -250,12 +275,13 @@ static int keyof(char *k, uint64_t h) { return snprintf(k, 20, "%llx", (unsigned
 static payload *pl(const nocopy_entry *e) { return (payload *) ((char *) e + HDR + NOCOPY_ALIGN(nocopy_entry_klen(e) + 1)); }
 static uint8_t pat(uint64_t h, uint32_t ver, uint32_t i) { return (uint8_t) (h ^ ver * 31 ^ i * 7); }
 
-static bool put(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len)
+/* deps: the atom halves the entry points into */
+static bool put_deps(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len, uint8_t deps)
 {
 	char k[20];
 	uint32_t klen = (uint32_t) keyof(k, h);
 	nocopy_put p;
-	nocopy_put_req q = {.h = h, .key = k, .klen = klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len)};
+	nocopy_put_req q = {.h = h, .key = k, .klen = klen, .koff = HDR, .size = HDR + NOCOPY_ALIGN(klen + 1) + NOCOPY_ALIGN(sizeof(payload) + len), .deps = deps};
 	nocopy_entry *e = nocopy_put_begin(&p, c, &q);
 	if (!e) {
 		return false;
@@ -266,6 +292,8 @@ static bool put(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len)
 	}
 	return nocopy_put_commit(&p, false) == NOCOPY_PUT_OK;
 }
+
+static bool put(nocopy_ctx *c, uint64_t h, uint32_t ver, uint32_t len) { return put_deps(c, h, ver, len, 0); }
 
 static void del(uint64_t h)
 {
@@ -472,12 +500,245 @@ static void merge_reader(nocopy_ctx *c)
 }
 static void merge_check(nocopy_ctx *c) { CHECK(get(c, A) == 1 && get(c, B) == 1); }
 
+/* ---- rotate: a writer's view, then its entry's deps bit, hold an atom generation while another writer fills two halves ---- */
+
+#define AT (&ar_hdr->atoms)
+static const char WORD[] = "languages:language_interface";
+static char filler[1 << 16];
+static uint32_t big_atom; /* two to a half */
+static const char *w_blob; /* the atom the writer's entry points at, of generation w_gen */
+static uint32_t w_gen;
+
+static uint64_t whash(const char *s)
+{
+	uint64_t h = 5381;
+	while (*s) {
+		h = h * 33 + (unsigned char) *s++;
+	}
+	return h | 1;
+}
+static const char *atom_add(nocopy_ctx *c, const char *s, uint32_t hlen)
+{
+	nocopy_atom_view v;
+	CHECK(nocopy_atom_begin(c, &v));
+	const char *r = nocopy_atom_add(&v, whash(s), filler, hlen, s, (uint32_t) strlen(s));
+	nocopy_atom_end(c);
+	return r;
+}
+static bool w_intact(void) { return !w_blob || (!strcmp(w_blob, WORD) && (AT->half[w_gen & 1].state & ~NOCOPY_ATOM_WIPING) == w_gen); }
+static void rot_setup(nocopy_ctx *c)
+{
+	A = 0x1001;
+	w_blob = NULL;
+	big_atom = AT->half_bytes * 2 / 5 & ~7u;
+	CHECK(big_atom <= sizeof filler);
+	memset(filler, 'Z', sizeof filler);
+	CHECK(atom_add(c, WORD, 0) && atom_add(c, "big0", big_atom) && AT->gen == 2); /* the next two big ones rotate */
+}
+static void rot_writer(nocopy_ctx *c)
+{
+	nocopy_atom_view v;
+	CHECK(nocopy_atom_begin(c, &v));
+	const char *b = nocopy_atom_find(&v, whash(WORD), WORD, sizeof WORD - 1);
+	if (!b) {
+		b = nocopy_atom_add(&v, whash(WORD), NULL, 0, WORD, sizeof WORD - 1); /* NULL: the atom lock is busy, or it rotated */
+	}
+	w_blob = b;
+	w_gen = v.gen;
+	step("user.view");
+	CHECK(w_intact());
+	CHECK(put_deps(c, A, 2, 16, b ? nocopy_atom_bit(&v) : 0));
+	nocopy_atom_end(c);
+	step("user.ended");
+	CHECK(w_intact());
+}
+static void rot_filler(nocopy_ctx *c)
+{
+	for (int i = 1; i <= 6; i++) {
+		char k[8];
+		snprintf(k, sizeof k, "big%d", i);
+		atom_add(c, k, big_atom);
+	}
+}
+static void rot_check(nocopy_ctx *c) { CHECK(get(c, A) == 2 && w_intact() && AT->gen >= 3); }
+
+/* ---- rebalance: a shard below its share and a dry pool; the fullest shard evicts for it under a second writer or a reader ---- */
+
+static uint64_t in_shard(uint64_t after, uint32_t sh)
+{
+	for (uint64_t h = after + 2;; h += 2) {
+		if (ar_shard_idx(h) == sh) {
+			return h;
+		}
+	}
+}
+static void copy_counted(const nocopy_entry *e, void *arg)
+{
+	uint64_t *h = arg;
+	char k[20];
+	uint32_t klen = (uint32_t) keyof(k, h[0]);
+	h[1] += nocopy_entry_klen(e) == klen && !memcmp(nocopy_key(e), k, klen);
+}
+/* entries under h's key */
+static uint32_t copies(nocopy_ctx *c, uint64_t h)
+{
+	uint64_t a[2] = {h, 0};
+	nocopy_borrow_begin(c);
+	nocopy_each(c, copy_counted, a);
+	nocopy_borrow_end(c);
+	return (uint32_t) a[1];
+}
+
+static uint32_t free_segs(void)
+{
+	nocopy_stats_t st;
+	nocopy_stats(&st);
+	return st.free_segments;
+}
+static void rebal_setup(nocopy_ctx *c)
+{
+	CHECK(ar_hdr->nshards == 2);
+	part = (uint32_t) (ar_seg_size / 4);
+	uint64_t first = in_shard(1, 1), h = first, x = nocopy_expunges();
+	for (; nocopy_expunges() == x || free_segs() > ar_hdr->nshards; h = in_shard(h, 1)) { /* past the first eviction, until the pool is dry again */
+		CHECK(put(c, h, 1, part));
+	}
+	for (B = first; get(c, B) == MISS; B = in_shard(B, 1)) {} /* the oldest left: the next victim */
+	A = in_shard(1, 0);
+	CHECK(ar_shards[0].log.nown == 0);
+}
+static void rebal_big(nocopy_ctx *c) { CHECK(put(c, A, 1, (uint32_t) (ar_seg_size * 3 / 4))); }
+static void rebal_small(nocopy_ctx *c) { CHECK(put(c, A, 2, 16)); }
+static void rebal_reader(nocopy_ctx *c)
+{
+	long v = hold(c, B);
+	CHECK(v == 1 || v == MISS);
+}
+static void rebal_check(nocopy_ctx *c)
+{
+	long a = get(c, A);
+	CHECK((a == 1 || a == 2) && copies(c, A) == 1);
+}
+static void rebal_check_one(nocopy_ctx *c) { CHECK(get(c, A) == 1 && copies(c, A) == 1); }
+
+/* ---- lease: three workers want one key whose lease a dead owner holds; one computes at a time ---- */
+
+static int holders, took;
+static void lease_setup(nocopy_ctx *c)
+{
+	(void) c;
+	A = 0x1001;
+	holders = took = 0;
+	CHECK(ar_hdr->nshards == 1);
+	ar_hdr->leases[0].l[3] = (ar_lease) {.h = A, .owner = 0xffffffffu /* no process slot: dead */, .until = fake_now + 30, .slot = 9};
+}
+static void lease_worker(nocopy_ctx *c)
+{
+	int r = nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30);
+	CHECK(r == NOCOPY_LEASE_TAKEN || r == NOCOPY_LEASE_HELD);
+	if (r == NOCOPY_LEASE_TAKEN) {
+		CHECK(++holders == 1);
+		took++;
+		step("user.compute");
+		holders--;
+		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+	}
+}
+static void lease_check(nocopy_ctx *c)
+{
+	(void) c;
+	CHECK(took >= 1 && ar_leases_held(fake_now) == 0);
+}
+
+/* ---- lease-expired: a holder computes past its lease, another worker takes the key over, then the first one drops ---- */
+
+static bool holds(nocopy_ctx *c)
+{
+	for (int i = 0; i < NOCOPY_LEASES; i++) {
+		const ar_lease *l = &ar_hdr->leases[0].l[i];
+		if (l->h == A && l->owner == ar_self && l->slot == nocopy_ctx_slot(c)) {
+			return true;
+		}
+	}
+	return false;
+}
+static void late_setup(nocopy_ctx *c)
+{
+	lease_setup(c);
+	ar_hdr->leases[0].l[3].owner = 0;
+}
+static void late_slow(nocopy_ctx *c)
+{
+	if (nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN) {
+		step("user.compute");
+		fake_now += 31; /* restored by late_check */
+		step("user.compute");
+		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+	}
+}
+static void late_next(nocopy_ctx *c)
+{
+	if (nocopy_lease_take(A, nocopy_ctx_slot(c), fake_now, 30) == NOCOPY_LEASE_TAKEN) {
+		if (fake_now != 1700000000) {
+			step("user.took_over");
+		}
+		step("user.compute");
+		CHECK(holds(c)); /* the first holder's drop did not take it */
+		nocopy_lease_drop(A, nocopy_ctx_slot(c));
+	}
+}
+static void late_check(nocopy_ctx *c)
+{
+	(void) c;
+	fake_now = 1700000000;
+	CHECK(ar_leases_held(fake_now) == 0);
+}
+
+/* ---- clear: a clear walks the shards while a reader holds a key and a writer puts into both ---- */
+
+static void clear_setup(nocopy_ctx *c)
+{
+	CHECK(ar_hdr->nshards == 2);
+	A = in_shard(1, 0);
+	B = in_shard(1, 1);
+	C = in_shard(B, 1);
+	CHECK(put(c, A, 1, 16) && put(c, B, 1, 16));
+}
+static void clear_clearer(nocopy_ctx *c) { (void) c; nocopy_clear(); }
+static void clear_writer(nocopy_ctx *c) { CHECK(put(c, C, 2, 16) && put(c, A, 3, 16)); }
+static void clear_reader(nocopy_ctx *c)
+{
+	long a = hold(c, A), b = get(c, B);
+	CHECK(a == 1 || a == 3 || a == MISS);
+	CHECK(b == 1 || b == MISS);
+}
+static void clear_check(nocopy_ctx *c)
+{
+	long a = get(c, A), cc = get(c, C);
+	CHECK((a == 3 || a == MISS) && (cc == 2 || cc == MISS) && get(c, B) == MISS);
+	CHECK(entries(c) == (uint32_t) (a == 3) + (cc == 2));
+	nocopy_request_end(c);
+	for (int t = 0; t < S->nthreads; t++) {
+		nocopy_request_end(&T[t].c);
+	}
+	nocopy_stats_t st;
+	nocopy_stats(&st);
+	CHECK(st.pinned_segments == 0);
+	CHECK(put(c, B, 4, (uint32_t) (ar_seg_size * 3 / 4)) && get(c, B) == 4); /* the cleared segments came back */
+}
+
 static const scenario scenarios[] = {
 	{"shift", 4, 3, 2, run_keys, {shift_writer, shift_reader}, shift_check, {"shift.moved", "probe.retry", "pin.set"}},
 	{"reuse", 4, 3, 2, reuse_setup, {reuse_writer, reuse_reader}, reuse_check, {"reclaim.gave", "reclaim.pinned", "pin.set", "put.fill"}},
 	{"writers", 4, 2, 3, run_keys, {writers_a, writers_b, writers_reader}, writers_check, {"lock.wait", "put.fill", "pin.set"}},
 	{"churn", 4, 2, 3, run_keys, {churn_del, churn_put, churn_reader}, churn_check, {"shift.moved", "lock.wait", "probe.retry"}},
 	{"merge", 4, 2, 2, merge_setup, {merge_writer, merge_reader}, merge_check, {"merge.picked", "move.linked", "reclaim.gave", "pin.set"}},
+	{"rotate", 4, 2, 2, rot_setup, {rot_writer, rot_filler}, rot_check, {"rotate.marked", "rotate.wiped", "view.retry", "lock.wait"}},
+	{"rebalance", 16, 2, 2, rebal_setup, {rebal_big, rebal_small}, rebal_check, {"rebalance.unlocked", "rebalance.merged", "lock.wait"}},
+	{"rebalance-pin", 16, 2, 2, rebal_setup, {rebal_big, rebal_reader}, rebal_check_one, {"rebalance.merged", "reclaim.pinned", "pin.set"}},
+	{"lease", 4, 2, 3, lease_setup, {lease_worker, lease_worker, lease_worker}, lease_check, {"lease.dead", "lease.taken", "lock.wait"}},
+	{"lease-expired", 4, 2, 2, late_setup, {late_slow, late_next}, late_check, {"lease.taken", "user.took_over"}},
+	{"clear", 16, 2, 3, clear_setup, {clear_clearer, clear_writer, clear_reader}, clear_check, {"clear.emptied", "clear.unlocked", "lock.wait", "reclaim.pinned"}},
 };
 
 int main(int argc, char **argv)

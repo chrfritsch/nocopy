@@ -59,12 +59,14 @@ bool ar_atom_begin(ar_atom_reader *r, int slot, nocopy_atom_view *v)
 		/* Dekker with rotate: announce, then check the half is not being wiped; a rotation sets WIPING, then reads announcements */
 		for (;;) {
 			uint32_t g = __atomic_load_n(&A->gen, __ATOMIC_ACQUIRE);
+			AR_HOOK("view.loaded");
 			__atomic_store_n(agen_of(slot), g, __ATOMIC_SEQ_CST);
 			__atomic_thread_fence(__ATOMIC_SEQ_CST);
 			if (__atomic_load_n(&half_of(g)->state, __ATOMIC_ACQUIRE) == g) {
 				r->agen = g;
 				break;
 			}
+			AR_HOOK("view.retry");
 			ar_cpu_relax(); /* g went stale and its half is being wiped: gen has moved on, or will */
 		}
 	}
