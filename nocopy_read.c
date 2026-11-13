@@ -458,7 +458,7 @@ static zend_always_inline size_t g_ncls_size(const nocopy_entry *e)
 
 nocopy_tpl *nocopy_tpl_make(nocopy_env *env, const nocopy_entry *e)
 {
-	const char *v = (const char *) e + KEY_OFF + SALIGN(nocopy_entry_klen(e));
+	const char *v = (const char *) e + val_off(nocopy_entry_klen(e));
 	size_t n = SALIGN(nocopy_entry_size(e) - (size_t) (v - (const char *) e));
 	nocopy_tpl *t = emalloc(offsetof(nocopy_tpl, bytes) + n + g_ncls_size(e));
 	memcpy(t->bytes, v, n);

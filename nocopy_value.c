@@ -82,7 +82,7 @@ static zend_always_inline nocopy_status put_result(nocopy_put_result c)
 /* A scalar or a string alone (a serialized value too): nothing to build or release. */
 static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req *q, const zval *val, bool add_only, nocopy_fmt fmt)
 {
-	q->size = KEY_OFF + SALIGN(q->klen) + (Z_TYPE_P(val) == IS_STRING ? str_size(Z_STRLEN_P(val)) : 0);
+	q->size = val_off(q->klen) + (Z_TYPE_P(val) == IS_STRING ? str_size(Z_STRLEN_P(val)) : 0);
 	q->koff = KEY_OFF;
 	q->flags = (uint8_t) fmt;
 	q->deps = 0;
@@ -91,7 +91,7 @@ static zend_always_inline nocopy_status put_flat(nocopy_ctx *ctx, nocopy_put_req
 	if (!e) {
 		return NOCOPY_NO_ROOM;
 	}
-	nc_write_flat(e, (char *) e + KEY_OFF + SALIGN(q->klen), val);
+	nc_write_flat(e, (char *) e + val_off(q->klen), val);
 	return put_result(nocopy_put_commit(&p, add_only));
 }
 
@@ -114,7 +114,7 @@ static nocopy_status put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, zv
 	nc_share ss;
 	graph_b g;
 	nc_builder b;
-	nc_build_init(&b, env, av, &ss, &g, str, KEY_OFF + SALIGN(q->klen));
+	nc_build_init(&b, env, av, &ss, &g, str, val_off(q->klen));
 	build_status st = nc_build(&b, val);
 	nocopy_status r;
 	if (st == BUILD_OK && b.base + b.bn > UINT32_MAX) {

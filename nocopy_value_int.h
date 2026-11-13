@@ -16,6 +16,8 @@
 #define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
 #define KEY_OFF SALIGN(sizeof(nocopy_block)) /* the key's bytes: only compared, never a zend_string */
 _Static_assert(KEY_OFF <= UINT8_MAX, "koff is 8 bits");
+/* Where the value's out-of-line parts start: after the header, the zval and the key. */
+static zend_always_inline size_t val_off(uint32_t klen) { return KEY_OFF + SALIGN(klen); }
 
 /* buf if n elements fit, else request memory (SMALL_FREE). */
 #define SMALL_ALLOC(buf, n) ((n) <= sizeof(buf) / sizeof *(buf) ? (buf) : emalloc((n) * sizeof *(buf)))
