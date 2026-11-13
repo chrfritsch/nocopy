@@ -36,7 +36,7 @@ static inline bool nocopy_in_arena(const void *p) { return (uintptr_t) p - (uint
 /* NOCOPY_USER_BYTES of the user's shared state, zeroed at creation, at the same address in every process. */
 AR_HIDDEN extern char *ar_user;
 static inline void *nocopy_user_area(void) { return ar_user; }
-/* Replaces the wall clock's seconds (TTLs, expiry) in this process; NULL: the wall clock again. For tests. */
+/* Replaces the clock's seconds (TTLs, expiry, leases) in this process; NULL: the monotonic clock again. For tests. */
 void nocopy_set_clock(nocopy_clock_fn fn);
 
 /* ---- a process's (thread's) handle: nocopy_ctx_init, then claim ---- */

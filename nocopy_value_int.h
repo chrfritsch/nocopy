@@ -1,4 +1,4 @@
-/* Internal to the value layer's units: what the phases share (plan -> write, the graph's layout, classes). */
+/* Internal to the value layer's units: what the phases share (build -> place, the graph's layout, classes). */
 
 #ifndef NOCOPY_VALUE_INT_H
 #define NOCOPY_VALUE_INT_H
