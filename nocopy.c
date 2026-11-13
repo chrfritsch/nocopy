@@ -13,6 +13,7 @@
 #include "zend_system_id.h"
 #include "zend_extensions.h"
 #include "zend_closures.h"
+#include "zend_attributes.h"
 #include "nocopy_arginfo.h"
 #include <pthread.h>
 #include <fcntl.h>
@@ -648,6 +649,7 @@ static void open_late(void)
 PHP_MINIT_FUNCTION(nocopy)
 {
 	REGISTER_INI_ENTRIES();
+	register_nocopy_symbols(module_number);
 	abi_id = layout_id(); /* now: a root fpm master's workers open the arena later, maybe after nocopy.so was replaced */
 	sapi_zero_copy = short_lived_sapi();
 	if (!zend_hash_str_exists(&module_registry, ZEND_STRL("apcu"))) {

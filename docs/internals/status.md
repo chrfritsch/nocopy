@@ -9,11 +9,11 @@ technical detail. Update it after verifying runs or finishing roadmap items. The
 Works, tested, tagged **0.0.1** (first tag, no stability promise yet). MIT licensed, free, no paid edition.
 
 - **Platforms:** Linux, amd64 and arm64. Builds on macOS, untested there. No Windows.
-- **PHP:** 8.4 and 8.5, NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM; mod_php prefork tested by `./dev shm`).
+- **PHP:** 8.4, 8.5 and 8.6 (8.6 on its release candidates; the official 8.6 images are ZTS), NTS and ZTS (FrankenPHP; tested with ext-parallel, not with mod_php under a threaded MPM; mod_php prefork tested by `./dev shm`).
 - **Pieces:** the extension (`nocopy_*`), [`apcu/`](../../apcu) (polyfill, `chrfritsch/nocopy-apcu`),
   [`symfony/`](../../symfony) (bundle, `cache.adapter.nocopy`), [`drupal/`](../../drupal) (all bins, cache tags, locks, flood), [`cli/`](../../cli) (console, `chrfritsch/nocopy-cli`).
 - **Distribution:** [github.com/chrfritsch/nocopy](https://github.com/chrfritsch/nocopy), tag 0.0.1, on [Packagist](https://packagist.org/packages/chrfritsch/nocopy):
-  `pie install chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). The integrations are not on Packagist yet. CI ([`ci.yml`](../../.github/workflows/ci.yml): PHP 8.4/8.5 × amd64/arm64,
+  `pie install chrfritsch/nocopy` (verified on `php:8.5-cli`, 2026-11-08). The integrations are not on Packagist yet. CI ([`ci.yml`](../../.github/workflows/ci.yml): PHP 8.4/8.5/8.6 × amd64/arm64,
   ZTS 8.4, FrankenPHP, Symfony 6.4/7.4/8) is green on GitHub Actions.
 
 ## Last verified (2026-11-09, local Docker, arm64)

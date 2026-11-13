@@ -6,7 +6,7 @@ nocopy installs with [PIE](https://github.com/php/pie) or from source; it is not
 **You need:**
 
 - Linux (tested on amd64 and arm64)
-- PHP 8.4 or 8.5, NTS or ZTS, with `phpize`: the `php-dev` / `php-devel` package, or one of the official Docker images
+- PHP 8.4, 8.5 or 8.6, NTS or ZTS, with `phpize`: the `php-dev` / `php-devel` package, or one of the official Docker images
 - A C compiler
 - For RESP over TLS: OpenSSL 1.1.1+ headers and `pkg-config`
 

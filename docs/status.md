@@ -12,7 +12,7 @@ Install with `pie install chrfritsch/nocopy` ([install guide](how-to/install.md)
 | | |
 |---|---|
 | **Operating system** | Linux on amd64 and arm64. It builds on macOS, but that is untested. No Windows. |
-| **PHP** | 8.4 and 8.5, NTS and ZTS (thread-safe) |
+| **PHP** | 8.4, 8.5 and 8.6, NTS and ZTS (thread-safe). 8.6 is tested on its release candidates until 8.6.0 is out |
 | **Web servers** | php-fpm, Apache mod_php (prefork), FrankenPHP (classic and worker mode), `php -S`, CGI, LiteSpeed. Not tested: mod_php under a threaded Apache MPM. |
 | **Long-running processes** | CLI scripts, queue workers, FrankenPHP workers (they get [copy mode](explanation/how-it-works.md#zero-copy-and-copy-mode) automatically) |
 | **Several servers** | Redis 6.2+ or Valkey, including over TLS. Not yet: Sentinel, Cluster, TLS over unix sockets. |
@@ -32,7 +32,7 @@ Until they are on Packagist, require them from a checkout of this repository, as
 
 GitHub Actions runs these on every push:
 
-- **The test suite** on PHP 8.4 and 8.5, amd64 and arm64, thread-safe PHP, php-fpm and FrankenPHP, and a build without
+- **The test suite** on PHP 8.4, 8.5 and 8.6, amd64 and arm64, thread-safe PHP, php-fpm and FrankenPHP, and a build without
   RESP support.
 - **Memory and thread checkers:** AddressSanitizer, ThreadSanitizer, a debug build of PHP, and leak checks.
 - **Concurrency:** race tests repeated 30 times in a row, and a tool that tries every order in which concurrent

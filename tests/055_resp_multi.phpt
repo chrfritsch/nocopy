@@ -28,7 +28,7 @@ var_dump(preg_match('/cmdstat_mget:calls=1,/', vk('INFO', 'commandstats')), preg
 
 // filled locally: the next batch makes no round trip
 vk('CONFIG', 'RESETSTAT');
-nocopy_get_multiple(['r1', 'r2']);
+$got = nocopy_get_multiple(['r1', 'r2']);
 var_dump(preg_match('/cmdstat_mget:/', vk('INFO', 'commandstats')));
 
 // a change elsewhere drops the filled copy

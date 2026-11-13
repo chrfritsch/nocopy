@@ -3,10 +3,12 @@
 set -e
 cd "$(dirname "$0")"
 PHP=${PHP:-8.5}
+# the php image tag: 8.6 is a release candidate until 8.6.0 is out
+TAG=$PHP; [ "$PHP" = 8.6 ] && TAG=8.6-rc
 [ -t 0 ] && [ -t 1 ] && TTY=-it || TTY=
 
 usage() { cat <<EOF
-Usage: [PHP=8.4|8.5] ./dev <command> [args]     (default PHP=$PHP; images are built on first use, cached after)
+Usage: [PHP=8.4|8.5|8.6] ./dev <command> [args]     (default PHP=$PHP; images are built on first use, cached after)
 
   test [tests/0xx.phpt ...]   build + .phpt suite (RESP tests included)
   noresp [tests ...]        same, built with --disable-nocopy-resp
@@ -53,7 +55,7 @@ EOF
 
 # img [flavour]: nocopy-linux:$PHP, and on top of it nocopy-<flavour> from docker/Dockerfile.<flavour> (debug, perf: per PHP; drupal, trace: PHP 8.5)
 img() {
-  docker build -q --build-arg PHP="$PHP" -t "nocopy-linux:$PHP" docker >/dev/null
+  docker build -q --build-arg PHP="$TAG" -t "nocopy-linux:$PHP" docker >/dev/null
   case $1 in
     debug|perf)   docker build -q --build-arg PHP="$PHP" -f "docker/Dockerfile.$1" -t "nocopy-$1:$PHP" docker >/dev/null ;;
     drupal|trace) docker build -q -f "docker/Dockerfile.$1" -t "nocopy-$1" docker >/dev/null ;;
@@ -87,7 +89,7 @@ case $cmd in
   stress)     img; run "nocopy-linux:$PHP" /src/docker/stress.sh "${1:-30}" ;;
   c)          img; run "nocopy-linux:$PHP" /src/tests/c/run.sh "${1:-3}" ;;
   fuzz)       img; run -e FUZZ_VALUE "nocopy-linux:$PHP" /src/docker/fuzz.sh "$@" ;;
-  shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh && run "php:$PHP-apache" sh /src/docker/shm-name.sh ;;
+  shm)        img; run "nocopy-linux:$PHP" sh /src/docker/shm-name.sh && run "php:$TAG-apache" sh /src/docker/shm-name.sh ;;
   pie)        img; p=.cache/pie-1.5.5  # fetched once: a binary rewritten just before the mount sometimes shows as not found
               [ -x $p ] || { mkdir -p .cache; c=$(docker create ghcr.io/php/pie:1.5.5-bin x) && docker cp -q "$c":/pie $p.tmp && docker rm "$c" >/dev/null && mv $p.tmp $p; } || exit 1
               run -v "$PWD/$p":/usr/local/bin/pie:ro "nocopy-linux:$PHP" /src/docker/pie.sh ;;
@@ -112,7 +114,7 @@ case $cmd in
               img; run --shm-size=1g -e WORKERS -e REQS -e CONC -v "$PWD/$a":/appsrc:ro "nocopy-linux:$PHP" /src/docker/fpm-bench.sh ;;
   opcache)    img; run --shm-size=1g "nocopy-linux:$PHP" sh -c "$B"' && NOCOPY_SO=$SO php -n $(nocopy_flags opc shm_size=256M) /src/bench/opcache.php; shm_rm opc' ;;
   big)        img; run --shm-size=9g "nocopy-linux:$PHP" sh -c "$B"'; N="-n -d extension=pcntl -d memory_limit=1G $(nocopy_flags big)"
-              for m in ${1:-1G 4G}; do shm_rm big; s=$(date +%s%N); php $N -d nocopy.shm_size=$m -r "nocopy_stats();"; e=$(date +%s%N)
+              for m in ${1:-1G 4G}; do shm_rm big; s=$(date +%s%N); php $N -d nocopy.shm_size=$m -r "exit(nocopy_stats() ? 0 : 1);"; e=$(date +%s%N)
               echo "$m create: $(( (e - s) / 1000000 )) ms"; php $N -d nocopy.shm_size=$m /src/bench/big.php ${2:-20}; done; shm_rm big' big "$@" ;;
   soak)       img; run --shm-size=1g "nocopy-linux:$PHP" sh -c "$B"' && php -n -d extension=pcntl -d memory_limit=1G $(nocopy_flags soak shm_size=256M) /src/bench/soak.php "$@"; shm_rm soak' soak "$@" ;;
   tail)       img; run --shm-size=1g "nocopy-linux:$PHP" /src/docker/tail.sh "$@" ;;

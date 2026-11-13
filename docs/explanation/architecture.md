@@ -120,7 +120,7 @@ Details: [Sharing](sharing.md#several-servers-resp-as-the-cache-of-record).
 | Cache name (`nocopy.shm_name`) | one leading slash, at most 40 characters |
 | Nesting depth stored without serializing | 64 levels (deeper values are serialized) |
 | `nocopy_remember()` computations at once | 32 per shard (beyond that, a caller computes without waiting) |
-| Platforms | Linux on amd64 and arm64; PHP 8.4 and 8.5, NTS and ZTS |
+| Platforms | Linux on amd64 and arm64; PHP 8.4, 8.5 and 8.6, NTS and ZTS |
 
 ## Going deeper
 

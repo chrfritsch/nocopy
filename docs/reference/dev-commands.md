@@ -4,7 +4,9 @@
 Every command copies the sources into the container and builds from clean; the checkout is mounted read-only.
 CI ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) calls the same commands.
 
-`PHP=8.4` (or `8.5`, the default) picks the PHP version for the `nocopy-linux:<PHP>` image.
+`PHP=8.4`, `8.5` (the default) or `8.6` picks the PHP version for the `nocopy-linux:<PHP>` image. `8.6` builds on
+the `php:8.6-rc` images until 8.6.0 is out; they are thread-safe (ZTS) and have no APCu or igbinary yet (neither
+release builds there), so `bench`, `ab`, `symfony`, `apcu`, `debug` and `leaks` need 8.4 or 8.5, and test 042 skips.
 
 ## Tests
 

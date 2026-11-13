@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: d5f8df8df2108ca247c6073bde8ab7830240e8ca */
+ * Stub hash: c711288a503d4f9b635da33e1bde5cad76aebdc0 */
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_nocopy_put, 0, 2, _IS_BOOL, 0)
 	ZEND_ARG_TYPE_INFO(0, key, IS_STRING, 0)
@@ -98,15 +98,59 @@ static const zend_function_entry ext_functions[] = {
 	ZEND_RAW_FENTRY("nocopy_get", zif_nocopy_get, arginfo_nocopy_get, 0, frameless_function_infos_nocopy_get, NULL)
 	ZEND_FE(nocopy_add, arginfo_nocopy_add)
 	ZEND_FE(nocopy_inc, arginfo_nocopy_inc)
-	ZEND_FE(nocopy_cas, arginfo_nocopy_cas)
+#if (PHP_VERSION_ID >= 80500)
+	ZEND_RAW_FENTRY("nocopy_cas", zif_nocopy_cas, arginfo_nocopy_cas, ZEND_ACC_NODISCARD, NULL, NULL)
+#elif (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("nocopy_cas", zif_nocopy_cas, arginfo_nocopy_cas, 0, NULL, NULL)
+#endif
 	ZEND_FE(nocopy_clear, arginfo_nocopy_clear)
 	ZEND_FE(nocopy_delete, arginfo_nocopy_delete)
 	ZEND_FE(nocopy_delete_multiple, arginfo_nocopy_delete_multiple)
-	ZEND_FE(nocopy_get_multiple, arginfo_nocopy_get_multiple)
+#if (PHP_VERSION_ID >= 80500)
+	ZEND_RAW_FENTRY("nocopy_get_multiple", zif_nocopy_get_multiple, arginfo_nocopy_get_multiple, ZEND_ACC_NODISCARD, NULL, NULL)
+#elif (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("nocopy_get_multiple", zif_nocopy_get_multiple, arginfo_nocopy_get_multiple, 0, NULL, NULL)
+#endif
 	ZEND_FE(nocopy_put_multiple, arginfo_nocopy_put_multiple)
 	ZEND_FE(nocopy_remember, arginfo_nocopy_remember)
-	ZEND_FE(nocopy_shared_with, arginfo_nocopy_shared_with)
-	ZEND_FE(nocopy_stats, arginfo_nocopy_stats)
-	ZEND_FE(nocopy_keys, arginfo_nocopy_keys)
+#if (PHP_VERSION_ID >= 80500)
+	ZEND_RAW_FENTRY("nocopy_shared_with", zif_nocopy_shared_with, arginfo_nocopy_shared_with, ZEND_ACC_NODISCARD, NULL, NULL)
+#elif (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("nocopy_shared_with", zif_nocopy_shared_with, arginfo_nocopy_shared_with, 0, NULL, NULL)
+#endif
+#if (PHP_VERSION_ID >= 80500)
+	ZEND_RAW_FENTRY("nocopy_stats", zif_nocopy_stats, arginfo_nocopy_stats, ZEND_ACC_NODISCARD, NULL, NULL)
+#elif (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("nocopy_stats", zif_nocopy_stats, arginfo_nocopy_stats, 0, NULL, NULL)
+#endif
+#if (PHP_VERSION_ID >= 80500)
+	ZEND_RAW_FENTRY("nocopy_keys", zif_nocopy_keys, arginfo_nocopy_keys, ZEND_ACC_NODISCARD, NULL, NULL)
+#elif (PHP_VERSION_ID >= 80400)
+	ZEND_RAW_FENTRY("nocopy_keys", zif_nocopy_keys, arginfo_nocopy_keys, 0, NULL, NULL)
+#endif
 	ZEND_FE_END
 };
+
+static void register_nocopy_symbols(int module_number)
+{
+
+	zend_string *attribute_name_NoDiscard_func_nocopy_cas_0 = zend_string_init_interned("NoDiscard", sizeof("NoDiscard") - 1, 1);
+	zend_add_function_attribute(zend_hash_str_find_ptr(CG(function_table), "nocopy_cas", sizeof("nocopy_cas") - 1), attribute_name_NoDiscard_func_nocopy_cas_0, 0);
+	zend_string_release(attribute_name_NoDiscard_func_nocopy_cas_0);
+
+	zend_string *attribute_name_NoDiscard_func_nocopy_get_multiple_0 = zend_string_init_interned("NoDiscard", sizeof("NoDiscard") - 1, 1);
+	zend_add_function_attribute(zend_hash_str_find_ptr(CG(function_table), "nocopy_get_multiple", sizeof("nocopy_get_multiple") - 1), attribute_name_NoDiscard_func_nocopy_get_multiple_0, 0);
+	zend_string_release(attribute_name_NoDiscard_func_nocopy_get_multiple_0);
+
+	zend_string *attribute_name_NoDiscard_func_nocopy_shared_with_0 = zend_string_init_interned("NoDiscard", sizeof("NoDiscard") - 1, 1);
+	zend_add_function_attribute(zend_hash_str_find_ptr(CG(function_table), "nocopy_shared_with", sizeof("nocopy_shared_with") - 1), attribute_name_NoDiscard_func_nocopy_shared_with_0, 0);
+	zend_string_release(attribute_name_NoDiscard_func_nocopy_shared_with_0);
+
+	zend_string *attribute_name_NoDiscard_func_nocopy_stats_0 = zend_string_init_interned("NoDiscard", sizeof("NoDiscard") - 1, 1);
+	zend_add_function_attribute(zend_hash_str_find_ptr(CG(function_table), "nocopy_stats", sizeof("nocopy_stats") - 1), attribute_name_NoDiscard_func_nocopy_stats_0, 0);
+	zend_string_release(attribute_name_NoDiscard_func_nocopy_stats_0);
+
+	zend_string *attribute_name_NoDiscard_func_nocopy_keys_0 = zend_string_init_interned("NoDiscard", sizeof("NoDiscard") - 1, 1);
+	zend_add_function_attribute(zend_hash_str_find_ptr(CG(function_table), "nocopy_keys", sizeof("nocopy_keys") - 1), attribute_name_NoDiscard_func_nocopy_keys_0, 0);
+	zend_string_release(attribute_name_NoDiscard_func_nocopy_keys_0);
+}

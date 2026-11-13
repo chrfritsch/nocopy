@@ -556,6 +556,33 @@ on every host. Attachers already
 mapped at the header's base, so nothing else changed; 2 MB-aligned in a 32 TB window, else a 192 GB one for 39-bit address
 spaces. An attacher that has something at that address gets no cache, as before with the fixed one.
 
+**PHP 8.6 in CI on the release-candidate images** (`PHP=8.6` -> `php:8.6-rc-fpm`, 8.6.0RC5 when added, 2026-11-13). The
+official 8.6 images are ZTS, so the 8.6 job also runs the suite thread-safe on a second PHP. Neither APCu 5.1.28 nor
+igbinary 3.2.17RC1 builds against 8.6 (`php_verror()` lost an argument; `zval_dtor` is gone), so the 8.6 image has
+neither until their next releases (APCu's master builds, unreleased: not pinned). 8.6's `run-tests.php` runs tests in
+parallel by default: `test.sh` already passed `-j$(nproc)`, `stress.sh` now passes `-j1` so its five concurrency tests
+keep running one at a time, as on 8.4/8.5. None of the internals 8.6 removed was used.
+
+**`#[\NoDiscard]` (PHP 8.5) on `nocopy_cas`, `nocopy_get_multiple`, `nocopy_keys`, `nocopy_stats`, `nocopy_shared_with`**,
+not on `nocopy_get`: a known call to a frameless function compiles to `ZEND_FRAMELESS_ICALL_*`, which never checks the
+flag, so `nocopy_get('k');` would not warn (only a dynamic `$f('k')` does), and a marker that almost never fires misleads.
+Not on `put`, `add`, `inc`, `delete`, `remember`: code ignores those results on purpose. Cost: the compiler emits
+`DO_FCALL_BY_NAME` instead of `DO_ICALL` for `NODISCARD` functions until the optimizer sees the result is used, but
+interleaved, best of 7 x 2M calls, 8.5, before / after: `nocopy_cas` 15.4 / 15.4-15.5 ns without OPcache, 15.3-15.8 /
+15.2-15.3 with; `nocopy_get_multiple` of 1 key 29.4-29.8 / 29.5-29.6, 28.5-29.0 / 28.8-29.0. The arginfo comes from
+`@generate-legacy-arginfo 80400`, which guards the flag; on 8.4 Reflection lists the attribute (gen_stub's behaviour). On its first run it flagged the Drupal lock's `release()`
+(a lost `nocopy_cas` is fine there: now said so) and three tests that warmed copies with a bare `nocopy_get_multiple`.
+
+**An enum case read from the constant already found** (was: `zend_enum_get_case()` after the check, a second lookup of
+the same name). A fetch looks up each distinct case once (cases keep their identity). Interleaved, best of 9, three rounds,
+before / after: a list of 64 distinct cases 1161-1172 / 789-808 ns on 8.5, 1182-1194 / 795-878 on 8.6; 100 objects
+holding 2 cases 3037-3076 / 3031-3306 (8.5), 3081-3246 / 3062-3254 (8.6), noise.
+
+**8.6's stateless closure cache needs nothing from nocopy** (measured for the `nocopy_remember` docs). A hit of
+`nocopy_remember` called from a function, best of 9 x 1M, 8.5 / 8.6 (with or without OPcache): closure created once
+26.2 / 29.6-30.1 ns, `static fn` written at the call 52.9-53.0 / 29.2-29.4, a closure capturing a variable 67.1-68.8 /
+73.3-75.1; `nocopy_get` 20.6 / 23.4 (the 8.6 image is ZTS). In top-level code 8.6 builds the closure every time.
+
 ## Code style
 
 Code comments are one short line, or none.
@@ -594,6 +621,7 @@ Code comments are one short line, or none.
 | Native cache tags (per-entry tag versions checked in C on fetch, `nocopy_invalidate_tags`) | bounded, not built: Drupal's checksum path (one `nocopy_get_multiple` of the request's tag tokens + the PHP sum) vs the bare lookup as native's floor, best of 5 x 20k: 10 tags 728 vs 125 ns, 50 tags 3.3 vs 0.67 us, 200 tags 13.1 vs 2.7 us. At most 3-10 us of a ~660 us anonymous page-cache hit per worker (0.5-1.5%), less logged in. Drupal already batches tags into one lookup; pool/bin clears are O(1) version keys in both integrations |
 | A sleeping (futex) shard lock for the contended far tail (`./dev tail` contend, 8 workers: get / put p99.99 2.5 / 2.3 ms) | not built: readers take no lock and have the same tail, and a control without any cache (8 processes timing a ~7 µs pure-PHP op in the same VM, 11 vCPUs) has p99.99 1.42 ms at 8 workers, 0.14 ms at 4. The tail is the VM's scheduler; it needs bare metal to say more |
 | More C work on the request path, judged by a Drupal profile (`PERF_ONLY=1 CONFIGS=nocopy-all ./dev drupal-bench`, 2026-11-11, node page) | `nocopy.so` is 0.30% of all samples anonymous (php-fpm binary 28.1%, idle 52.9%: `ab` and nginx bound) and under 0.4% logged in (php-fpm 53.7%, `execute_ex` alone 13.6%); its top symbols `nocopy_fetch_multi` 0.16-0.17%, `graph_build` 0.17%. Nothing in the extension can move these pages by 1% |
+| Enum case ids (PHP 8.6 `zend_enum_fetch_case_id()` / `zend_enum_get_case_by_id()`) instead of the case name | would drop the one lookup left per distinct case after the change above (~6 ns: 64 cases 1165 -> 795 ns removed the other); 100 objects with 2 cases spend ~12 ns of ~3 µs there. Needs another stored form on 8.6 and both paths kept for 8.4/8.5 |
 | Copy mode's keep rule in one place (`graph_copy_fetch` asking `local_slot`, which then drops its type check, instead of repeating `local_ok && size <= local_size`) | `./dev ab HEAD 7 read`, rows that never reach it: fetch int -2.1 / -2.0%, fetch miss -2.9 / -2.6%, 1k rows -1.4 / -1.8% (twice; HEAD against itself: within ±0.8%). `graph_copy_fetch` kept out of line instead: string 100B -5.2 / -6.6%, 1k rows -6.3% copy. One line saved does not pay for either: the duplicate stays |
 
 ## Ruled out by the 2026-11 audit

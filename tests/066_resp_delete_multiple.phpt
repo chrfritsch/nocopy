@@ -15,7 +15,7 @@ resp
 require __DIR__ . '/resp.inc';
 nocopy_clear();
 nocopy_put_multiple(['a' => 1, 'b' => [2], 'c' => 3]);
-nocopy_get_multiple(['a', 'b', 'c']);
+$got = nocopy_get_multiple(['a', 'b', 'c']);
 vk('CONFIG', 'RESETSTAT');
 var_dump(nocopy_delete_multiple(['a', 'missing', 'b']));
 var_dump(preg_match('/cmdstat_unlink:calls=1,/', vk('INFO', 'commandstats')));

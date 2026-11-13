@@ -20,9 +20,9 @@ for ($i = 0; $i < 4000; $i++) {
         case 0: case 1: nocopy_put($k, mt_rand(0, 3) ? array_fill(0, mt_rand(1, 3000), "v$i") : str_repeat('x', mt_rand(1, 200000))); break;
         case 2: nocopy_put($k, [$o, 'n' => $i, 'o' => $o]); break;
         case 3: $v = nocopy_get($k); if (mt_rand(0, 3) === 0) $held[$i % 50] = $v; break;
-        case 4: nocopy_get_multiple([$k, 'k' . mt_rand(0, 200), 'c']); break;
+        case 4: $v = nocopy_get_multiple([$k, 'k' . mt_rand(0, 200), 'c']); break;
         case 5: nocopy_delete($k); break;
-        case 6: nocopy_inc('c'); nocopy_cas('c', 1, 2); nocopy_add($k, $i, 1); break;
+        case 6: nocopy_inc('c'); $v = nocopy_cas('c', 1, 2); nocopy_add($k, $i, 1); break;
         case 7: nocopy_put_multiple(['m1' => range(0, $i % 100), 'm2' => "s$i"]); break;
         case 8: nocopy_remember("r$k", fn() => array_fill(0, 100, $i), 60); break;
         default: foreach (nocopy_keys('k1') as $kk => $_) nocopy_get($kk);

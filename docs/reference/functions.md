@@ -17,6 +17,9 @@ Every function the extension defines, with its signature from [`nocopy.stub.php`
   ```php
   $key = 'search.' . hash_hmac('xxh128', $_GET['q'], $secret);
   ```
+- **Unused results warn on PHP 8.5+.** `nocopy_cas`, `nocopy_get_multiple`, `nocopy_keys`, `nocopy_stats` and
+  `nocopy_shared_with` are marked `#[\NoDiscard]`: calling one and ignoring what it returns raises a warning, since
+  that is almost always a bug. Write `(void) nocopy_cas(...)` if you mean it.
 
 | Function | What it does |
 |---|---|
@@ -228,6 +231,18 @@ refresh and stale serving.
 
 The callback can return anything `nocopy_put()` can store, objects included.
 
+**Hits create the callback too.** PHP builds the closure you pass on every call, hit or miss. On PHP 8.6, a
+`static fn` that uses no outer variables, written inside a function or method, is built once and reused, so it costs
+no more than a closure you keep in a variable. A closure that captures variables (`use ($id)`, or an arrow function
+reading `$id`) is built on every call, on any PHP version.
+
+```php
+function dailyReport(): array
+{
+    return nocopy_remember('report.daily', static fn () => buildReport(), ttl: 3600);
+}
+```
+
 ## Introspection
 
 ### `nocopy_shared_with`
@@ -286,7 +301,7 @@ this server has cached locally, not every key in the RESP server.
 |---|---|---|
 | Arrays, strings, integers, floats, booleans, `null` | As they are | Zero-copy under web servers |
 | Most objects (see below) | As their properties, without serializing | Rebuilt; the strings and arrays inside stay zero-copy |
-| Objects that implement only `Serializable`, lazy objects, internal classes without `__serialize()` (exceptions and their subclasses, iterators, DOM, ...) | Serialized with `nocopy.serializer`, as in APCu | Unserialized every time |
+| Objects that implement only `Serializable`, lazy objects, internal classes without `__serialize()` (exceptions and their subclasses, iterators, DOM, ...) | Serialized with `nocopy.serializer`, as in APCu. Storing an uninitialized lazy object initializes it, as `serialize()` does, unless it was made with `ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE` | Unserialized every time |
 | Values nested more than 64 levels deep | Serialized, as above | Unserialized every time |
 | Resources | Not stored: a warning, and `nocopy_put()` returns `false` | |
 
@@ -302,7 +317,9 @@ this server has cached locally, not every key in the RESP server.
 - `DateTime` and `DateTimeImmutable`: timestamp and time zone. If that zone is no longer in the time zone database, the
   fetch is a miss.
 
-Object identity, cycles, private, readonly and uninitialized properties are kept. A typed property you `unset()` comes back
+Object identity, cycles, private, readonly and uninitialized properties are kept, and so are asymmetric visibility
+(`private(set)`), readonly properties with defaults (PHP 8.6) and the values behind property hooks (virtual properties
+have none to store; their `get` hook works on the fetched object as before). A typed property you `unset()` comes back
 uninitialized, as from `unserialize()`, so `__get()` is not called for it.
 
 **References.** A PHP reference that appears more than once in the value is still one reference after a fetch: writing
