@@ -1,4 +1,4 @@
-# Refactoring plan (2026-11-13)
+# Refactoring plan (2026-11-13): done
 
 A survey of the C code and the integrations against the classic software-craft books, for contributors. No behaviour, API,
 INI or stats change; nothing here reintroduces an idea [design-decisions](design-decisions.md) rejected with numbers.
@@ -46,6 +46,8 @@ Feathers, **P** Pragmatic Programmer (DRY, orthogonality, broken windows), **C**
 | 16 | Dead API: `nocopy_put_abort` has had no caller since every block is placed under the lock (2026-11-12); `nocopy_stats_t.start_time` is filled but nothing reads it | P broken windows, O | `arena/shard.h:65,76`, `arena/shard.c:418-422`, `scripts/check-layers.sh` (data regex); `arena/nocopy_arena.h:136`, `arena/arena.c:148` | Remove `nocopy_put_abort`. Leave `start_time` (architecture.md names it as wall time leaving the arena). **Changes the arena's API: needs your OK** | low | no |
 | 17 | `nocopy.c` holds a self-contained concern (the layout id: ELF build-id note, Mach-O UUID, file hash; 85 lines) among the PHP functions, INI and module | C cohesion, O deep module | `nocopy.c:367-450` | Move Function into `nocopy_layout_id.c` (one call, `layout_id()`; included in the unity TU like the others) | low-med (build plumbing: `config.m4`, `pie`, `ab.sh`) | no |
 
+Items 10 and 16 were approved with the plan; the work went to `main`. Outcome per item: [below](#outcome).
+
 Order of execution: 10 (comments, if approved), 1, 2, 5, 4, 6, 3, 11, 7, 8, 9, 15, 12, 14, 13, 16 (if approved),
 17 (optional). Every item is one commit, named after its refactoring.
 
@@ -54,6 +56,31 @@ and the value tests; 3 by the date tests (dates across zone types, test 109's ne
 round-trips each zone type, offset and DST flag explicitly if none pins all of them; 8 by tests 05x/101/105 (a payload
 written before must decode after: I add a test that decodes a fixed byte string, so a changed offset fails); 12 by
 the `remember` tests (single flight, XFetch, stale-while-revalidate).
+
+## Outcome
+
+"Identical" means the release `nocopy.so` disassembled to the same instructions before and after; numbers for the rest
+are in each commit message and in [design-decisions](design-decisions.md#build).
+
+| # | Result | Commit |
+|---|---|---|
+| 10 | done (the `nocopy_put_abort` comments went with 16) | 980582d |
+| 1 | done, identical | a46e68a |
+| 2 | done, same instruction count, reordered; scalar stores inside HEAD's own noise | 38efbf4 |
+| 5 | done, identical | 4aef653 |
+| 4 | done, `build_array`/`hash_array` a few instructions fewer | d96e5e2 |
+| 6 | done, identical | 5eaef28 |
+| 3 | done, identical; test 075 already pinned every zone type | d4a5380 |
+| 11 | done, identical | 8f3b78d |
+| 7 | done, `build_zval` 20 instructions shorter, stores within ±0.6% Ir | 6324d9f |
+| 8 | done, identical; test 119 added first, pinning the bytes both ways | 0ec3d6e, 41e2a4b |
+| 9 | done, identical once the names are mapped | a278ed4 |
+| 15 | done, graph fetches within ±1.3% Ir | 40b277e |
+| 12 | **rejected**: every layout cost the `remember` hit 0.3-0.7 ns (design-decisions, rejected table) | reverted |
+| 14 | **rejected**: +0.5-0.7% instructions on object stores, wall time the same way | reverted |
+| 13 | done, stores within ±0.25% Ir | e600b37 |
+| 16 | done (`nocopy_put_abort` removed; `start_time` left), identical | 02ef407 |
+| 17 | not done: needs a new header or a declaration every PHP layer sees, for 85 lines (design-decisions, rejected table) | — |
 
 ## Considered and left alone
 

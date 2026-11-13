@@ -540,6 +540,16 @@ Kept from before, for speed: process-local globals rather than a handle passed t
 (an injectable clock, not an explicit `now`, which would cost every fetch a clock read). `./dev ab main 7`, best of 7, copy / zero: fetches and stores within ±5%;
 ttl churn's `evacuated` read 8-14% higher at best-of, but per run old copy 4959-5600 MB and new 5275-5687 MB (medians 5390 / 5362): noise, the merge code is unchanged.
 
+**Refactoring by the books, checked by the machine code** (2026-11-13, [plan](refactoring-plan.md)): each step's release
+`nocopy.so` was disassembled before and after (addresses and symbol comments stripped); identical code needed no A/B, the
+rest got `./dev cg` (instructions per call, deterministic) and `./dev ab`. Identical: `arena_str_type`, `array_bytes`, the
+kept-copy set bits, `date_word`'s decoders, the env buffer limits, the RESP payload offsets, the tier's `tier_*` names, the
+removal of `nocopy_put_abort`. Changed and kept: `val_off` (same count, reordered; scalar stores inside HEAD's own ±5%),
+`pow2_at_least` (put_big 791,085 -> 790,067 Ir), `region_leave`/`region_back` for the `OUT_OF_REGION` macro (`build_zval`
+20 instructions shorter, stores within ±0.6% Ir), `objects_abandon` (graph fetches ±1.3% Ir, fetch object +0.5 / +2.6%),
+`copy_table` split out of `build_array` (stores within ±0.25% Ir). The wall-clock store rows are the noisier gauge here:
+copy and zero mode run the same write code, and their columns disagree by up to 5 points in one run (new-values rows by up to 30).
+
 **LTO in shared builds** (`--disable-nocopy-lto` turns it off), which inlines the arena into the fetch and store paths. `ab.sh` best of 5,
 copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
 inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.
@@ -623,6 +633,9 @@ Code comments are one short line, or none.
 | More C work on the request path, judged by a Drupal profile (`PERF_ONLY=1 CONFIGS=nocopy-all ./dev drupal-bench`, 2026-11-11, node page) | `nocopy.so` is 0.30% of all samples anonymous (php-fpm binary 28.1%, idle 52.9%: `ab` and nginx bound) and under 0.4% logged in (php-fpm 53.7%, `execute_ex` alone 13.6%); its top symbols `nocopy_fetch_multi` 0.16-0.17%, `graph_build` 0.17%. Nothing in the extension can move these pages by 1% |
 | Enum case ids (PHP 8.6 `zend_enum_fetch_case_id()` / `zend_enum_get_case_by_id()`) instead of the case name | would drop the one lookup left per distinct case after the change above (~6 ns: 64 cases 1165 -> 795 ns removed the other); 100 objects with 2 cases spend ~12 ns of ~3 µs there. Needs another stored form on 8.6 and both paths kept for 8.4/8.5 |
 | Copy mode's keep rule in one place (`graph_copy_fetch` asking `local_slot`, which then drops its type check, instead of repeating `local_ok && size <= local_size`) | `./dev ab HEAD 7 read`, rows that never reach it: fetch int -2.1 / -2.0%, fetch miss -2.9 / -2.6%, 1k rows -1.4 / -1.8% (twice; HEAD against itself: within ±0.8%). `graph_copy_fetch` kept out of line instead: string 100B -5.2 / -6.6%, 1k rows -6.3% copy. One line saved does not pay for either: the duplicate stays |
+| `nocopy_remember` split into `xfetch_due()` and `await_holder()` (Extract Function, 2026-11-13) | `apcu_entry hit` (21 ns), `./dev ab HEAD 9-11 read`, copy / zero: both inline -3.0 / +0.5%, -0.6 / -3.2%; the wait loop `noinline` -2.5 / -2.0%, -0.3 / -2.1%; `xfetch_due` alone -1.5 / -3.4%, -1.8 / -1.1% and 370 -> 375 Ir per hit (`./dev cg remember`); HEAD against itself -0.5 / -0.1%. Every layout cost the hit 0.3-0.7 ns: the 57-line function stays |
+| `build_node` split into `node_prepare()` (the hook / dynamic-properties switch) and the write (Split Phase, 2026-11-13) | inlined, yet the extra status check and the nodes' reload cost instructions: `./dev cg` put_obj 4,012 -> 4,034, put_ords 179,765 -> 181,041, put_json 357,223 -> 359,414; `ONLY='store object' ./dev ab HEAD 9 write` -3.0 / -4.2%, +0.4 / -2.6%. The two switches stay in one function |
+| The layout id (`build_id`, `layout_id`: ELF note, Mach-O UUID, file hash) in a unit of its own (Move Function, 2026-11-13) | not built: `clang-tidy` compiles each `.c` alone, so the move needs a one-function header or a declaration in `nocopy_php.h`, which every PHP layer includes; more interface to take 85 lines out of `nocopy.c`, whose sections already keep it apart |
 
 ## Ruled out by the 2026-11 audit
 
