@@ -803,11 +803,7 @@ static build_status build_array(nc_builder *b, zend_array *a, int depth, zend_ar
 		memcpy(data, HT_GET_DATA_ADDR(a), hsize + n * sizeof(zval));
 	} else {
 		if (sp) {
-			uint32_t size = HT_MIN_SIZE;
-			while (size < n) {
-				size <<= 1;
-			}
-			ht->nTableSize = size;
+			ht->nTableSize = pow2_at_least(HT_MIN_SIZE, n);
 			HT_FLAGS(ht) &= ~HASH_FLAG_PACKED;
 			if (HT_IS_PACKED(a)) {
 				HT_FLAGS(ht) |= HASH_FLAG_STATIC_KEYS;

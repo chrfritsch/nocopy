@@ -47,13 +47,20 @@ extern nocopy_value_shared *nc_shared;
 
 static zend_always_inline zval *block_val(nocopy_entry *e) { return &((nocopy_block *) e)->val; }
 
+/* The smallest power of two from min up that holds n (a loop: __builtin_clz cost small maps more, design-decisions). */
+static zend_always_inline uint32_t pow2_at_least(uint32_t min, uint32_t n)
+{
+	uint32_t p = min;
+	while (p < n) {
+		p <<= 1;
+	}
+	return p;
+}
+
 /* A map's hash in the arena: 2 slots per bucket rounded up, as PHP sizes it, not the table's 16 minimum. */
 static zend_always_inline uint32_t map_mask(const zend_array *a)
 {
-	uint32_t slots = 4;
-	while (slots < 2 * a->nNumUsed) {
-		slots <<= 1;
-	}
+	uint32_t slots = pow2_at_least(4, 2 * a->nNumUsed);
 	return slots < (uint32_t) -(int32_t) a->nTableMask ? (uint32_t) -(int32_t) slots : a->nTableMask;
 }
 
@@ -62,14 +69,7 @@ static zend_always_inline size_t map_size(const zend_array *a) { return HT_HASH_
 /* More holes than elements: written as a map of its elements only (a packed one too, its indices as keys), as unserialize() would build it. */
 static zend_always_inline bool sparse(const zend_array *a) { return a->nNumUsed - a->nNumOfElements > 8 && a->nNumUsed > 2 * a->nNumOfElements; }
 
-static zend_always_inline uint32_t sparse_mask(const zend_array *a)
-{
-	uint32_t slots = 4;
-	while (slots < 2 * a->nNumOfElements) {
-		slots <<= 1;
-	}
-	return (uint32_t) -(int32_t) slots;
-}
+static zend_always_inline uint32_t sparse_mask(const zend_array *a) { return (uint32_t) -(int32_t) pow2_at_least(4, 2 * a->nNumOfElements); }
 
 /* The bytes of a's data in the block. */
 static zend_always_inline size_t data_size(const zend_array *a)
