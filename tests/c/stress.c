@@ -318,6 +318,11 @@ int main(int argc, char **argv)
 		}
 	}
 	nocopy_borrow_end(&mc);
+	const char *bad = ar_shards_verify();
+	if (bad) {
+		fprintf(stderr, "FAIL invariant: %s\n", bad);
+		failures++;
+	}
 	if (found == CTRS && sum != bumps) { /* evicted counters lose their count: only exact when all survived */
 		fprintf(stderr, "FAIL counters: %llu, expected %llu\n", (unsigned long long) sum, (unsigned long long) bumps);
 		failures++;

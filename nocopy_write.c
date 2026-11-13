@@ -8,21 +8,29 @@
 #include "nocopy_value_int.h"
 
 #if NC_CHECKS
-/* Everything the block points to lies in the block, is the arena's empty array or an atom, and is immutable. */
+/* Everything a block (or a shared array's record) points to lies in it, is the arena's empty array or an atom of an allowed half, and is immutable. */
 typedef struct {
-	const nocopy_entry *e;
+	const char *base;
+	size_t size;
+	const zval *root; /* the block's own value: a string alone may be stored unhashed */
+	uint8_t atoms;    /* halves it may point into */
+	bool shared;      /* a shared array: no objects or references */
 } checker;
+
+static bool inside(const checker *c, const void *p) { return (uintptr_t) p - (uintptr_t) c->base < c->size; }
 
 static void check_ptr(const checker *c, const void *p, size_t n)
 {
-	NC_ASSERT((uintptr_t) p - (uintptr_t) c->e < nocopy_entry_size(c->e) && n <= nocopy_entry_size(c->e) - ((uintptr_t) p - (uintptr_t) c->e));
+	NC_ASSERT(inside(c, p) && n <= c->size - ((uintptr_t) p - (uintptr_t) c->base));
 }
 
 static void check_str(const checker *c, const zend_string *s)
 {
-	if (!nocopy_atom_bits(s)) {
+	if (inside(c, s)) {
 		check_ptr(c, s, _ZSTR_HEADER_SIZE);
 		check_ptr(c, s, _ZSTR_STRUCT_SIZE(ZSTR_LEN(s)));
+	} else {
+		NC_ASSERT(nocopy_atom_bits(s) & c->atoms);
 	}
 	NC_ASSERT(ZSTR_IS_INTERNED(s) && !(GC_FLAGS(s) & IS_STR_PERMANENT) && GC_REFCOUNT(s) >= 2 && ZSTR_VAL(s)[ZSTR_LEN(s)] == 0);
 }
@@ -34,18 +42,18 @@ static void check_zval(void *ctx, zval *z)
 		case IS_STRING:
 			NC_ASSERT(!Z_TYPE_FLAGS_P(z));
 			check_str(c, Z_STR_P(z));
-			NC_ASSERT(nc_may_be_unhashed(Z_STR_P(z)) || z == block_val((nocopy_entry *) c->e) || ZSTR_H(Z_STR_P(z)));
+			NC_ASSERT(nc_may_be_unhashed(Z_STR_P(z)) || z == c->root || ZSTR_H(Z_STR_P(z)));
 			break;
 		case NC_SPINE:
 		case IS_ARRAY: {
 			zend_array *a = Z_ARR_P(z);
-			NC_ASSERT(!Z_TYPE_FLAGS_P(z));
+			NC_ASSERT(!Z_TYPE_FLAGS_P(z) && (Z_TYPE_P(z) == IS_ARRAY || !c->shared));
 			if (a == ARENA_EMPTY) {
 				break;
 			}
-			if (nocopy_atom_bits(a)) {
-				NC_ASSERT(Z_TYPE_P(z) == IS_ARRAY && (GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2);
-				break; /* a shared array: checked when admitted */
+			if (!inside(c, a)) {
+				NC_ASSERT(Z_TYPE_P(z) == IS_ARRAY && (nocopy_atom_bits(a) & c->atoms) && (GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2);
+				break; /* a shared array: checked when admitted (nc_share_check) */
 			}
 			check_ptr(c, a, sizeof *a);
 			NC_ASSERT((GC_FLAGS(a) & IS_ARRAY_IMMUTABLE) && GC_REFCOUNT(a) == 2 && !a->pDestructor && zend_hash_num_elements(a));
@@ -68,16 +76,17 @@ static void check_zval(void *ctx, zval *z)
 			break;
 		}
 		case NC_OREF: case NC_RREF: case NC_DEFAULT:
+			NC_ASSERT(!c->shared);
 			break;
 		default:
 			NC_ASSERT(Z_TYPE_P(z) < IS_STRING);
 	}
 }
 
-static void block_check(nocopy_entry *e)
+static void block_check(nocopy_entry *e, uint8_t atoms)
 {
-	checker c = {.e = e};
 	zval *v = block_val(e);
+	checker c = {.base = (const char *) e, .size = nocopy_entry_size(e), .root = v, .atoms = atoms};
 	if (nocopy_value_fmt(e) != NOCOPY_FMT_GRAPH) {
 		NC_ASSERT(Z_TYPE_P(v) <= IS_ARRAY);
 		check_zval(&c, v);
@@ -98,6 +107,14 @@ static void block_check(nocopy_entry *e)
 		NC_ASSERT(graph_hooks(g)[i] < g->nobj);
 	}
 	graph_each(g, check_zval, &c);
+}
+
+void nc_share_check(char *p, const nc_builder *b)
+{
+	checker c = {.base = p, .size = b->bn, .atoms = nocopy_atom_bit(b->av), .shared = true};
+	zval v;
+	ZVAL_ARR(&v, (zend_array *) (p + (uintptr_t) Z_ARR(b->root)));
+	check_zval(&c, &v);
 }
 #endif
 
@@ -192,7 +209,7 @@ void nc_place(nocopy_entry *e, const nc_builder *b)
 		Z_PTR_P(v) = p + (uintptr_t) Z_PTR_P(v);
 	}
 #if NC_CHECKS
-	block_check(e);
+	block_check(e, b->av && b->atoms ? nocopy_atom_bit(b->av) : 0);
 #endif
 }
 
@@ -209,7 +226,7 @@ uint8_t nocopy_value_rebase(nocopy_entry *e, const nocopy_entry *from)
 		}
 	}
 #if NC_CHECKS
-	block_check(e);
+	block_check(e, 3); /* moved: its segment takes the halves it points into */
 #endif
 	return r.atoms;
 }

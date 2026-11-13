@@ -255,6 +255,7 @@ int main(void)
 	}
 	ar_seg_owner[orphan] = sh->log.tenant;
 	sh->lock.holder = dead_owner(); /* the holder dies */
+	ar_shards_forget_held();
 
 	assert(!found(&c, "none")); /* a miss behind the odd mseq takes the lock: steals and repairs */
 	assert(!nocopy_delete(hash("none"), "none", 4));
@@ -272,6 +273,7 @@ int main(void)
 		}
 	}
 	assert(n == N - 1 && ar_index_nlive(ix) == n && sh->log.live_bytes == live);
+	assert(!ar_shards_verify()); /* the rest of the shard rebuilt too */
 	assert(!ar_seg_owner[orphan] && !ar_log_owns(&sh->log, orphan) && sh->log.nown == (uint32_t) __builtin_popcountll(sh->log.own[0]));
 	assert(!ar_segs[ar_seg_of(big)].pending); /* the dead holder's unpublished entry: dead bytes */
 	for (int x = 0; x < N; x++) {
@@ -294,6 +296,7 @@ int main(void)
 	begin(&hp, &c, "held", 8);
 	assert(nocopy_put_commit(&hp, false) == NOCOPY_PUT_OK && found(&c, "held"));
 	fork_without_slot(&c);
+	assert(!ar_shards_verify());
 	printf("repair: ok (%u slots)\n", m + 1);
 	return 0;
 }

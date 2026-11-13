@@ -25,6 +25,14 @@ const void *ar_hook_on;
 static time_t checked[NOCOPY_MAX_WORKERS]; /* last owner lookup per slot (ar_worker_dead) */
 static uint64_t gone[NOCOPY_MAX_WORKERS];  /* the owner that lookup found dead: an owner id never comes back */
 
+#if AR_CHECKS
+void ar_assert_fail(const char *what, const char *file, int line)
+{
+	fprintf(stderr, "nocopy arena: %s:%d: invariant broken: %s\n", file, line, what);
+	abort();
+}
+#endif
+
 /* ---- owner ids ---- */
 
 static int live_fd = -1; /* ours alone (not a parent's): its OFD lock on our process slot's byte is our liveness */

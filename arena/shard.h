@@ -32,7 +32,10 @@ static inline uint32_t ar_shard_idx(uint64_t h) { return ar_part(h, ar_shard_mas
 void ar_shards_init(ar_shard *shards, uint32_t nshards, uint32_t slots_per, uint32_t nsegs);
 /* tables: nshards * slots_per slots; ghosts: as many uint16 tags. */
 void ar_shards_adopt(ar_shard *shards, uint32_t nshards, ar_slot *tables, uint16_t *ghosts, uint32_t slots_per, nocopy_rebase_fn rebase);
-bool ar_shards_deps(uint8_t bits); /* any segment depends on bits: every shard locked meanwhile (atoms' rotation) */
+bool ar_shards_deps(uint8_t bits);
+/* Every shard and the pool against their invariants, every shard locked meanwhile. NULL, or the first one broken. For tests. */
+const char *ar_shards_verify(void);
+void ar_shards_forget_held(void); /* tests: this thread played a lock holder that died */ /* any segment depends on bits: every shard locked meanwhile (atoms' rotation) */
 
 typedef struct {
 	uint64_t used, entries, evacuated, evicted, expired, ghost_hits;

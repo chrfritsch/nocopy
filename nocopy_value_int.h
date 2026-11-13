@@ -364,6 +364,9 @@ void nc_build_bufs_back(nc_builder *b); /* the buffers to env, once placed */
 void nc_build_free(nc_builder *b);      /* may run destructors */
 bool nc_same_array(const zend_array *a, const zend_array *b, int depth); /* equal keys, order, types and values (doubles bitwise) */
 void nc_share_admit(nocopy_env *env, const nc_builder *outer, const nocopy_atom_view *av); /* its candidates the doorkeeper lets in */
+#if NC_CHECKS
+void nc_share_check(char *p, const nc_builder *b); /* a shared array just placed at p: its record, empty arrays and atoms of b's view only */
+#endif
 
 /* ---- placing (nocopy_write.c): under a shard lock, so no allocation and no user code ---- */
 

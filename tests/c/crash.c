@@ -227,71 +227,17 @@ static bool workload(nocopy_ctx *c, uint32_t seed, int ops)
 
 /* ---- what must hold with no write in progress ---- */
 
-static ar_slot slot_of(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
 
 static void structure(void)
 {
 	for (uint32_t si = 0; si <= ar_shard_mask; si++) {
-		ar_shard *sh = &ar_shards[si];
-		ar_index *ix = &ar_ix[si];
-		ar_log *lg = &sh->log;
-		CHECK(!sh->lock.holder && !(ix->hdr->mseq & 1));
-		uint32_t n = 0, nown = 0, ndead = 0;
-		uint64_t live = 0;
-		for (uint32_t s = 0; s <= ix->mask; s++) {
-			if (!ix->t[s]) {
-				continue;
-			}
-			nocopy_entry *e = ar_at8(ar_slot_off8(ix->t[s]));
-			uint32_t seg = ar_seg_of(e);
-			CHECK(ar_index_find(ix, slot_of(e)) == &ix->t[s]); /* one slot per entry, its tag the key's */
-			CHECK(e->live && ar_shard_idx(e->h) == si);
-			CHECK(ar_seg_owner[seg] == lg->tenant && ar_log_owns(lg, seg));
-			CHECK(ar_segs[seg].state == SEG_OPEN || ar_segs[seg].state == SEG_SEALED);
-			CHECK((char *) e + nocopy_entry_size(e) <= ar_seg_start(seg) + ar_segs[seg].used);
-			n++;
-			live += nocopy_entry_size(e);
-		}
-		CHECK(n == ix->hdr->nlive && n <= ix->hdr->cap && live == lg->live_bytes);
-		for (uint32_t s = 0; s < ar_nsegs; s++) {
-			ar_seg *g = &ar_segs[s];
-			CHECK((ar_seg_owner[s] == lg->tenant) == ar_log_owns(lg, s));
-			if (!ar_log_owns(lg, s)) {
-				continue;
-			}
-			nown++;
-			if (g->state == SEG_CONT) {
-				continue;
-			}
-			CHECK(g->state == SEG_OPEN || g->state == SEG_SEALED || g->state == SEG_DEAD);
-			CHECK(g->run >= 1 && s + g->run <= ar_nsegs && g->used <= (size_t) g->run << ar_seg_shift);
-			for (uint32_t j = 1; j < g->run; j++) {
-				CHECK(ar_segs[s + j].state == SEG_CONT && ar_log_owns(lg, s + j));
-			}
-			size_t seg_live = 0;
-			for (char *p = ar_seg_start(s), *end = p + g->used; p < end;) {
-				nocopy_entry *e = (nocopy_entry *) p;
-				CHECK(nocopy_entry_size(e) >= sizeof *e && !(nocopy_entry_size(e) & 7) && p + nocopy_entry_size(e) <= end);
-				if (e->live) {
-					CHECK(ar_index_find(ix, slot_of(e)) != NULL); /* live: a slot reaches it */
-					seg_live += nocopy_entry_size(e);
-				}
-				p += nocopy_entry_size(e);
-			}
-			CHECK(seg_live == g->live && !g->pending);
-			bool open = false;
-			for (int b = 0; b < NOCOPY_TTL_BUCKETS; b++) {
-				open |= lg->cur[b] == (int32_t) s;
-			}
-			CHECK(open == (g->state == SEG_OPEN));
-			CHECK(g->state != SEG_SEALED || g->live || g->pending); /* else it is DEAD */
-			ndead += g->state == SEG_DEAD;
-		}
-		CHECK(nown == lg->nown && ndead == lg->ndead);
+		CHECK(!ar_shards[si].lock.holder);
 	}
-	for (uint32_t s = 0; s < ar_nsegs; s++) {
-		CHECK(ar_seg_owner[s] || ar_segs[s].state == SEG_FREE);
+	const char *bad = ar_shards_verify();
+	if (bad) {
+		fprintf(stderr, "crash: %s\n", bad);
 	}
+	CHECK(!bad);
 	/* atoms: the current generation's table reaches whole records only */
 	uint32_t g = AT->gen;
 	const ar_atom_half *hf = &AT->half[g & 1];

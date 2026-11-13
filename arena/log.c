@@ -38,6 +38,7 @@ static uint32_t take(ar_log *lg, uint32_t k, bool reserve, uint8_t state, uint64
 	}
 	AR_HOOK("take.claimed");
 	for (uint32_t j = got; j < got + k; j++) {
+		AR_ASSERT(ar_segs[j].state == SEG_FREE && !ar_segs[j].used && !ar_segs[j].live && !ar_segs[j].pending); /* zeroed by its last give */
 		ar_segs_add(lg->own, j);
 	}
 	__atomic_store_n(&lg->nown, lg->nown + k, __ATOMIC_RELAXED);

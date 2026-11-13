@@ -242,6 +242,10 @@ static void run(void)
 		fail("a replay took another course: it made fewer decisions");
 	}
 	S->check(&c);
+	const char *bad = ar_shards_verify();
+	if (bad) {
+		fail(bad);
+	}
 	nocopy_arena_close();
 }
 

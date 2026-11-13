@@ -25,6 +25,16 @@ extern const void *ar_hook_on;
 # define AR_HOOK_ON(point, obj) ((void) 0)
 #endif
 
+/* Invariant checks in test and debug builds (tests/c's -DNOCOPY_POISON, ./dev asan's -DNOCOPY_DEBUG): a failure aborts. */
+#if defined(NOCOPY_POISON) || defined(NOCOPY_DEBUG)
+# define AR_CHECKS 1
+__attribute__((noreturn, cold)) void ar_assert_fail(const char *what, const char *file, int line);
+# define AR_ASSERT(c) do { if (!(c)) { ar_assert_fail(#c, __FILE__, __LINE__); } } while (0)
+#else
+# define AR_CHECKS 0
+# define AR_ASSERT(c) ((void) 0)
+#endif
+
 #define NOCOPY_MAX_WORKERS 1024 /* ponytail: more live processes/threads than this cannot claim a slot */
 #define NOCOPY_MAX_SEGS 8192
 #define NOCOPY_SEG_WORDS (NOCOPY_MAX_SEGS / 64)

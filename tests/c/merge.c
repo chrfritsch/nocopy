@@ -77,6 +77,11 @@ int main(void)
 		assert(n == version[i]);
 	}
 	nocopy_borrow_end(&c);
+	const char *bad = ar_shards_verify();
+	if (bad) {
+		printf("merge: %s\n", bad);
+		return 1;
+	}
 	printf("merge: ok (%llu MB moved, nothing evicted)\n", (unsigned long long) (st.evacuated >> 20));
 	nocopy_release(&c);
 	nocopy_arena_close();

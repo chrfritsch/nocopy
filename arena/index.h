@@ -16,6 +16,7 @@ static inline ar_slot ar_index_load(const ar_index *ix, uint32_t i) { return __a
 /* Publishes s at `at` (a probe's slot: the key's own, or the empty one ending its run). Release: a reader sees the block it points to. */
 static inline void ar_index_put(ar_index *ix, ar_slot *at, ar_slot s)
 {
+	AR_ASSERT(*at || ix->hdr->nlive < ix->hdr->cap); /* an empty slot ends every run */
 	ix->hdr->nlive += !*at;
 	__atomic_store_n(at, s, __ATOMIC_RELEASE);
 }

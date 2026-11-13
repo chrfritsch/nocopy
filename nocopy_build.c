@@ -1268,6 +1268,9 @@ void nc_build_free(nc_builder *b)
 static bool admit_fill(void *dst, void *arg)
 {
 	nc_place_at(dst, arg);
+#if NC_CHECKS
+	nc_share_check(dst, arg);
+#endif
 	return true;
 }
 

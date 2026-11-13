@@ -170,6 +170,7 @@ int main(void)
 	assert(fill() && AT->gen == 8 && AT->half[0].state == 8 && ar_proc->lock_steals == steals + 1);
 	assert(AT->lock.holder == 0);
 
+	assert(!ar_shards_verify());
 	nocopy_stats_t s;
 	nocopy_stats(&s);
 	assert(s.atom_rotations == 6 && s.atoms_size == 2 * (uint64_t) AT->half_bytes);
