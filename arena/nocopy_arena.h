@@ -117,7 +117,7 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ct
  * ponytail: an entry a concurrent delete shifts backwards may be missed; a snapshot under all shard locks if that matters. */
 void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), void *arg);
 
-/* ---- writes: nocopy_put_begin/commit/abort, nocopy_delete, nocopy_update, nocopy_clear (shard.h) ---- */
+/* ---- writes: nocopy_put_begin/commit, nocopy_delete, nocopy_update, nocopy_clear (shard.h) ---- */
 /* ---- single flight: nocopy_lease_take/drop (leases.h) ---- */
 
 /* ---- atoms: strings stored once for the whole arena (atoms.h, atoms_read.h) ---- */

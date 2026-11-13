@@ -415,12 +415,6 @@ nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 	return r;
 }
 
-void nocopy_put_abort(nocopy_put *p)
-{
-	ar_log_abort(&p->sh->log, p->e);
-	shard_unlock(p->sh);
-}
-
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 {
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];

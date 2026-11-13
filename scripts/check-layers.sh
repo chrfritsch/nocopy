@@ -54,7 +54,7 @@ for f in $outer; do
 	[ -f "$f" ] && grep -nwE "$int" "$f" | sed "s|^|check-layers: $f: value layer internal: |" | grep . && bad=1
 done
 # The arena's data operations: the store's (and the RESP tier's nocopy_clear), not the module's.
-data='\bnocopy_(find(_ex)?|each|borrow_(begin|end)|keep|count|put_(begin|commit|abort)|delete|update|clear|lease_(take|drop)|atom_[a-z_]+)\('
+data='\bnocopy_(find(_ex)?|each|borrow_(begin|end)|keep|count|put_(begin|commit)|delete|update|clear|lease_(take|drop)|atom_[a-z_]+)\('
 grep -nE "$data" nocopy.c | sed 's/^/check-layers: nocopy.c: arena data through the store: /' | grep . && bad=1
 grep -nE "$data" nocopy_resp.c | grep -v '\bnocopy_clear()' | sed 's/^/check-layers: nocopy_resp.c: local copies through the store: /' | grep . && bad=1
 # The RESP tier: the store reaches it through nocopy_detour, the module through nocopy_resp.h's calls, and nobody else at all.

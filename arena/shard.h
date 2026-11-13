@@ -62,18 +62,17 @@ typedef struct {
 	uint8_t deps;   /* atom halves the payload will reference (nocopy_atom_bit of the writer's view), or 0 */
 } nocopy_put_req;
 
-/* A write between nocopy_put_begin and nocopy_put_commit or nocopy_put_abort. */
+/* A write between nocopy_put_begin and nocopy_put_commit. */
 typedef struct {
 	ar_shard *sh;
 	nocopy_entry *e;
 } nocopy_put;
 
 /* Allocates the block, sets its header and key; NULL if it does not fit (larger than a shard's share, or nothing to evict).
- * The shard stays locked: the caller fills its payload (copies only: no allocation, no user code), then commits or aborts. */
+ * The shard stays locked: the caller fills its payload (copies only: no allocation, no user code), then commits. */
 nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_req *q);
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
-void nocopy_put_abort(nocopy_put *p); /* the block is dropped, unpublished */
 
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen); /* true if it was live */
 void ar_shard_unstick(uint32_t i); /* lock-free readers: takes and drops shard i's lock */
