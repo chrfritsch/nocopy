@@ -26,6 +26,9 @@ void nocopy_value_attach(nocopy_value_shared *s)
 
 /* ---- a thread's state ---- */
 
+#define ENV_BUF_KEEP (1024 * 1024) /* bytes of write buffer kept past a request: one large write keeps no large buffer */
+#define ENV_REL_KEEP (256 * 1024)  /* relocation list entries kept likewise */
+
 /* zend_hash_init allocates nothing: the first insert does, in the request. */
 static void env_caches_init(nocopy_env *env)
 {
@@ -49,12 +52,12 @@ void nocopy_env_request_end(nocopy_env *env)
 	zend_hash_destroy(&env->classes);
 	zend_hash_destroy(&env->zones);
 	env_caches_init(env);
-	if (env->bcap > 1024 * 1024) { /* one large write keeps no large buffer */
+	if (env->bcap > ENV_BUF_KEEP) {
 		pefree(env->buf, 1);
 		env->buf = NULL;
 		env->bcap = 0;
 	}
-	if (env->rcap > 256 * 1024) {
+	if (env->rcap > ENV_REL_KEEP) {
 		pefree(env->rel, 1);
 		env->rel = NULL;
 		env->rcap = 0;
