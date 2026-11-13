@@ -761,7 +761,68 @@ static __attribute__((noinline)) build_status build_region(nc_builder *b, zend_a
 	return st;
 }
 
-/* A table copied into the buffer, a map's hash shrunk to map_mask and rechained (opcache compacts alike), a sparse one as a map of its elements. */
+/* Where copy_table put a's copy: its header, its data (hash, then elements). */
+typedef struct {
+	size_t hoff, doff, hsize;
+	uint32_t n; /* elements (or buckets) copied */
+	bool packed;
+} table_at;
+
+/* a's table copied into the buffer, a map's hash shrunk to map_mask and rechained (opcache compacts alike), a sparse one as a map of its elements. */
+static zend_always_inline table_at copy_table(nc_builder *b, const zend_array *a)
+{
+	table_at t;
+	t.hoff = ob_take(b, sizeof(zend_array));
+	bool sp = sparse(a);
+	t.packed = HT_IS_PACKED(a) && !sp;
+	uint32_t mask = sp ? sparse_mask(a) : t.packed ? a->nTableMask : map_mask(a);
+	uint32_t n = t.n = sp ? a->nNumOfElements : a->nNumUsed;
+	size_t hsize = t.hsize = HT_HASH_SIZE(mask);
+	t.doff = ob_take(b, hsize + n * (t.packed ? sizeof(zval) : sizeof(Bucket)));
+	zend_array *ht = ob_at(b, t.hoff);
+	memcpy(ht, a, sizeof(zend_array));
+	ht->pDestructor = NULL; /* a function address: differs between processes; immutable arrays are never destroyed */
+	ht->nInternalPointer = 0;
+	ht->nTableMask = mask;
+	ht->nNumUsed = n;
+	GC_SET_REFCOUNT(ht, 2);
+	GC_TYPE_INFO(ht) = GC_ARRAY | IS_ARRAY_IMMUTABLE;
+	char *data = ob_at(b, t.doff);
+	if (t.packed) {
+		memcpy(data, HT_GET_DATA_ADDR(a), hsize + n * sizeof(zval));
+		return t;
+	}
+	if (sp) {
+		ht->nTableSize = pow2_at_least(HT_MIN_SIZE, n);
+		HT_FLAGS(ht) &= ~HASH_FLAG_PACKED;
+		if (HT_IS_PACKED(a)) {
+			HT_FLAGS(ht) |= HASH_FLAG_STATIC_KEYS;
+		}
+	}
+	Bucket *d = (Bucket *) (data + hsize);
+	memset(data, 0xff, hsize); /* HT_INVALID_IDX */
+	uint32_t i = 0;
+	if (sp) {
+		zend_ulong k;
+		zend_string *key;
+		zval *v;
+		ZEND_HASH_FOREACH_KEY_VAL(a, k, key, v) {
+			d[i++] = (Bucket) {.val = *v, .h = key ? ZSTR_H(key) : k, .key = key};
+		} ZEND_HASH_FOREACH_END();
+	} else {
+		memcpy(d, a->arData, n * sizeof(Bucket));
+	}
+	for (i = 0; i < n; i++) {
+		if (EXPECTED(Z_TYPE(d[i].val) != IS_UNDEF)) {
+			uint32_t ni = (uint32_t) d[i].h | mask;
+			Z_NEXT(d[i].val) = HT_HASH_EX(d, ni);
+			HT_HASH_EX(d, ni) = HT_IDX_TO_HASH(i);
+		}
+	}
+	return t;
+}
+
+/* a's copy in the buffer, then each element built: keys through the string table, values by build_zval. */
 static build_status build_array(nc_builder *b, zend_array *a, int depth, zend_array **out)
 {
 	if (zend_hash_num_elements(a) == 0) {
@@ -785,51 +846,10 @@ static build_status build_array(nc_builder *b, zend_array *a, int depth, zend_ar
 			}
 		}
 	}
-	size_t hoff = ob_take(b, sizeof(zend_array));
-	bool sp = sparse(a), packed = HT_IS_PACKED(a) && !sp;
-	uint32_t mask = sp ? sparse_mask(a) : packed ? a->nTableMask : map_mask(a);
-	uint32_t n = sp ? a->nNumOfElements : a->nNumUsed;
-	size_t hsize = HT_HASH_SIZE(mask), doff = ob_take(b, hsize + n * (packed ? sizeof(zval) : sizeof(Bucket)));
-	zend_array *ht = ob_at(b, hoff);
-	memcpy(ht, a, sizeof(zend_array));
-	ht->pDestructor = NULL; /* a function address: differs between processes; immutable arrays are never destroyed */
-	ht->nInternalPointer = 0;
-	ht->nTableMask = mask;
-	ht->nNumUsed = n;
-	GC_SET_REFCOUNT(ht, 2);
-	GC_TYPE_INFO(ht) = GC_ARRAY | IS_ARRAY_IMMUTABLE;
-	char *data = ob_at(b, doff);
-	if (packed) {
-		memcpy(data, HT_GET_DATA_ADDR(a), hsize + n * sizeof(zval));
-	} else {
-		if (sp) {
-			ht->nTableSize = pow2_at_least(HT_MIN_SIZE, n);
-			HT_FLAGS(ht) &= ~HASH_FLAG_PACKED;
-			if (HT_IS_PACKED(a)) {
-				HT_FLAGS(ht) |= HASH_FLAG_STATIC_KEYS;
-			}
-		}
-		Bucket *d = (Bucket *) (data + hsize);
-		memset(data, 0xff, hsize); /* HT_INVALID_IDX */
-		uint32_t i = 0;
-		if (sp) {
-			zend_ulong k;
-			zend_string *key;
-			zval *v;
-			ZEND_HASH_FOREACH_KEY_VAL(a, k, key, v) {
-				d[i++] = (Bucket) {.val = *v, .h = key ? ZSTR_H(key) : k, .key = key};
-			} ZEND_HASH_FOREACH_END();
-		} else {
-			memcpy(d, a->arData, n * sizeof(Bucket));
-		}
-		for (i = 0; i < n; i++) {
-			if (EXPECTED(Z_TYPE(d[i].val) != IS_UNDEF)) {
-				uint32_t ni = (uint32_t) d[i].h | mask;
-				Z_NEXT(d[i].val) = HT_HASH_EX(d, ni);
-				HT_HASH_EX(d, ni) = HT_IDX_TO_HASH(i);
-			}
-		}
-	}
+	table_at t = copy_table(b, a);
+	size_t hoff = t.hoff, doff = t.doff, hsize = t.hsize;
+	uint32_t n = t.n;
+	bool packed = t.packed;
 	/* the copied elements still point into a: it is read until the end, so a hook meanwhile must not free it (hold_walk) */
 	NC_ASSERT(b->nopen < NC_OPEN_MAX);
 	b->open[b->nopen++] = (nc_open) {a, false};
@@ -865,7 +885,7 @@ static build_status build_array(nc_builder *b, zend_array *a, int depth, zend_ar
 		store(b, voff, &v);
 	}
 	b->nopen--;
-	ht = ob_at(b, hoff);
+	zend_array *ht = ob_at(b, hoff);
 	ht->nNextFreeElement = (max == ZEND_LONG_MIN || max == ZEND_LONG_MAX) ? max : max + 1;
 	ht->arData = (Bucket *) (uintptr_t) (doff + hsize); /* HT_SET_DATA_ADDR, as an offset */
 	rel_add(b, hoff + offsetof(zend_array, arData));
