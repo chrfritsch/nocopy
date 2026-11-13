@@ -321,7 +321,7 @@ static bool is_str(const valkeyReply *r)
 /* A push whose first element is name. */
 static bool push_is(const valkeyReply *r, const char *name, size_t n) { return r->type == VALKEY_REPLY_PUSH && r->elements && is_str(r->element[0]) && r->element[0]->len == n && memcmp(r->element[0]->str, name, n) == 0; }
 
-/* The fill guard: a fill that read RESP before an invalidation was applied sees the generation move and drops its copy (nocopy_vk_fetch). */
+/* The fill guard: a fill that read RESP before an invalidation was applied sees the generation move and drops its copy (tier_fetch). */
 static uint64_t vk_gen(void) { return __atomic_load_n(&NOCOPY_SHARED->vk.inval_gen, __ATOMIC_SEQ_CST); }
 static void vk_bump(void) { __atomic_add_fetch(&NOCOPY_SHARED->vk.inval_gen, 1, __ATOMIC_SEQ_CST); }
 
@@ -1071,7 +1071,7 @@ static bool vk_fill(zend_string *key, const zend_string *raw, int64_t ttl, zval 
 }
 
 /* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
-static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static bool tier_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
 {
 	if (!vk_ready()) {
 		ZVAL_NULL(rv);
@@ -1095,7 +1095,7 @@ static bool nocopy_vk_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *d
 }
 
 /* RESP first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
-static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+static nocopy_status tier_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
 {
 	if (!vk_ready()) {
 		return NOCOPY_NO_ROOM;
@@ -1128,8 +1128,8 @@ static nocopy_status nocopy_vk_store(zend_string *key, zval *val, const nocopy_o
 	return NOCOPY_OK;
 }
 
-/* nocopy_vk_store for many keys: local copies first, then every SET in one pipeline. */
-static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
+/* tier_store for many keys: local copies first, then every SET in one pipeline. */
+static bool tier_store_multi(HashTable *vals, const nocopy_opts *o)
 {
 	if (o->add_only) {
 		return nocopy_store_each(vals, o); /* ponytail: add stays one round trip per key (NX decides first) */
@@ -1178,7 +1178,7 @@ static bool nocopy_vk_store_multi(HashTable *vals, const nocopy_opts *o)
 	return all;
 }
 
-static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
+static void tier_fetch_multi(HashTable *keys, HashTable *out)
 {
 	if (!vk_ready()) {
 		return;
@@ -1218,7 +1218,7 @@ static void nocopy_vk_fetch_multi(HashTable *keys, HashTable *out)
 	efree(miss);
 }
 
-static bool nocopy_vk_drop(zend_string *key)
+static bool tier_drop(zend_string *key)
 {
 	int64_t gone = 0;
 	int r = vk_ready() ? vk_unlink_n(1, &key, &gone) : -1;
@@ -1226,7 +1226,7 @@ static bool nocopy_vk_drop(zend_string *key)
 	return r == 1 && gone > 0;
 }
 
-static zend_long nocopy_vk_drop_multi(HashTable *keys)
+static zend_long tier_drop_multi(HashTable *keys)
 {
 	zend_string **ks = safe_emalloc(zend_hash_num_elements(keys), sizeof *ks, 0);
 	uint32_t n = 0;
@@ -1244,7 +1244,7 @@ static zend_long nocopy_vk_drop_multi(HashTable *keys)
 	return (zend_long) gone;
 }
 
-static bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
+static bool tier_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
 {
 	int64_t v = 0;
 	int r = vk_ready() ? vk_incr(ZSTR_VAL(key), ZSTR_LEN(key), delta, (int64_t) MIN(ttl, NOCOPY_TTL_MAX) * 1000, &v) : -1;
@@ -1253,14 +1253,14 @@ static bool nocopy_vk_add_long(zend_string *key, zend_long delta, zend_long ttl,
 	return r == 1;
 }
 
-static bool nocopy_vk_cas_long(zend_string *key, zend_long old, zend_long nw)
+static bool tier_cas_long(zend_string *key, zend_long old, zend_long nw)
 {
 	int r = vk_ready() ? vk_cas(ZSTR_VAL(key), ZSTR_LEN(key), old, nw) : -1;
 	vk_forget(key);
 	return r == 1;
 }
 
-static bool nocopy_vk_clear(void)
+static bool tier_clear(void)
 {
 	bool ok = vk_ready() && vk_clear() >= 0; /* RESP down: the other servers keep theirs */
 	nocopy_clear();
@@ -1268,8 +1268,8 @@ static bool nocopy_vk_clear(void)
 }
 
 static const nocopy_detour_ops vk_detour = {
-	nocopy_vk_store, nocopy_vk_fetch, nocopy_vk_fetch_multi, nocopy_vk_store_multi, nocopy_vk_drop, nocopy_vk_drop_multi,
-	nocopy_vk_add_long, nocopy_vk_cas_long, nocopy_vk_clear, true, "resp",
+	tier_store, tier_fetch, tier_fetch_multi, tier_store_multi, tier_drop, tier_drop_multi,
+	tier_add_long, tier_cas_long, tier_clear, true, "resp",
 };
 
 const nocopy_detour_ops *nocopy_vk_route(void) { return vk_on ? &vk_detour : NULL; }
