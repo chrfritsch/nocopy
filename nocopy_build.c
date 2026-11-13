@@ -103,7 +103,7 @@ static zend_string *atom_sight(const nocopy_atom_view *v, const zend_string *s, 
 	}
 	zend_string hdr;
 	GC_SET_REFCOUNT(&hdr, ZSTR_LEN(s) > 1 ? 3 : 2);
-	GC_TYPE_INFO(&hdr) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+	GC_TYPE_INFO(&hdr) = arena_str_type(s);
 	ZSTR_H(&hdr) = h;
 	ZSTR_LEN(&hdr) = ZSTR_LEN(s);
 	return nocopy_atom_add(v, h, &hdr, (uint32_t) _ZSTR_HEADER_SIZE, ZSTR_VAL(s), (uint32_t) ZSTR_LEN(s));
@@ -115,8 +115,7 @@ static zend_string *build_copy(nc_builder *b, const zend_string *s)
 	zend_string *r = ob_at(b, off);
 	memcpy(r, s, size); /* keys arrive hashed; values as building hashed them, or unhashed (benign idempotent write on use) */
 	GC_SET_REFCOUNT(r, 2);
-	/* not IS_STR_PERMANENT: that promises process lifetime (PCRE then keeps the pointer as a cache key) */
-	GC_TYPE_INFO(r) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+	GC_TYPE_INFO(r) = arena_str_type(s);
 	return OFFP(off);
 }
 

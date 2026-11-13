@@ -37,6 +37,8 @@ static inline void *inl_grow(void *p, const void *inl, size_t used, size_t size)
 typedef void (*zval_fn)(void *ctx, zval *z);
 
 static zend_always_inline size_t str_size(size_t len) { return SALIGN(_ZSTR_STRUCT_SIZE(len)); }
+/* An arena string's type: interned, its UTF-8 flag kept, never IS_STR_PERMANENT (process lifetime: PCRE would keep the pointer). */
+static zend_always_inline uint32_t arena_str_type(const zend_string *s) { return GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0); }
 
 extern nocopy_value_shared *nc_shared;
 #define ARENA_EMPTY (&nc_shared->empty)
@@ -382,7 +384,7 @@ static zend_always_inline void nc_write_flat(nocopy_entry *e, char *p, const zva
 	zend_string *r = (zend_string *) p;
 	memcpy(r, s, _ZSTR_STRUCT_SIZE(ZSTR_LEN(s)));
 	GC_SET_REFCOUNT(r, 2);
-	GC_TYPE_INFO(r) = GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0);
+	GC_TYPE_INFO(r) = arena_str_type(s);
 	ZVAL_STR(v, r);
 	Z_TYPE_FLAGS_P(v) = 0;
 }
