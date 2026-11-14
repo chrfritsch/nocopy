@@ -41,9 +41,16 @@ ZEND_EXTERN_MODULE_GLOBALS(nocopy)
 
 typedef struct {
 	zend_long ttl; /* 0: none */
-	time_t expires; /* instead of ttl: the last second it lives (a RESP fill keeps the remote expiry) */
+	time_t expires; /* instead of ttl: the last second it lives, on the arena's clock (a RESP fill keeps the remote expiry) */
+	uint32_t compute_ms; /* how long the value took to compute (nocopy_remember): kept with the entry for XFetch */
 	bool add_only; /* fail if a live entry exists */
 } nocopy_opts;
+
+/* What a hit tells nocopy_remember besides its value. */
+typedef struct {
+	time_t expires; /* the last second it lives, on the arena's clock; 0: never */
+	uint32_t compute_ms; /* as stored */
+} nocopy_meta;
 
 void nocopy_leases_drop(void); /* leases a bailed-out callback still holds */
 
@@ -63,8 +70,8 @@ bool nocopy_clear_all(void); /* nocopy_clear: RESP's keys under the prefix too; 
 void nocopy_list_keys(zend_string *prefix, HashTable *out); /* this host's entries under prefix, oldest first: key => size, created, expires */
 
 /* The local store alone, for the RESP tier. */
-nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user); /* with the compute time; needs an arena */
-bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta); /* exp/delta may be NULL */
+nocopy_status nocopy_store_local(zend_string *key, zval *val, const nocopy_opts *o); /* needs an arena */
+bool nocopy_fetch_local(zend_string *key, zval *rv, nocopy_meta *m); /* m may be NULL */
 bool nocopy_drop_local(const char *k, size_t len); /* needs an arena */
 bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as one store per key */
 /* Each string of a list of keys as zend_string *key (borrowed); other types are skipped. */
@@ -82,8 +89,8 @@ static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return 
 
 /* ---- the detour: where the store ops go off the local fast path. Positional initializers: -Wextra flags a missing slot. ---- */
 struct nocopy_detour_ops {
-	nocopy_status (*store)(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user);
-	bool (*fetch)(zend_string *key, zval *rv, time_t *exp, uint32_t *delta);
+	nocopy_status (*store)(zend_string *key, zval *val, const nocopy_opts *o);
+	bool (*fetch)(zend_string *key, zval *rv, nocopy_meta *m);
 	void (*fetch_multi)(HashTable *keys, HashTable *out);
 	bool (*store_multi)(HashTable *vals, const nocopy_opts *o);
 	bool (*drop)(zend_string *key);

@@ -11,23 +11,21 @@
 
 /* ---- writes ---- */
 
-nocopy_status nocopy_put_local(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+/* The compute time rides in the entry's user word. noinline: inlined into nocopy_store, the value layer's put went out of line (+12 Ir a store). */
+__attribute__((noinline)) nocopy_status nocopy_store_local(zend_string *key, zval *val, const nocopy_opts *o)
 {
 	nocopy_put_req q = {.h = zend_string_hash_val(key), .key = ZSTR_VAL(key), .klen = (uint32_t) ZSTR_LEN(key),
-		.ttl = (time_t) o->ttl, .expires = o->expires, .user = user};
+		.ttl = (time_t) o->ttl, .expires = o->expires, .user = o->compute_ms};
 	return nocopy_value_put(&NOCOPY_G(env), &NOCOPY_G(ctx), &q, val, o->add_only);
 }
 
-/* user: the compute time (ms). */
-static zend_always_inline nocopy_status store_as(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
 	if (UNEXPECTED(NOCOPY_G(detour))) {
-		return NOCOPY_G(detour)->store(key, val, o, user);
+		return NOCOPY_G(detour)->store(key, val, o);
 	}
-	return nocopy_put_local(key, val, o, user);
+	return nocopy_store_local(key, val, o);
 }
-
-nocopy_status nocopy_store(zend_string *key, zval *val, const nocopy_opts *o) { return store_as(key, val, o, 0); }
 
 static zend_always_inline bool drop_local(const char *k, size_t len, zend_ulong h) { return nocopy_delete(h, k, (uint32_t) len); }
 
@@ -125,8 +123,8 @@ bool nocopy_cas_long(zend_string *key, zend_long old, zend_long nw)
 
 /* ---- reads ---- */
 
-/* Fetch into rv: zero-copy in a request-scoped request, else a private copy. exp/delta: the entry's expiry and compute time (ms). */
-static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta, bool stale)
+/* Fetch into rv: zero-copy in a request-scoped request, else a private copy. m: the entry's expiry and compute time, if wanted. */
+static zend_always_inline bool local_fetch(zend_string *key, zval *rv, nocopy_meta *m, bool stale)
 {
 	nocopy_ctx *c = &NOCOPY_G(ctx);
 	bool copy = !NOCOPY_G(zero_copy);
@@ -135,9 +133,9 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	bool hit = e != NULL;
 	ZVAL_NULL(rv);
 	if (e) {
-		if (exp) {
-			*exp = nocopy_entry_expires(e);
-			*delta = nocopy_entry_user(e);
+		if (m) {
+			m->expires = nocopy_entry_expires(e);
+			m->compute_ms = nocopy_entry_user(e);
 		}
 		if (nocopy_value_scalar(e, rv)) {
 			/* hit */
@@ -156,17 +154,17 @@ static zend_always_inline bool local_fetch(zend_string *key, zval *rv, time_t *e
 	return hit;
 }
 
-bool nocopy_fetch_local(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { return local_fetch(key, rv, exp, delta, false); }
+bool nocopy_fetch_local(zend_string *key, zval *rv, nocopy_meta *m) { return local_fetch(key, rv, m, false); }
 
-static zend_always_inline bool fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta)
+static zend_always_inline bool fetch(zend_string *key, zval *rv, nocopy_meta *m)
 {
 	if (UNEXPECTED(NOCOPY_G(detour))) {
-		return NOCOPY_G(detour)->fetch(key, rv, exp, delta);
+		return NOCOPY_G(detour)->fetch(key, rv, m);
 	}
-	return local_fetch(key, rv, exp, delta, false);
+	return local_fetch(key, rv, m, false);
 }
 
-bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL, NULL); }
+bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL); }
 
 /* noinline: under LTO, inlined into nocopy_get_multiple, copy mode got 14% slower */
 __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *out)
@@ -178,7 +176,7 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 	zval t;
 	nocopy_borrow_begin(&NOCOPY_G(ctx)); /* idle pins checked once per call, not per key */
 	NOCOPY_KEYS_FOREACH(keys, k) {
-		if (local_fetch(k, &t, NULL, NULL, false)) {
+		if (local_fetch(k, &t, NULL, false)) {
 			zend_symtable_update(out, k, &t);
 		}
 	} NOCOPY_KEYS_FOREACH_END();
@@ -307,26 +305,25 @@ static void compute(zend_string *key, zval *fn, const nocopy_opts *o, zval *rv)
 		return; /* ttl < 0: the callback asks not to store */
 	}
 	int64_t ms = nocopy_mono_ms() - t0;
-	const nocopy_opts as = {.ttl = ttl, .add_only = o->add_only};
-	store_as(key, rv, &as, ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms);
+	const nocopy_opts as = {.ttl = ttl, .compute_ms = ms >= UINT32_MAX ? UINT32_MAX : (uint32_t) ms, .add_only = o->add_only};
+	nocopy_store(key, rv, &as);
 }
 
 void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double beta, zval *rv)
 {
-	time_t exp;
-	uint32_t delta;
+	nocopy_meta m;
 	if (UNEXPECTED(NOCOPY_G(detour)) && !NOCOPY_G(detour)->leases) {
 		compute(key, fn, o, rv);
 		return;
 	}
-	if (fetch(key, rv, &exp, &delta)) {
-		if (!(beta > 0 && exp && delta)) {
+	if (fetch(key, rv, &m)) {
+		if (!(beta > 0 && m.expires && m.compute_ms)) {
 			return;
 		}
 		double r = ((nocopy_rand(&NOCOPY_G(ctx)) >> 8) + 1) / 16777216.0; /* (0, 1] */
 		struct timespec ts;
-		nocopy_clock(&ts); /* exp's clock */
-		if ((double) nocopy_now_of(&ts) + ts.tv_nsec / 1e9 - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
+		nocopy_clock(&ts); /* m.expires' clock */
+		if ((double) nocopy_now_of(&ts) + ts.tv_nsec / 1e9 - m.compute_ms / 1000.0 * beta * log(r) < (double) m.expires + 1) { /* it lives through that second */
 			return; /* XFetch: not yet */
 		}
 		if (lease_take(nocopy_key_hash(ZSTR_VAL(key), ZSTR_LEN(key))) != NOCOPY_LEASE_TAKEN) {
@@ -348,10 +345,10 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 			mine = r == NOCOPY_LEASE_TAKEN; /* MINE: our own callback asks for its key; FULL: compute without */
 			break;
 		}
-		if (fetch(key, rv, NULL, NULL)) {
+		if (fetch(key, rv, NULL)) {
 			return; /* the holder stored it */
 		}
-		if (beta > 0 && !NOCOPY_G(detour) && local_fetch(key, rv, NULL, NULL, true)) {
+		if (beta > 0 && !NOCOPY_G(detour) && local_fetch(key, rv, NULL, true)) {
 			return; /* stale-while-revalidate: the expired value, while the holder computes the new one */
 		}
 		if (nocopy_mono_ms() > deadline) {
@@ -360,7 +357,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		usleep(wait);
 		wait = wait < 5000 ? wait * 2 : wait;
 	}
-	if (mine && fetch(key, rv, NULL, NULL)) {
+	if (mine && fetch(key, rv, NULL)) {
 		lease_drop(); /* stored between our miss and the lease */
 		return;
 	}
@@ -372,12 +369,12 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 
 /* ---- no arena: the detour where every op misses or fails ---- */
 
-static nocopy_status na_store(zend_string *key, zval *val, const nocopy_opts *o, uint32_t user)
+static nocopy_status na_store(zend_string *key, zval *val, const nocopy_opts *o)
 {
-	(void) key, (void) o, (void) user;
+	(void) key, (void) o;
 	return nocopy_value_check(&NOCOPY_G(env), val) ? NOCOPY_NO_ROOM : NOCOPY_REFUSED; /* the checks only: the caller's errors still throw */
 }
-static bool na_fetch(zend_string *key, zval *rv, time_t *exp, uint32_t *delta) { (void) key, (void) exp, (void) delta; ZVAL_NULL(rv); return false; }
+static bool na_fetch(zend_string *key, zval *rv, nocopy_meta *m) { (void) key, (void) m; ZVAL_NULL(rv); return false; }
 static void na_fetch_multi(HashTable *keys, HashTable *out) { (void) keys, (void) out; }
 static bool na_drop(zend_string *key) { (void) key; return false; }
 static zend_long na_drop_multi(HashTable *keys) { (void) keys; return 0; }

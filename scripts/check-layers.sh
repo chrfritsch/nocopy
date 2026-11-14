@@ -77,7 +77,7 @@ done
 # The local store's pieces are the RESP tier's.
 for f in *.c; do
 	case $f in nocopy_store.c | nocopy_resp.c) continue ;; esac
-	grep -nE '\bnocopy_((put|fetch|drop)_local|store_each)\b' "$f" | sed "s|^|check-layers: $f: the local store is the RESP tier's: |" | grep . && bad=1
+	grep -nE '\bnocopy_((store|fetch|drop)_local|store_each)\b' "$f" | sed "s|^|check-layers: $f: the local store is the RESP tier's: |" | grep . && bad=1
 done
 [ $bad = 0 ] && echo "check-layers: ok"
 exit $bad
