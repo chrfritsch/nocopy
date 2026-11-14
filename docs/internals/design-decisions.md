@@ -563,6 +563,20 @@ removal of `nocopy_put_abort`. Changed and kept: `val_off` (same count, reordere
 `copy_table` split out of `build_array` (stores within ±0.25% Ir). The wall-clock store rows are the noisier gauge here:
 copy and zero mode run the same write code, and their columns disagree by up to 5 points in one run (new-values rows by up to 30).
 
+**The store API carries an entry's metadata as data** (2026-11-14; was: the compute time as a positional `uint32_t user` through
+`store_as`, `nocopy_put_local` and the detour's `store`, and back through `time_t *exp, uint32_t *delta`, which had to be NULL
+together). A store's compute time is a field of `nocopy_opts`, a hit fills one `nocopy_meta` or none; the detour's `store` and `fetch`
+lose a parameter each and `nocopy_put_local` is `nocopy_store_local`, like `fetch_local` and `drop_local`. Release `nocopy.so`
+disassembled before and after: 583 of 601 functions identical, the others within 3 instructions (the tier's `vk_fill` 8 shorter).
+`./dev cg`, Ir per call: put_int 568 -> 567, put_ttl 613 -> 611, put_str 612 -> 611, put_arr 8,779 -> 8,782, put_obj 4,067 -> 4,062,
+put_multi 4,930 -> 4,917, add_fail 550 -> 548. **`nocopy_store_local` stays out of line** for that: without `noinline` gcc inlined it
+into `nocopy_store` and moved `nocopy_value_put` out of line instead, 12 instructions more on every store (put_int 580, put_multi 5,047).
+**`./dev cg`'s read rows are not deterministic**: the read counter (`ar_policy_hit`) draws from the worker's xorshift until the entry's
+`hot` is full, so a row costs up to ~17 Ir more or less by where that happens in the n and 2n runs. HEAD against itself, three runs:
+get_int 260, 277, 277, remember 359, 392, 393. Reading the key 200,000 times before the loop does not help: the draw then falls
+into the warm-up, which the two runs no longer share (get_int 236, 269, 267). Compare read paths by disassembly (here: the same code,
+`nocopy_fetch` one `xor` shorter) and take cg's write rows, which repeat to the instruction.
+
 **LTO in shared builds** (`--disable-nocopy-lto` turns it off), which inlines the arena into the fetch and store paths. `ab.sh` best of 5,
 copy / zero: fetches +1-4%, store int +4%, inc +10%, store+delete +5-6%, failing add +5-7%. `nocopy_fetch_multi` stays out of line:
 inlined into `nocopy_get_multiple`, copy-mode `fetch 10 keys` went 131 -> 151 ns.
