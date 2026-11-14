@@ -12,6 +12,7 @@
 #define NC_SHARE_MAX 65536    /* larger arrays are not admitted */
 #define NC_SHARE_STR 256      /* longer strings are not hashed: arrays holding them are not shared */
 #define NC_SHARE_ADMIT 64     /* arrays a write may admit */
+#define NC_OFF_MAX ((size_t) 64 << 20) /* bytes a value is built to without an arena (its checks only) */
 
 #define SALIGN(n) ZEND_MM_ALIGNED_SIZE(n)
 #define KEY_OFF SALIGN(sizeof(nocopy_block)) /* the key's bytes: only compared, never a zend_string */

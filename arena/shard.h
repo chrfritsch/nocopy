@@ -78,6 +78,7 @@ typedef struct {
 /* Allocates the block, sets its header and key; NULL if it does not fit (larger than a shard's share, or nothing to evict).
  * The shard stays locked: the caller fills its payload (copies only: no allocation, no user code), then commits. */
 nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_req *q);
+size_t nocopy_put_max(void); /* the largest block nocopy_put_begin takes (a shard's share) */
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 

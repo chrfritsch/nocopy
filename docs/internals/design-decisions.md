@@ -125,6 +125,13 @@ and the table finds them by it; zeroed, every moved one landed in slot 0 and its
 
 ## Writes
 
+**The build buffer stops at the largest entry** (`nocopy_put_max()`, a shard's share; `NC_OFF_MAX` 64 MB without an arena). It is
+persistent memory, outside `memory_limit`, and a value that holds its arrays several times through references is built once per use:
+30 levels of two references is a few KB in PHP and 2^30 arrays built. Before, a worker under `memory_limit=64M` reached 440 MB RSS at
+22 levels and was OOM-killed at 26 (3 GB container); now the walk ends past the bound (`BUILD_BIG`, test 120) and the store returns
+`false`, not serialized (as large, and serialize's buffer would hit `memory_limit` instead). Checked once per `build_zval`;
+`./dev ab HEAD 7 write mixed`: within noise (1k rows unserialized keys -1.5% / -0.9%).
+
 Found with cachegrind (per-op cost from runs of n and 2n ops, `cg_diff`). **`persist_array` takes the next free index
 from the loop it already runs** (was a second pass over every array, ~10% of a put), and **its key dedupe remembers the
 source key**, so repeated keys match by pointer (was a `memcmp` against the persisted copy for every key). Store array

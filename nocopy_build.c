@@ -125,7 +125,7 @@ static zend_always_inline nc_share *nc_share_init(nc_share *s)
 	return s;
 }
 
-typedef enum { BUILD_OK, BUILD_DEEP, BUILD_OBJECT, BUILD_RESOURCE, BUILD_ERROR /* an exception is pending */, BUILD_AGAIN /* internal: a new shared reference */ } build_status;
+typedef enum { BUILD_OK, BUILD_DEEP, BUILD_OBJECT, BUILD_RESOURCE, BUILD_ERROR /* an exception is pending */, BUILD_BIG /* larger than the arena takes */, BUILD_AGAIN /* internal: a new shared reference */ } build_status;
 
 /* A source array the walk is reading, and whether it holds a reference to it (taken when user code runs). */
 typedef struct {
@@ -151,6 +151,7 @@ typedef struct {
 	uint32_t ns, scap;
 	zend_string **str_inl;
 	size_t base;
+	size_t max;        /* bytes the buffer may reach: no entry is larger */
 	char *buf;         /* env's, taken while building */
 	size_t bn, bcap;
 	uint32_t *rel;
@@ -1263,6 +1264,9 @@ static build_status build_zval(nc_builder *b, zval *v, int depth)
 	if (depth > NC_MAX_DEPTH) {
 		return BUILD_DEEP;
 	}
+	if (UNEXPECTED(b->bn > b->max)) {
+		return BUILD_BIG; /* past it by one array at most, which the source holds too: memory_limit bounds it */
+	}
 	switch (Z_TYPE_P(v)) {
 		case IS_UNDEF: case IS_NULL: case IS_FALSE: case IS_TRUE: case IS_LONG: case IS_DOUBLE:
 			return BUILD_OK;
@@ -1348,6 +1352,8 @@ static void nc_build_init(nc_builder *b, nocopy_env *env, const nocopy_atom_view
 	b->str = b->str_inl = str;
 	b->scap = STR_INL;
 	b->base = base;
+	size_t lim = MIN(nocopy_attached() ? nocopy_put_max() : NC_OFF_MAX, UINT32_MAX); /* offsets are 32-bit */
+	b->max = lim > base ? lim - base : 0;
 	b->held = NULL;
 	b->nheld = b->hcap = 0;
 	b->buf = env->buf; /* taken: a hook storing meanwhile gets a buffer of its own */
@@ -1506,8 +1512,8 @@ nocopy_status nc_build_put(nocopy_env *env, nocopy_ctx *ctx, nocopy_put_req *q, 
 	nc_build_init(&b, env, av, &ss, &g, str, val_off(q->klen));
 	build_status st = nc_build(&b, val);
 	nocopy_status r;
-	if (st == BUILD_OK && b.base + b.bn > UINT32_MAX) {
-		nc_build_free(&b); /* offsets and the relocation list are 32-bit */
+	if (st == BUILD_BIG || (st == BUILD_OK && b.base + b.bn > UINT32_MAX)) {
+		nc_build_free(&b); /* not serialized instead: no smaller, and it would allocate as much */
 		return NOCOPY_NO_ROOM;
 	}
 	if (st == BUILD_OK) {
@@ -1549,8 +1555,8 @@ bool nc_build_check(nocopy_env *env, zval *val)
 	nc_build_init(&b, env, NULL, NULL, &g, str, KEY_OFF);
 	build_status st = nc_build(&b, val);
 	nc_build_free(&b);
-	if (st == BUILD_OK) {
-		return true;
+	if (st == BUILD_OK || st == BUILD_BIG) {
+		return true; /* BUILD_BIG: refused for its size, without an error */
 	}
 	zval ser;
 	nocopy_fmt fmt;

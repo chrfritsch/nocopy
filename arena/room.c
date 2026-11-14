@@ -406,9 +406,11 @@ static nocopy_entry *reclaim_alloc(ar_shard *sh, size_t total, int b, time_t exp
 /* A block of total bytes, freeing room as needed, cheapest first: expired entries, dead segments, dead writers' unfinished
  * entries, segments other shards hold beyond their share, merges. NULL: no room.
  * May drop and retake the lock (rebalance): whatever the caller read of the shard before calling is stale afterwards. */
+size_t nocopy_put_max(void) { return fair_segs ? (size_t) (fair_segs - 1) << ar_seg_shift : 0; }
+
 nocopy_entry *ar_room_alloc(ar_shard *sh, size_t total, time_t exp, time_t now)
 {
-	if (total > (size_t) (fair_segs - 1) << ar_seg_shift) {
+	if (total > nocopy_put_max()) {
 		return NULL; /* bigger than a shard's share */
 	}
 	int b = ar_log_bucket(exp ? (exp > now ? exp - now : 1) : 0); /* exp == now is not bucket 0, which never expires */
