@@ -15,7 +15,7 @@
 
 typedef struct {
 	nocopy_value_shared value; /* the value layer's: every entry's empty array */
-	nocopy_vk_shared vk; /* the RESP tier's */
+	nocopy_resp_shared resp; /* the RESP tier's */
 } nocopy_shared;
 _Static_assert(sizeof(nocopy_shared) <= NOCOPY_USER_BYTES, "nocopy_shared outgrew the arena's user area");
 #define NOCOPY_SHARED ((nocopy_shared *) nocopy_user_area())
@@ -29,7 +29,7 @@ ZEND_BEGIN_MODULE_GLOBALS(nocopy)
 	int nleases;
 	nocopy_env env; /* the value layer's */
 	nocopy_kept_cache kept; /* copy mode's kept copies */
-	nocopy_vk vk; /* the RESP tier's connection */
+	nocopy_resp_conn resp; /* the RESP tier's connection */
 	const struct nocopy_detour_ops *detour; /* where the store ops go: NULL the local store */
 	const char *off; /* why this process (thread) has no cache, NULL: it has one */
 ZEND_END_MODULE_GLOBALS(nocopy)

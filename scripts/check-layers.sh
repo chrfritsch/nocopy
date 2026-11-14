@@ -67,11 +67,11 @@ grep -nE "$data" nocopy_resp.c | grep -v '\bnocopy_clear()' | sed 's/^/check-lay
 for f in *.c *.h; do
 	case $f in
 	nocopy_resp.c | nocopy_resp.h) continue ;;
-	nocopy.c) ok='nocopy_vk_(minit|mshutdown|route|new_request|close|listener)\b|\bnocopy_vk\b' ;;
-	nocopy_php.h) ok='\bnocopy_vk(_shared)?\b' ;;
+	nocopy.c) ok='nocopy_resp_(minit|mshutdown|route|new_request|close|listener)\b' ;;
+	nocopy_php.h) ok='\bnocopy_resp_(conn|shared)\b' ;;
 	*) ok='^$' ;;
 	esac
-	grep -noE '\bnocopy_vk[a-z_]*\b|\bHAVE_NOCOPY_RESP\b' "$f" | grep -vE "$ok" | sed "s|^|check-layers: $f: RESP outside nocopy_resp.h: |" | grep . && bad=1
+	grep -noE '\bnocopy_resp_[a-z_]+\b|\bHAVE_NOCOPY_RESP\b' "$f" | grep -vE "$ok" | sed "s|^|check-layers: $f: RESP outside nocopy_resp.h: |" | grep . && bad=1
 	[ "$f" != nocopy_php.h ] && grep -q '#include "nocopy_resp.h"' "$f" && no "$f includes nocopy_resp.h: nocopy_php.h does"
 done
 # The local store's pieces are the RESP tier's.

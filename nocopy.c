@@ -347,7 +347,7 @@ PHP_FUNCTION(nocopy_stats)
 	add_assoc_long(return_value, "shared_arrays", s.shared_arrays);
 	add_assoc_long(return_value, "shared_arrays_used", s.shared_arrays_used);
 	add_str_or_null(return_value, "shm_name", shm_attached[0] ? shm_attached : NULL);
-	add_assoc_long(return_value, "resp_listener", nocopy_vk_listener());
+	add_assoc_long(return_value, "resp_listener", nocopy_resp_listener());
 	add_str_or_null(return_value, "off", NOCOPY_G(off));
 }
 
@@ -357,7 +357,7 @@ PHP_FUNCTION(nocopy_stats)
 static ZEND_NAMED_FUNCTION(nocopy_handle_request)
 {
 	NOCOPY_G(zero_copy) = false; /* values fetched while booting stay pinned until the worker ends */
-	nocopy_vk_new_request();
+	nocopy_resp_new_request();
 	nocopy_drop_idle(&NOCOPY_G(ctx)); /* the worker now waits for a request */
 	orig_handle_request(INTERNAL_FUNCTION_PARAM_PASSTHRU);
 }
@@ -561,7 +561,7 @@ static PHP_GSHUTDOWN_FUNCTION(nocopy)
 		nocopy_release(&nocopy_globals->ctx);
 	}
 	nocopy_env_free(&nocopy_globals->env);
-	nocopy_vk_close(&nocopy_globals->vk);
+	nocopy_resp_close(&nocopy_globals->resp);
 }
 
 /* Opens the arena of nocopy.shm_name. late: in a worker's first request, problems go to the log. */
@@ -616,7 +616,7 @@ static void route_thread(void)
 /* Where the store ops go: the local store (NULL), else no arena, else RESP. */
 static void route(void)
 {
-	proc_route = nocopy_attached() ? nocopy_vk_route() : &nocopy_no_arena;
+	proc_route = nocopy_attached() ? nocopy_resp_route() : &nocopy_no_arena;
 	route_thread();
 }
 
@@ -637,7 +637,7 @@ static void claim(void) { route_claimed(!nocopy_attached() || nocopy_claim(&NOCO
 static void atfork_child(void)
 {
 	route_claimed(!nocopy_attached() || nocopy_after_fork(&NOCOPY_G(ctx)));
-	nocopy_vk_close(&NOCOPY_G(vk));
+	nocopy_resp_close(&NOCOPY_G(resp));
 }
 
 static void open_late(void)
@@ -662,7 +662,7 @@ PHP_MINIT_FUNCTION(nocopy)
 	if (!open_deferred) {
 		arena_open(false);
 	}
-	nocopy_vk_minit(module_number);
+	nocopy_resp_minit(module_number);
 	route();
 	pthread_atfork(NULL, NULL, atfork_child);
 
@@ -685,7 +685,7 @@ PHP_MSHUTDOWN_FUNCTION(nocopy)
 	nocopy_release(&NOCOPY_G(ctx));
 	nocopy_arena_close();
 	UNREGISTER_INI_ENTRIES();
-	nocopy_vk_mshutdown();
+	nocopy_resp_mshutdown();
 	return SUCCESS;
 }
 
@@ -703,7 +703,7 @@ PHP_RINIT_FUNCTION(nocopy)
 	NOCOPY_G(zero_copy) = sapi_zero_copy;
 	nocopy_keep_until(&NOCOPY_G(ctx), sapi_zero_copy && zero_copy_seconds > 0 ? nocopy_mono_ms() + zero_copy_seconds * 1000 : 0);
 	nocopy_kept_rinit(&NOCOPY_G(kept));
-	nocopy_vk_new_request();
+	nocopy_resp_new_request();
 	return SUCCESS;
 }
 
