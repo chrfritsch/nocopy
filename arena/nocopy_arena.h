@@ -75,9 +75,11 @@ static inline void nocopy_count(nocopy_ctx *c, bool hit)
 
 /* ---- reads: lock-free, between borrow_begin/end ---- */
 
+nocopy_entry *ar_find_alt(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale); /* out of line: hits keep the loop below as tight as before */
+
 /* Pin first, then re-check the slot, only then dereference. Forced inline: gcc outlined it once fetch() got more callers (+9 ns copy fetch).
- * stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). */
-static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
+ * stale: also return an entry that expired, if nocopy_stale_ok (constant at every call site: folds away). primary: h is the key's own hash. */
+static inline __attribute__((always_inline)) nocopy_entry *ar_find_as(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale, bool primary)
 {
 	ar_probe p;
 	ar_probe_start(&p, &ar_ix[ar_shard_idx(h)], h);
@@ -100,12 +102,21 @@ static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy
 			}
 		}
 		if (ar_probe_miss_final(&p)) {
+			/* keys sharing a hash past ALT_AFTER live under their alternative one; nalt shares mseq's line */
+			if (primary && __builtin_expect(__atomic_load_n(&ar_ix[ar_shard_idx(h)].hdr->nalt, __ATOMIC_ACQUIRE) != 0, 0)) {
+				return ar_find_alt(c, h, k, klen, stale);
+			}
 			return NULL;
 		}
 		if (__builtin_expect(tries == 1u << 16, 0)) {
 			ar_shard_unstick(ar_shard_idx(h));
 		}
 	}
+}
+
+static inline __attribute__((always_inline)) nocopy_entry *nocopy_find_ex(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
+{
+	return ar_find_as(c, h, k, klen, stale, true);
 }
 
 static inline __attribute__((always_inline)) nocopy_entry *nocopy_find(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen)
@@ -119,6 +130,9 @@ void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), vo
 
 /* ---- writes: nocopy_put_begin/commit, nocopy_delete, nocopy_update, nocopy_clear (shard.h) ---- */
 /* ---- single flight: nocopy_lease_take/drop (leases.h) ---- */
+
+/* A key's secret hash (SipHash under the arena's seed): for tables keyed by hash alone, such as leases, that crafted keys must not share. */
+static inline uint64_t nocopy_key_hash(const char *k, size_t n) { return ar_siphash(k, n); }
 
 /* ---- atoms: strings stored once for the whole arena (atoms.h, atoms_read.h) ---- */
 

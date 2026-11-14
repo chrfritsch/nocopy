@@ -91,21 +91,59 @@ __attribute__((cold, noinline)) void ar_shard_unstick(uint32_t i)
 	ar_shard_unlock(&ar_shards[i]);
 }
 
-/* The slot of the key's live entry (*found), or the empty slot ending its run. */
-static inline __attribute__((always_inline)) ar_slot *locate(ar_shard *sh, uint64_t h, const char *k, uint32_t klen, nocopy_entry **found)
+/* The slot of the key's live entry under h (*found), or the empty slot ending its run; *same: other keys of h passed (may be NULL). */
+static inline __attribute__((always_inline)) ar_slot *locate_n(ar_shard *sh, uint64_t h, const char *k, uint32_t klen, nocopy_entry **found, uint32_t *same)
 {
 	ar_probe p;
 	ar_slot s;
 	ar_probe_start_locked(&p, ix_of(sh), h); /* never full: nlive <= cap < slots */
 	while ((s = ar_probe_next_locked(&p))) {
 		nocopy_entry *e = slot_entry(s);
-		if (e->h == h && e->klen == klen && nocopy_key_eq(nocopy_key(e), k, klen)) {
-			*found = e;
-			return ar_probe_slot(&p);
+		if (e->h == h) {
+			if (e->klen == klen && nocopy_key_eq(nocopy_key(e), k, klen)) {
+				*found = e;
+				return ar_probe_slot(&p);
+			}
+			if (same) {
+				(*same)++;
+			}
 		}
 	}
 	*found = NULL;
 	return ar_probe_slot(&p);
+}
+
+static inline __attribute__((always_inline)) ar_slot *locate(ar_shard *sh, uint64_t h, const char *k, uint32_t klen, nocopy_entry **found)
+{
+	return locate_n(sh, h, k, klen, found, NULL);
+}
+
+/* The key's live entry under either of its hashes: locate's answer for it. */
+static inline __attribute__((always_inline)) ar_slot *find(ar_shard *sh, uint64_t h, const char *k, uint32_t klen, nocopy_entry **found)
+{
+	ar_slot *sp = locate(sh, h, k, klen, found);
+	if (*found || __builtin_expect(!sh->ix.nalt, 1)) {
+		return sp;
+	}
+	return locate(sh, ar_alt_hash(sh->idx, k, klen), k, klen, found);
+}
+
+/* Where e (its key's hash h) goes: its key's live entry (*old), else the end of the run of the hash it takes. Sets e->h to that hash. */
+static ar_slot *place(ar_shard *sh, uint64_t h, nocopy_entry *e, nocopy_entry **old)
+{
+	uint32_t same = 0;
+	ar_slot *sp = locate_n(sh, h, nocopy_key(e), e->klen, old, &same);
+	e->h = h;
+	if (*old || (__builtin_expect(!sh->ix.nalt, 1) && same < ALT_AFTER)) {
+		return sp;
+	}
+	uint64_t a = ar_alt_hash(sh->idx, nocopy_key(e), e->klen);
+	ar_slot *ap = locate(sh, a, nocopy_key(e), e->klen, old);
+	if (*old || same >= ALT_AFTER) {
+		e->h = a;
+		return ap;
+	}
+	return sp;
 }
 
 /* ---- dead holders ---- */
@@ -117,6 +155,14 @@ static bool linked(const nocopy_entry *e, void *arg) { return ar_index_find(ix_o
 static void repair(ar_shard *sh)
 {
 	ar_index_repair(ix_of(sh));
+	if (sh->ix.nalt) { /* a holder dying between the count and the slot leaves it high, never low */
+		ar_index *ix = ix_of(sh);
+		uint32_t n = 0;
+		for (uint32_t i = 0; i <= ix->mask; i++) {
+			n += ix->t[i] && is_alt(sh, slot_entry(ix->t[i]));
+		}
+		alt_add(sh, (int) n - (int) sh->ix.nalt);
+	}
 	ar_log_rebuild(&sh->log, linked, sh);
 	ar_log_settle(&sh->log);
 }
@@ -178,14 +224,15 @@ bool ar_shards_still_depend(uint8_t bits)
 static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 {
 	nocopy_entry *old;
-	ar_slot *sp = locate(sh, e->h, nocopy_key(e), e->klen, &old);
+	uint64_t h = e->h;
+	ar_slot *sp = place(sh, h, e, &old);
 	if (add_only && old && !nocopy_expired(old)) {
 		ar_log_abort(&sh->log, e);
 		return NOCOPY_PUT_EXISTS;
 	}
 	if (!old && ar_index_full(ix_of(sh))) {
 		bool room = ar_room_slot(sh);
-		sp = locate(sh, e->h, nocopy_key(e), e->klen, &old); /* the merge moved entries and slots */
+		sp = place(sh, h, e, &old); /* the merge moved entries and slots */
 		if (!old && !room) {
 			ar_log_abort(&sh->log, e);
 			return NOCOPY_PUT_FULL;
@@ -197,6 +244,9 @@ static nocopy_put_result commit(ar_shard *sh, nocopy_entry *e, bool add_only)
 	e->seq = sh->last_seq = e->seq > sh->last_seq ? e->seq : sh->last_seq + (1u << NOCOPY_SEQ_SHARD_BITS); /* keeps the shard bits */
 	birth(sh, e);
 	AR_HOOK("commit.born");
+	if (__builtin_expect(e->h != h, 0)) {
+		alt_add(sh, 1); /* before the slot: a reader that finds nothing under h then looks */
+	}
 	ar_index_put(ix_of(sh), sp, slot_for(e));
 	AR_HOOK("commit.linked");
 	if (old) {
@@ -256,7 +306,7 @@ bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];
 	ar_shard_lock(sh);
 	nocopy_entry *old;
-	ar_slot *sp = locate(sh, h, k, klen, &old);
+	ar_slot *sp = find(sh, h, k, klen, &old);
 	bool found = old && !nocopy_expired(old);
 	if (old) {
 		ar_index_remove(ix_of(sh), sp);
@@ -275,7 +325,7 @@ bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 static __attribute__((noinline)) nocopy_entry *lookup(ar_shard *sh, uint64_t h, const char *k, uint32_t klen)
 {
 	nocopy_entry *e;
-	locate(sh, h, k, klen, &e);
+	find(sh, h, k, klen, &e);
 	return e;
 }
 
@@ -332,7 +382,7 @@ static char why[200];
 static const char *verify_index(ar_shard *sh)
 {
 	ar_index *ix = ix_of(sh);
-	uint32_t n = 0, i = sh->idx;
+	uint32_t n = 0, nalt = 0, i = sh->idx;
 	if (ix->hdr->mseq & 1) {
 		BROKEN("shard %u: mseq odd with no delete running", i);
 	}
@@ -363,6 +413,14 @@ static const char *verify_index(ar_shard *sh)
 		if (locate(sh, e->h, nocopy_key(e), e->klen, &f) != &ix->t[j] || f != e) {
 			BROKEN("shard %u slot %u: its key is not reached here first (duplicate, or past an empty slot)", i, j);
 		}
+		bool alt = is_alt(sh, e);
+		nalt += alt;
+		if (!alt && sh->ix.nalt && (locate(sh, ar_alt_hash(i, nocopy_key(e), e->klen), nocopy_key(e), e->klen, &f), f)) {
+			BROKEN("shard %u slot %u: its key is linked under its alternative hash too", i, j);
+		}
+	}
+	if (nalt != ix->hdr->nalt) {
+		BROKEN("shard %u: %u entries under their alternative hash, nalt %u", i, nalt, ix->hdr->nalt);
 	}
 	if (n != ix->hdr->nlive || n > ix->hdr->cap) {
 		BROKEN("shard %u: %u slots used, nlive %u, cap %u", i, n, ix->hdr->nlive, ix->hdr->cap);

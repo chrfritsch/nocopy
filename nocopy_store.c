@@ -329,7 +329,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		if ((double) nocopy_now_of(&ts) + ts.tv_nsec / 1e9 - delta / 1000.0 * beta * log(r) < (double) exp + 1) { /* expires at the end of second exp */
 			return; /* XFetch: not yet */
 		}
-		if (lease_take(zend_string_hash_val(key)) != NOCOPY_LEASE_TAKEN) {
+		if (lease_take(nocopy_key_hash(ZSTR_VAL(key), ZSTR_LEN(key))) != NOCOPY_LEASE_TAKEN) {
 			return; /* someone else refreshes: keep serving this value */
 		}
 		zval_ptr_dtor(rv);
@@ -338,7 +338,7 @@ void nocopy_remember(zend_string *key, zval *fn, const nocopy_opts *o, double be
 		lease_drop();
 		return;
 	}
-	zend_ulong h = zend_string_hash_val(key);
+	zend_ulong h = nocopy_key_hash(ZSTR_VAL(key), ZSTR_LEN(key)); /* not PHP's: crafted keys would wait on each other's leases */
 	int64_t deadline = nocopy_mono_ms() + LEASE_TTL * 1000;
 	unsigned wait = 50;
 	bool mine = false;

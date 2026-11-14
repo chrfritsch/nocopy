@@ -97,6 +97,14 @@ void nocopy_request_end(nocopy_ctx *c)
 	ar_pins_drop_all(&c->pins);
 }
 
+/* ---- reads ---- */
+
+__attribute__((cold, noinline)) nocopy_entry *ar_find_alt(nocopy_ctx *c, uint64_t h, const char *k, uint32_t klen, bool stale)
+{
+	return stale ? ar_find_as(c, ar_alt_hash(ar_shard_idx(h), k, klen), k, klen, true, false)
+	             : ar_find_as(c, ar_alt_hash(ar_shard_idx(h), k, klen), k, klen, false, false);
+}
+
 /* ---- iteration ---- */
 
 void nocopy_each(nocopy_ctx *c, void (*fn)(const nocopy_entry *e, void *arg), void *arg)

@@ -107,14 +107,16 @@ not matter either; still run NTP on your servers.
 
 ## Keys and slots
 
-### Keys use PHP's own hash, without a secret seed
+### Keys use PHP's own hash, and a secret one when they collide
 
-**Decision:** keys are hashed with the hash PHP already caches in every string.
+**Decision:** keys are placed by the hash PHP already caches in every string. A new key that would join four others of
+the same hash is placed by a secret hash instead (SipHash with a key random per cache).
 
-**Why:** a seeded hash would protect against crafted colliding keys, but it costs every call 1.5-2 ns (a fetch went from
-10.9 to 12.6 ns). APCu has the same trade-off.
+**Why:** a secret hash for every key costs every call 1.5-2 ns (a fetch went from 10.9 to 12.6 ns). PHP's hash is easy
+to collide on purpose: 60,000 such keys made each write and read take 160 µs instead of 0.1 µs. Now they take 0.1 µs, and
+ordinary keys pay nothing: the secret hash is only computed for those keys and for misses while such keys exist.
 
-**For you:** if a key contains user input, hash it with a secret first, as shown in [Functions](../reference/functions.md).
+**For you:** keys built from user input can be used as they are.
 
 ### The slot table has a fixed size
 
@@ -192,7 +194,7 @@ for anything expensive to compute.
 | Compressing entries in shared memory | Every read would have to decompress (10-27 µs for a render array, against 0 now) |
 | Compressing what goes to the RESP server | igbinary already makes it 2-2.3x smaller; compression pays only when RESP is short of memory or bandwidth |
 | Native cache tags in C | At most 0.5-1.5% of a Drupal page-cache hit; Drupal already checks all tags in one lookup |
-| A seeded key hash | 1.5-2 ns on every call; see above |
+| A seeded hash for every key | 1.5-2 ns on every call; colliding keys get one instead, see above |
 | Dropping `nocopy_get_multiple()` for a PHP loop | 10 keys: 142 ns become 292 ns |
 | Dropping `nocopy.entries_hint` for a bigger fixed table | Reads of many distinct keys 22% slower, and 4.7% more memory in tables |
 | More optimization of the request path | `nocopy.so` is 0.3% of a Drupal node page's CPU time; nothing left to win there |

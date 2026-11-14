@@ -51,6 +51,9 @@ static uint64_t hash(const char *k, size_t n)
 	while (n--) {
 		h = h * 33 + (unsigned char) *k++;
 	}
+#ifdef NOCOPY_COLLIDE
+	h &= NOCOPY_COLLIDE; /* few hashes, many keys each: most go under their alternative hash */
+#endif
 	return h | 1;
 }
 

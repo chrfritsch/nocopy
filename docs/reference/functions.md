@@ -10,13 +10,9 @@ Every function the extension defines, with its signature from [`nocopy.stub.php`
   cache is off.
 - **TTL** is in seconds. `0` means "no expiry". Values above 2^32 seconds (about 136 years) are capped there. As in APCu,
   an entry lives until the end of the second it expires in, so `ttl: 1` keeps it for 1 to 2 seconds.
-- **Keys** are hashed with PHP's own unseeded string hash, as in APCu. That means someone can craft keys that collide, and
-  colliding keys slow down every write in their part of the cache. If a key contains user input, hash it with a secret
-  first ([why](../explanation/design-decisions.md#keys-use-phps-own-hash-without-a-secret-seed)):
-
-  ```php
-  $key = 'search.' . hash_hmac('xxh128', $_GET['q'], $secret);
-  ```
+- **Keys** are placed by PHP's own string hash, which PHP already caches in every string. Keys crafted to share that hash
+  (easy to make, and in APCu they slow down every lookup) get a secret hash of their own, so keys from user input are
+  safe to use as they are ([why](../explanation/design-decisions.md#keys-use-phps-own-hash-and-a-secret-one-when-they-collide)).
 - **Unused results warn on PHP 8.5+.** `nocopy_cas`, `nocopy_get_multiple`, `nocopy_keys`, `nocopy_stats` and
   `nocopy_shared_with` are marked `#[\NoDiscard]`: calling one and ignoring what it returns raises a warning, since
   that is almost always a bug. Write `(void) nocopy_cas(...)` if you mean it.

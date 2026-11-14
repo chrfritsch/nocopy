@@ -18,6 +18,7 @@ typedef struct {
 	size_t tables_off, ghosts_off, segrec_off;
 	time_t start_time;
 	uint64_t expunges;
+	uint64_t key_seed[2]; /* ar_seed: random, never leaves the arena */
 	ar_pool_hdr pool;
 	ar_atoms_hdr atoms;
 	ar_lease_table leases[NOCOPY_MAX_SHARDS];

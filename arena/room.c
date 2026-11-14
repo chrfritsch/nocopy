@@ -85,7 +85,7 @@ static bool relocate(ar_shard *sh, nocopy_entry *old, uint8_t hot)
 	} else {
 		ar_log_abort(&sh->log, n);
 	}
-	die(sh, old);
+	die_moved(sh, old); /* n takes its place, under the same hash */
 	return true;
 }
 

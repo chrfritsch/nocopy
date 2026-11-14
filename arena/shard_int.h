@@ -13,6 +13,12 @@ static inline ar_index *ix_of(const ar_shard *sh) { return &ar_ix[sh->idx]; }
 static inline nocopy_entry *slot_entry(ar_slot s) { return ar_at8(ar_slot_off8(s)); }
 static inline ar_slot slot_for(const nocopy_entry *e) { return ar_slot_make(ar_slot_tag(e->h), ar_off8(e)); }
 
+/* Keys of one hash in a probe run before the next takes its alternative hash: crafted collisions cannot build long runs. */
+#define ALT_AFTER 4
+
+static inline bool is_alt(const ar_shard *sh, const nocopy_entry *e) { return e->h == ar_alt_hash(sh->idx, nocopy_key(e), e->klen); }
+static inline void alt_add(ar_shard *sh, int d) { __atomic_store_n(&sh->ix.nalt, sh->ix.nalt + (uint32_t) d, __ATOMIC_RELEASE); }
+
 /* pending -> live; e's reads join its segment's count */
 static inline __attribute__((always_inline)) void birth(ar_shard *sh, nocopy_entry *e)
 {
@@ -23,14 +29,23 @@ static inline __attribute__((always_inline)) void birth(ar_shard *sh, nocopy_ent
 	}
 }
 
-/* live -> dead (its slot already gone or repointed); e's reads leave its segment's count */
-static inline __attribute__((always_inline)) void die(ar_shard *sh, nocopy_entry *e)
+/* live -> dead, its slot repointed to its moved copy (merge); e's reads leave its segment's count */
+static inline __attribute__((always_inline)) void die_moved(ar_shard *sh, nocopy_entry *e)
 {
 	uint8_t f = __atomic_load_n(&e->hot, __ATOMIC_RELAXED);
 	if (f) {
 		__atomic_sub_fetch(&ar_segs[ar_seg_of(e)].reads, (1 << f) - 1, __ATOMIC_RELAXED);
 	}
 	ar_log_died(&sh->log, e);
+}
+
+/* live -> dead, its slot gone or repointed to another entry of its key */
+static inline __attribute__((always_inline)) void die(ar_shard *sh, nocopy_entry *e)
+{
+	if (__builtin_expect(sh->ix.nalt != 0, 0) && is_alt(sh, e)) {
+		alt_add(sh, -1);
+	}
+	die_moved(sh, e);
 }
 
 /* ---- room.c ---- */

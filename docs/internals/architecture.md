@@ -95,6 +95,8 @@ Robust pthread mutexes would let the kernel report a dead holder, but measured o
 
 ## Slot tables: fixed, backward-shift deletes
 
+A key's slot comes from its PHP hash, or from its alternative hash (`ar_alt_hash`: SipHash-1-3 under the header's random `key_seed`, moved into the same shard) when its insert passed `ALT_AFTER` (4) other keys of the same full hash: crafted collisions cannot grow a probe run. An entry's `h` is the hash it is linked under, so merges, repair and the ghost need nothing new. `nalt` (per shard, next to `mseq`) counts entries under their alternative hash: while it is nonzero, writes and deletes also look there and a reader's final miss looks there once (`ar_find_alt`); a key is linked under one of its hashes only (`ar_shards_verify`). A holder dying between the count and the slot leaves it high, which `repair` recounts. Leases are keyed by `nocopy_key_hash`, the same SipHash. Tests: 121, `./dev c`'s `-DNOCOPY_COLLIDE` builds.
+
 Sized once: ~2 slots per `nocopy.entries_hint` and at least one per 256 bytes of arena (3% of it), split evenly over the shards. A shard holds at most 3/4 of its slots (`cap`);
 an insert into a full table evicts (`evict`: merge's eviction round, below) like a full memory does. So a cache of very small entries evicts before its memory is full: raise `nocopy.entries_hint` for that.
 Deletes use backward shift (linear probing without tombstones): later entries of the probe run move back into the hole, so probe runs never fill up with tombstones.

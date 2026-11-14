@@ -1,6 +1,8 @@
 /* nocopy arena: planning the region, setting up a fresh one, adopting an existing one. */
 
 #include "layout.h"
+#include <sys/random.h>
+#include <unistd.h>
 
 char *ar_base;
 size_t ar_size;
@@ -61,6 +63,12 @@ void ar_layout_init(ar_arena *a, const ar_layout *l)
 	ar_atoms_init(&a->atoms);
 	ar_shards_init(a->shards, l->nshards, l->slots_per, nsegs);
 	a->start_time = time(NULL);
+	if (getentropy(a->key_seed, sizeof a->key_seed) != 0) {
+		struct timespec ts;
+		clock_gettime(CLOCK_MONOTONIC, &ts); /* no entropy source: unguessable enough from outside the host */
+		a->key_seed[0] = (uint64_t) ts.tv_nsec * 0x9E3779B97F4A7C15ULL ^ (uint64_t) (uintptr_t) a;
+		a->key_seed[1] = ((uint64_t) ts.tv_sec << 32 | (uint32_t) getpid()) * 0xC2B2AE3D27D4EB4FULL;
+	}
 }
 
 bool ar_layout_adopt(ar_arena *a, nocopy_rebase_fn rebase)
@@ -70,6 +78,7 @@ bool ar_layout_adopt(ar_arena *a, nocopy_rebase_fn rebase)
 		return false;
 	}
 	ar_hdr = a;
+	memcpy(ar_seed, a->key_seed, sizeof ar_seed);
 	ar_base = (char *) a;
 	ar_size = a->region.size;
 	ar_proc_adopt(&a->procs);

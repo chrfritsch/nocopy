@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds tests/c/stress.c against the arena units twice (-O2, and ThreadSanitizer) and runs both on small and sharded arenas; then tests/c/repair.c, tests/c/atoms.c, tests/c/merge.c,
-# tests/c/crash.c and tests/c/sched.c (both with the arena's test hooks, -DNOCOPY_HOOKS).
+# tests/c/crash.c and tests/c/sched.c (both with the arena's test hooks, -DNOCOPY_HOOKS); stress, merge and crash again with keys of 32 hashes (NOCOPY_COLLIDE).
 # Usage: tests/c/run.sh [seconds=3]   (Linux; e.g. docker run --rm -v "$PWD":/src:ro nocopy-linux:8.5 /src/tests/c/run.sh)
 set -e
 cd "$(dirname "$0")/../.."
@@ -16,3 +16,10 @@ for mb in 4 64; do "$out/stress" $mb 8 "$s"; done
 for mb in 4 64; do TSAN_OPTIONS=halt_on_error=1 "$out/stress-tsan" $mb 8 "$s"; done
 for t in repair atoms merge; do build $t $t -O1 -Wall -Wextra; "$out/$t"; done
 for t in crash sched; do build $t $t -O1 -Wall -Wextra -DNOCOPY_HOOKS; "$out/$t"; done
+# colliding keys: alternative hashes under threads, merges and kills
+build stress-collide stress -O2 -Wall -Wextra -DNOCOPY_COLLIDE=63
+build stress-collide-tsan stress -O1 -fsanitize=thread -Wno-tsan -DNOCOPY_COLLIDE=63
+for mb in 4 64; do "$out/stress-collide" $mb 8 "$s"; done
+TSAN_OPTIONS=halt_on_error=1 "$out/stress-collide-tsan" 64 8 "$s"
+build merge-collide merge -O1 -Wall -Wextra -DNOCOPY_COLLIDE=63; "$out/merge-collide"
+build crash-collide crash -O1 -Wall -Wextra -DNOCOPY_HOOKS -DNOCOPY_COLLIDE=63; "$out/crash-collide" all

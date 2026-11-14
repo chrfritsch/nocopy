@@ -18,7 +18,14 @@ static inline uint32_t ar_slot_off8(ar_slot s) { return (uint32_t) s; }
 typedef struct {
 	uint32_t nlive, cap; /* live slots, and the most the table may hold (3/4): an empty slot ends every run */
 	uint32_t mseq __attribute__((aligned(64))); /* odd while a delete shifts slots: a reader's miss is retried */
+	uint32_t nalt; /* linked entries under their alternative hash (ar_alt_hash); 0: a miss looks nowhere else. On mseq's line: a miss reads both */
 } ar_index_hdr;
+
+/* The arena's secret key (from its header, random at creation): what crafted keys cannot collide on. */
+AR_HIDDEN extern uint64_t ar_seed[2];
+uint64_t ar_siphash(const char *k, size_t n); /* SipHash-1-3 under ar_seed */
+/* A key's alternative hash: ar_siphash moved into part (ar_part's top bits), where a key goes that would join ALT_AFTER keys of its hash. */
+uint64_t ar_alt_hash(uint32_t part, const char *k, uint32_t klen);
 
 /* A shard's table as this process sees it: fixed for the arena's life, so readers touch no header line writers write. */
 typedef struct {
