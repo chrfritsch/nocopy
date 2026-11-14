@@ -73,4 +73,8 @@ bool ar_worker_dead(uint32_t i, time_t now);
 /* Slot i is held by a live process (ours included). A syscall: call it with no lock held, or rarely. */
 bool ar_worker_live(uint32_t i);
 
+/* ---- API (nocopy_arena.h) ---- */
+
+int nocopy_live_fd(void); /* holds this process's liveness lock: keep it open; -1: none */
+
 #endif

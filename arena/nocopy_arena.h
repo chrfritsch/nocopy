@@ -44,7 +44,7 @@ void nocopy_set_clock(nocopy_clock_fn fn);
 bool nocopy_claim(nocopy_ctx *c);   /* false: no free worker slot */
 void nocopy_release(nocopy_ctx *c); /* end of this process/thread */
 bool nocopy_after_fork(nocopy_ctx *c); /* false: no worker slot (or no owner id) in the child */
-int nocopy_live_fd(void); /* holds this process's liveness lock: keep it open; -1: none */
+/* nocopy_live_fd: the descriptor holding this process's liveness lock (proc.h) */
 void nocopy_request_end(nocopy_ctx *c); /* every pin goes, also of calls a bailout left open */
 
 /* Reads happen between borrow_begin and borrow_end; what they found stays pinned until then (or longer: nocopy_keep). */

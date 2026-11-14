@@ -57,7 +57,7 @@ static zif_handler orig_handle_request; /* FrankenPHP's frankenphp_handle_reques
 /* ---- nocopy_* ---- */
 
 /* false (thrown): a negative ttl in argument arg. */
-static bool write_ok(uint32_t arg, zend_long ttl)
+static bool ttl_ok(uint32_t arg, zend_long ttl)
 {
 	if (ttl < 0) {
 		zend_argument_value_error(arg, "must be greater than or equal to 0");
@@ -68,7 +68,7 @@ static bool write_ok(uint32_t arg, zend_long ttl)
 
 static void put_impl(zend_string *key, zval *val, zend_long ttl, bool add_only, zval *return_value)
 {
-	if (!write_ok(3, ttl)) {
+	if (!ttl_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	const nocopy_opts o = {.ttl = ttl, .add_only = add_only};
@@ -111,7 +111,7 @@ PHP_FUNCTION(nocopy_inc)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!write_ok(3, ttl)) {
+	if (!ttl_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	if (!nocopy_add_long(key, step, ttl, &nv)) {
@@ -235,7 +235,7 @@ PHP_FUNCTION(nocopy_put_multiple)
 		Z_PARAM_LONG(ttl)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!write_ok(2, ttl)) {
+	if (!ttl_ok(2, ttl)) {
 		RETURN_THROWS();
 	}
 	const nocopy_opts o = {.ttl = ttl};
@@ -261,7 +261,7 @@ PHP_FUNCTION(nocopy_remember)
 		Z_PARAM_DOUBLE(beta)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (!write_ok(3, ttl)) {
+	if (!ttl_ok(3, ttl)) {
 		RETURN_THROWS();
 	}
 	if (Z_TYPE_P(fn) != IS_OBJECT || Z_OBJCE_P(fn) != zend_ce_closure) {
@@ -516,13 +516,10 @@ static const zend_ini_entry_def ini_apc[] = {
 	{0}
 };
 
-/* MINIT only: set an entry's value (and apply it) without zend_alter_ini_entry's runtime bookkeeping, which a request then undoes. */
-static void ini_put(const char *name, zend_string *value, bool apply)
+/* MINIT only: set the value ini_get() shows, without zend_alter_ini_entry's runtime bookkeeping, which a request then undoes. */
+static void ini_put(const char *name, zend_string *value)
 {
 	zend_ini_entry *e = zend_hash_str_find_ptr(EG(ini_directives), name, strlen(name));
-	if (apply && e->on_modify) {
-		e->on_modify(e, value, e->mh_arg1, e->mh_arg2, e->mh_arg3, ZEND_INI_STAGE_STARTUP);
-	}
 	zend_string *old = e->value;
 	e->value = zend_string_copy(value);
 	if (old) {
@@ -538,7 +535,7 @@ static void resolve_serializer(void)
 		php_error_docref(NULL, E_CORE_WARNING, "nocopy: igbinary is not loaded, using nocopy.serializer=php");
 	}
 	zend_string *v = zend_string_init(igb ? "igbinary" : "php", igb ? 8 : 3, 1);
-	ini_put("nocopy.serializer", v, false);
+	ini_put("nocopy.serializer", v);
 	zend_string_release_ex(v, 1);
 }
 

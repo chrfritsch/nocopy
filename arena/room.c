@@ -31,7 +31,7 @@ void ar_room_count_expunge(void) { __atomic_add_fetch(expunges, 1, __ATOMIC_RELA
 
 /* Direct-mapped: a newer eviction overwrites an older one in its cell. Index: Fibonacci mix below the shard's top 8 bits
  * (short keys' DJB hashes have few high bits); tag: the low bits (never 0). */
-static uint16_t *ghost_cell(uint16_t *ghosts, uint64_t h) { return &ghosts[(uint32_t) (ar_fib_mix(h) >> 24) & ghost_mask]; }
+static uint16_t *ghost_cell(uint16_t *tab, uint64_t h) { return &tab[(uint32_t) (ar_fib_mix(h) >> 24) & ghost_mask]; }
 static uint16_t ghost_tag(uint64_t h) { return (uint16_t) h | 1; }
 
 #define GHOST_HOT 2 /* a returning key survives two merges unread */
