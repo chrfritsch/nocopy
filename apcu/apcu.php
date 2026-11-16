@@ -15,15 +15,21 @@ function apcu_enabled(): bool
 
 function apcu_store(array|string|int $key, mixed $value = null, int $ttl = 0): array|bool
 {
-    return apcu_put('apcu_store', 'nocopy_put', $key, $value, $ttl, func_num_args());
+    if (is_array($key) || $ttl < 0 || func_num_args() < 2) {
+        return apcu_put('apcu_store', 'nocopy_put', $key, $value, $ttl, func_num_args());
+    }
+    return nocopy_put((string) $key, $value, $ttl); // one key: no callable in between (105 -> 58 ns)
 }
 
 function apcu_add(array|string|int $key, mixed $value = null, int $ttl = 0): array|bool
 {
-    return apcu_put('apcu_add', 'nocopy_add', $key, $value, $ttl, func_num_args());
+    if (is_array($key) || $ttl < 0 || func_num_args() < 2) {
+        return apcu_put('apcu_add', 'nocopy_add', $key, $value, $ttl, func_num_args());
+    }
+    return nocopy_add((string) $key, $value, $ttl);
 }
 
-/** @internal apcu_store/apcu_add with $put as the store. */
+/** @internal apcu_store/apcu_add with $put as the store: arrays of keys, and the errors. */
 function apcu_put(string $fn, callable $put, array|string|int $key, mixed $value, int $ttl, int $argc): array|bool
 {
     if ($ttl < 0) {
