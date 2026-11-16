@@ -39,6 +39,28 @@ static inline void *inl_grow(void *p, const void *inl, size_t used, size_t size)
 
 typedef void (*zval_fn)(void *ctx, zval *z);
 
+/* The value layer's own reference to o (r) goes. quiet: no user code ran while it was held, so what is still referenced is no
+ * garbage and no possible GC root, which OBJ_RELEASE would note for every object of a graph (unserialize() notes none either). */
+static zend_always_inline void nc_obj_unhold(zend_object *o, bool quiet)
+{
+	if (quiet && GC_REFCOUNT(o) > 1) {
+		GC_DELREF(o);
+	} else {
+		OBJ_RELEASE(o);
+	}
+}
+
+static zend_always_inline void nc_ref_unhold(zend_reference *r, bool quiet)
+{
+	if (quiet && GC_REFCOUNT(r) > 1) {
+		GC_DELREF(r);
+	} else {
+		zval t;
+		ZVAL_REF(&t, r);
+		zval_ptr_dtor(&t);
+	}
+}
+
 static zend_always_inline size_t str_size(size_t len) { return SALIGN(_ZSTR_STRUCT_SIZE(len)); }
 /* An arena string's type: interned, its UTF-8 flag kept, never IS_STR_PERMANENT (process lifetime: PCRE would keep the pointer). */
 static zend_always_inline uint32_t arena_str_type(const zend_string *s) { return GC_STRING | IS_STR_INTERNED | (ZSTR_IS_VALID_UTF8(s) ? IS_STR_VALID_UTF8 : 0); }

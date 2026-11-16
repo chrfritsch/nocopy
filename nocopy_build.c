@@ -623,6 +623,7 @@ static gnode *graph_b_node(graph_b *g)
 /* Released between passes: the maps, the nodes' objects and own data, the classes' lowercase names. May run destructors. */
 static void graph_b_end_pass(graph_b *g)
 {
+	bool quiet = !g->nres; /* no hook ran */
 	pmap_free(&g->objs);
 	for (uint32_t i = 0; i < g->cls.n; i++) {
 		zend_string_release(g->classes[i].lc);
@@ -633,7 +634,7 @@ static void graph_b_end_pass(graph_b *g)
 			zval_ptr_dtor(&g->nodes[i].data);
 		}
 		if (g->nodes[i].o) {
-			OBJ_RELEASE(g->nodes[i].o);
+			nc_obj_unhold(g->nodes[i].o, quiet);
 		}
 	}
 }
@@ -656,9 +657,7 @@ static void nc_graph_b_free(graph_b *g)
 	if (g->refs_on) {
 		for (uint32_t i = 0; i <= g->refs.mask; i++) {
 			if (g->refs.s[i].k) {
-				zval r;
-				ZVAL_REF(&r, (zend_reference *) g->refs.s[i].k);
-				zval_ptr_dtor(&r);
+				nc_ref_unhold((zend_reference *) g->refs.s[i].k, !g->nres);
 			}
 		}
 		pmap_free(&g->refs);

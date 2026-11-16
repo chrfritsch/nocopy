@@ -370,7 +370,7 @@ static bool graph_build(nocopy_env *env, zval *rv, const nc_graph *g, zend_class
 	zend_object *objs_s[16], **objs = SMALL_ALLOC(objs_s, g->nobj);
 	zend_reference *refs_s[8], **refs = SMALL_ALLOC(refs_s, g->nref);
 	uint32_t made = graph_objects_new(env, g, ces, objs), nref = 0;
-	bool ok = made == g->nobj;
+	bool ok = made == g->nobj, quiet = ok && !g->nhooks;
 	if (ok) {
 		gout o = {.env = env, .objs = objs, .refs = refs, .mode = mode};
 		if (mode == G_COPY) {
@@ -399,13 +399,11 @@ static bool graph_build(nocopy_env *env, zval *rv, const nc_graph *g, zend_class
 		objects_abandon(g, objs, made);
 	}
 	for (uint32_t i = 0; i < nref; i++) {
-		zval t;
-		ZVAL_REF(&t, refs[i]);
-		zval_ptr_dtor(&t);
+		nc_ref_unhold(refs[i], quiet);
 	}
 	SMALL_FREE(refs_s, refs);
 	for (uint32_t i = 0; i < made; i++) {
-		OBJ_RELEASE(objs[i]);
+		nc_obj_unhold(objs[i], quiet);
 	}
 	SMALL_FREE(objs_s, objs);
 	return ok;
