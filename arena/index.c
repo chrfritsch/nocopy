@@ -83,6 +83,12 @@ void ar_index_remove(ar_index *ix, ar_slot *at)
 	ix->hdr->nlive--;
 }
 
+void ar_index_wipe(ar_index *ix)
+{
+	memset(ix->t, 0, ((size_t) ix->mask + 1) * sizeof(ar_slot));
+	__atomic_store_n(&ix->hdr->nlive, 0, __ATOMIC_RELAXED);
+}
+
 ar_slot *ar_index_find(const ar_index *ix, ar_slot v)
 {
 	for (uint32_t i = (uint32_t) (v >> 32) & ix->mask;; i = (i + 1) & ix->mask) {

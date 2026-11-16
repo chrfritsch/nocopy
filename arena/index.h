@@ -22,6 +22,7 @@ static inline void ar_index_put(ar_index *ix, ar_slot *at, ar_slot s)
 }
 
 void ar_index_remove(ar_index *ix, ar_slot *at);
+void ar_index_wipe(ar_index *ix); /* empties a table no reader is in */
 ar_slot *ar_index_find(const ar_index *ix, ar_slot v); /* the slot holding exactly v, or NULL */
 /* Empties the table; gone(s) for every slot that held something. */
 void ar_index_clear(ar_index *ix, void (*gone)(ar_slot s, void *arg), void *arg);

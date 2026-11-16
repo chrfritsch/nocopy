@@ -72,9 +72,9 @@ static bool fill(void)
 	for (int i = 0; i < 100000 && AT->gen == g; i++) {
 		char w[48];
 		snprintf(w, sizeof w, "w%u.....................................", next++);
-		uint32_t n = AT->half[g & 1].n;
+		uint32_t n = AT->ix[g & 1].nlive;
 		add(w);
-		if (AT->gen == g && AT->half[g & 1].n == n) {
+		if (AT->gen == g && AT->ix[g & 1].nlive == n) {
 			return false; /* full, and the rotation was refused */
 		}
 	}
@@ -139,7 +139,7 @@ int main(void)
 	nocopy_atom_end(&c);
 	assert(ar_worker_at((uint32_t) nocopy_ctx_slot(&c))->agen == 0);
 	assert(!strcmp(lang, "languages:language_interface"));
-	assert(add("languages:language_interface") == lang && AT->half[0].n == 1); /* in already: the same one */
+	assert(add("languages:language_interface") == lang && AT->ix[0].nlive == 1); /* in already: the same one */
 
 	/* generation 2 full: the empty generation 1's half becomes generation 3 */
 	nocopy_entry *e = put_ref(&c, "ref");

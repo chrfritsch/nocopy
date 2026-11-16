@@ -7,12 +7,13 @@
 
 #include "atoms_read.h"
 #include "clock.h"
+#include "index.h"
 #include "proc.h"
 
 /* One half of the area: one generation of atoms, append-only until a rotation wipes it for a later one. */
 typedef struct {
 	uint32_t state;   /* the generation it holds, | NOCOPY_ATOM_WIPING while a rotation checks or wipes it */
-	uint32_t used, n; /* bytes appended, slots taken (atom lock) */
+	uint32_t used;    /* bytes appended (atom lock) */
 	uint32_t arrays, array_bytes; /* of those, arrays' */
 } ar_atom_half;
 
@@ -23,6 +24,7 @@ typedef struct {
 	time_t tried;      /* last second a rotation found the other half still referenced */
 	uint64_t rotations;
 	ar_atom_half half[2];
+	ar_index_hdr ix[2]; /* their slot tables' */
 	uint32_t half_bytes, slots; /* bytes per half, slots per half's table (a power of two) */
 	size_t area_off, tab_off, dk_off;
 } ar_atoms_hdr;

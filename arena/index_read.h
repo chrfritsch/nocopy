@@ -57,7 +57,7 @@ static inline __attribute__((always_inline)) void ar_probe_start(ar_probe *p, co
 	ar_probe_restart(p);
 }
 
-/* A writer's probe: its shard's lock is held, so no seqlock and plain loads. */
+/* A probe that never retries, without the seqlock: a writer's (the table's lock held: ar_probe_next_locked), or a reader's over a table nothing is removed from. */
 static inline __attribute__((always_inline)) void ar_probe_start_locked(ar_probe *p, const ar_index *ix, uint64_t h)
 {
 	p->t = ix->t;

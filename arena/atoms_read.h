@@ -21,9 +21,9 @@ typedef struct {
 } ar_atom_reader;
 
 AR_HIDDEN extern char *ar_atoms;          /* both halves of the area */
-AR_HIDDEN extern ar_slot *ar_atom_tab;    /* both halves' tables, ar_atom_mask + 1 slots each */
-AR_HIDDEN extern uint32_t *ar_atom_dk;    /* doorkeeper: 2 * (ar_atom_mask + 1) tags */
-AR_HIDDEN extern uint32_t ar_atom_mask;
+AR_HIDDEN extern ar_index ar_atom_ix[2];  /* each half's slot table (index.h): never removed from, wiped by a rotation */
+AR_HIDDEN extern uint32_t *ar_atom_dk;    /* doorkeeper: ar_atom_dk_mask + 1 tags */
+AR_HIDDEN extern uint32_t ar_atom_dk_mask;
 AR_HIDDEN extern uint32_t ar_atom_bytes;  /* bytes per half: off the header line admissions write */
 
 /* The bit of v's half: what a block using v's atoms depends on. */
@@ -39,28 +39,23 @@ static inline uint8_t nocopy_atom_bits(const void *p)
 /* The blob of the atom equal to s in v's generation, or NULL. Lock-free: a slot is published after its record. */
 static inline __attribute__((always_inline)) void *nocopy_atom_find(const nocopy_atom_view *v, uint64_t h, const char *s, uint32_t len)
 {
-	uint32_t half = v->gen & 1, m = ar_atom_mask, tag = ar_slot_tag(h);
-	const ar_slot *t = ar_atom_tab + (size_t) half * (m + 1);
-	char *area = ar_atoms + (size_t) half * ar_atom_bytes;
-	for (uint32_t i = tag & m;; i = (i + 1) & m) {
-		ar_slot sl = __atomic_load_n(&t[i], __ATOMIC_ACQUIRE);
-		if (!sl) {
-			return NULL;
-		}
-		if ((uint32_t) (sl >> 32) == tag) {
-			char *rec = area + ((uint32_t) sl << 3);
-			const uint32_t *r = (const uint32_t *) rec;
-			if (r[0] == len && nocopy_key_eq(rec + 8 + r[1], s, len & NOCOPY_ATOM_LEN)) {
-				return rec + 8;
-			}
+	ar_probe p;
+	ar_slot sl;
+	ar_probe_start_locked(&p, &ar_atom_ix[v->gen & 1], h);
+	while ((sl = ar_probe_next(&p))) {
+		char *rec = ar_at8(ar_slot_off8(sl));
+		const uint32_t *r = (const uint32_t *) rec;
+		if (r[0] == len && nocopy_key_eq(rec + 8 + r[1], s, len & NOCOPY_ATOM_LEN)) {
+			return rec + 8;
 		}
 	}
+	return NULL;
 }
 
 /* Doorkeeper (TinyLFU): true on the second sighting of h, so strings met once take no room. Direct-mapped, racy. */
 static inline bool nocopy_atom_admit(uint64_t h)
 {
-	uint32_t *c = &ar_atom_dk[(uint32_t) (ar_fib_mix(h) >> 32) & (2 * ar_atom_mask + 1)], t = (uint32_t) h | 1;
+	uint32_t *c = &ar_atom_dk[(uint32_t) (ar_fib_mix(h) >> 32) & ar_atom_dk_mask], t = (uint32_t) h | 1;
 	if (__atomic_load_n(c, __ATOMIC_RELAXED) == t) {
 		return true;
 	}

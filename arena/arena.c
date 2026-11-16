@@ -181,12 +181,13 @@ static const char *check_atoms(void)
 	uint32_t g = at->gen;
 	const ar_atom_half *hf = &at->half[g & 1];
 	NEED(hf->state == g && hf->used <= at->half_bytes && !at->lock.holder);
-	for (uint32_t i = 0; i <= ar_atom_mask; i++) {
-		ar_slot sl = ar_atom_tab[(size_t) (g & 1) * (ar_atom_mask + 1) + i];
+	const ar_index *ix = &ar_atom_ix[g & 1];
+	for (uint32_t i = 0; i <= ix->mask; i++) {
+		ar_slot sl = ix->t[i];
 		if (sl) {
-			uint32_t o = (uint32_t) sl << 3;
-			const uint32_t *r = (const uint32_t *) (ar_atoms + (size_t) (g & 1) * ar_atom_bytes + o);
-			NEED(o >= 8 && o < hf->used && o + 8 + r[1] + r[0] + 1 <= hf->used); /* whole records only */
+			const uint32_t *r = ar_at8(ar_slot_off8(sl));
+			size_t o = (size_t) ((const char *) r - (ar_atoms + (size_t) (g & 1) * ar_atom_bytes));
+			NEED(o < hf->used && o + 8 + r[1] + (r[0] & NOCOPY_ATOM_LEN) + 1 <= hf->used); /* whole records only */
 		}
 	}
 	return NULL;
