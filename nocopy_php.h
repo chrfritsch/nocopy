@@ -73,28 +73,13 @@ void nocopy_list_keys(zend_string *prefix, HashTable *out); /* this host's entri
 nocopy_status nocopy_store_local(zend_string *key, zval *val, const nocopy_opts *o); /* needs an arena */
 bool nocopy_fetch_local(zend_string *key, zval *rv, nocopy_meta *m); /* m may be NULL */
 bool nocopy_drop_local(const char *k, size_t len); /* needs an arena */
-bool nocopy_store_each(HashTable *vals, const nocopy_opts *o); /* store_multi as one store per key */
-/* Each string of a list of keys as zend_string *key (borrowed); other types are skipped. */
-#define NOCOPY_KEYS_FOREACH(keys, key) do { \
-	zval *key##_z; \
-	ZEND_HASH_FOREACH_VAL(keys, key##_z) { \
-		ZVAL_DEREF(key##_z); \
-		if (Z_TYPE_P(key##_z) != IS_STRING) { \
-			continue; \
-		} \
-		zend_string *key = Z_STR_P(key##_z);
-#define NOCOPY_KEYS_FOREACH_END() } ZEND_HASH_FOREACH_END(); } while (0)
-/* A HashTable key as a string (release it). */
-static inline zend_string *nocopy_key_of(zend_string *k, zend_ulong h) { return k ? zend_string_copy(k) : zend_long_to_str((zend_long) h); }
 
-/* ---- the detour: where the store ops go off the local fast path. Positional initializers: -Wextra flags a missing slot. ---- */
+/* ---- the detour: where the store ops go off the local fast path. The keyed ones take n keys at once, a single key as n = 1,
+ * so each has one implementation. Positional initializers: -Wextra flags a missing slot. ---- */
 struct nocopy_detour_ops {
-	nocopy_status (*store)(zend_string *key, zval *val, const nocopy_opts *o);
-	bool (*fetch)(zend_string *key, zval *rv, nocopy_meta *m);
-	void (*fetch_multi)(HashTable *keys, HashTable *out);
-	bool (*store_multi)(HashTable *vals, const nocopy_opts *o);
-	bool (*drop)(zend_string *key);
-	zend_long (*drop_multi)(HashTable *keys);
+	nocopy_status (*store)(uint32_t n, zend_string *const *keys, zval *const *vals, const nocopy_opts *o); /* NOCOPY_OK: all stored; else the first failure */
+	void (*fetch)(uint32_t n, zend_string *const *keys, zval *vals, nocopy_meta *m); /* vals[i] IS_UNDEF: a miss; m: keys[0]'s, may be NULL */
+	zend_long (*drop)(uint32_t n, zend_string *const *keys); /* how many existed */
 	bool (*add_long)(zend_string *key, zend_long delta, zend_long ttl, zend_long *out);
 	bool (*cas_long)(zend_string *key, zend_long old, zend_long nw);
 	bool (*clear)(void);

@@ -849,10 +849,11 @@ static int vk_mset(uint32_t n, const vk_kv *kv, int64_t px, int8_t *res)
 	return 1;
 }
 
-static int vk_set(const char *k, size_t kl, const char *val, size_t vl, int64_t px, bool nx)
+/* SET NX: 1 set, 0 the key exists. */
+static int vk_setnx(const char *k, size_t kl, const char *val, size_t vl, int64_t px)
 {
 	smart_str s = {0};
-	set_cmd(&s, k, kl, val, vl, px, nx);
+	set_cmd(&s, k, kl, val, vl, px, true);
 	valkeyReply *r = vk_cmd(&s);
 	int ret = !r ? -1 : r->type == VALKEY_REPLY_STATUS ? 1 : r->type == VALKEY_REPLY_NIL ? 0 : -1;
 	freeReplyObject(r);
@@ -1069,39 +1070,66 @@ static bool vk_fill(zend_string *key, const zend_string *raw, int64_t ttl, zval 
 	return true;
 }
 
-/* Local miss: GET, then keep a local copy, unless an invalidation was applied meanwhile (it may have been for this key). */
-static bool tier_fetch(zend_string *key, zval *rv, nocopy_meta *m)
+/* One UNLINK for the n keys, their local copies dropped either way. Returns how many RESP held. */
+static zend_long tier_drop(uint32_t n, zend_string *const *keys)
 {
-	if (!vk_ready()) {
-		ZVAL_NULL(rv);
-		return false; /* no invalidations: local data may be stale */
+	int64_t gone = 0;
+	if (n && vk_ready()) {
+		vk_unlink_n(n, keys, &gone);
 	}
-	if (nocopy_fetch_local(key, rv, m)) {
-		return true;
+	for (uint32_t i = 0; i < n; i++) {
+		vk_forget(keys[i]);
 	}
-	uint64_t gen = vk_gen();
-	zend_string *raw = NULL;
-	int64_t ttl;
-	if (vk_mget(1, &key, &raw, &ttl) != 1 || !raw) {
-		return false;
-	}
-	bool ok = vk_fill(key, raw, ttl, rv, m);
-	zend_string_release(raw);
-	if (ok && vk_gen() != gen) {
-		vk_uncopy(key);
-	}
-	return ok;
+	return (zend_long) gone;
 }
 
-/* RESP first for add (NX decides), else local first: a sibling's invalidation can then only remove our copy, never outlive it. */
-static nocopy_status tier_store(zend_string *key, zval *val, const nocopy_opts *o)
+/* What the local store misses in one MGET: each kept as a local copy, unless an invalidation was applied meanwhile (it may have been for that key). */
+static void tier_fetch(uint32_t n, zend_string *const *keys, zval *vals, nocopy_meta *m)
+{
+	bool ready = vk_ready(); /* else no invalidations: local data may be stale */
+	uint32_t nmiss = 0;
+	for (uint32_t i = 0; i < n; i++) {
+		if (!ready || !nocopy_fetch_local(keys[i], &vals[i], i ? NULL : m)) {
+			ZVAL_UNDEF(&vals[i]);
+			nmiss++;
+		}
+	}
+	if (!ready || !nmiss) {
+		return;
+	}
+	zend_string **miss = safe_emalloc(nmiss, sizeof *miss, 0), **raw = ecalloc(nmiss, sizeof *raw);
+	zval **into = safe_emalloc(nmiss, sizeof *into, 0);
+	int64_t *ttl = safe_emalloc(nmiss, sizeof *ttl, 0);
+	for (uint32_t i = 0, j = 0; i < n; i++) {
+		if (Z_ISUNDEF(vals[i])) {
+			miss[j] = keys[i];
+			into[j++] = &vals[i];
+		}
+	}
+	uint64_t gen = vk_gen();
+	bool got = vk_mget(nmiss, miss, raw, ttl) == 1;
+	for (uint32_t j = 0; j < nmiss; j++) {
+		if (!raw[j]) {
+			continue;
+		}
+		if (EG(exception) || !vk_fill(miss[j], raw[j], ttl[j], into[j], into[j] == vals ? m : NULL)) {
+			ZVAL_UNDEF(into[j]);
+		}
+		zend_string_release(raw[j]);
+	}
+	if (got && vk_gen() != gen) {
+		for (uint32_t j = 0; j < nmiss; j++) {
+			vk_uncopy(miss[j]);
+		}
+	}
+	efree(ttl), efree(into), efree(raw), efree(miss);
+}
+
+/* An add: RESP first (NX decides), then the local copy. */
+static nocopy_status tier_add(zend_string *key, zval *val, const nocopy_opts *o)
 {
 	if (!vk_ready()) {
 		return NOCOPY_NO_ROOM;
-	}
-	const nocopy_opts local = {.ttl = o->ttl, .compute_ms = o->compute_ms}; /* over the local copy: RESP decides add */
-	if (!o->add_only && nocopy_store_local(key, val, &local) == NOCOPY_REFUSED) {
-		return NOCOPY_REFUSED;
 	}
 	time_t expires = vk_expires(o->ttl);
 	zend_string *enc = vk_encode(val, expires, o->compute_ms);
@@ -1109,138 +1137,66 @@ static nocopy_status tier_store(zend_string *key, zval *val, const nocopy_opts *
 		vk_uncopy(key);
 		return NOCOPY_REFUSED;
 	}
-	uint64_t gen = vk_gen(); /* add: an invalidation before our local copy may have been another writer's */
-	int r = vk_set(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_px(expires), o->add_only);
+	uint64_t gen = vk_gen(); /* an invalidation before our local copy may have been another writer's */
+	int r = vk_setnx(ZSTR_VAL(key), ZSTR_LEN(key), ZSTR_VAL(enc), ZSTR_LEN(enc), vk_px(expires));
 	zend_string_release(enc);
 	if (r != 1) {
 		vk_uncopy(key);
 		return r == 0 ? NOCOPY_EXISTS : NOCOPY_NO_ROOM;
 	}
-	int64_t gone;
-	if (o->add_only && nocopy_store_local(key, val, &local) == NOCOPY_REFUSED) {
-		vk_unlink_n(1, &key, &gone); /* a resource: APCu refuses it */
+	const nocopy_opts local = {.ttl = o->ttl, .compute_ms = o->compute_ms}; /* over the local copy: RESP decided */
+	if (nocopy_store_local(key, val, &local) == NOCOPY_REFUSED) {
+		tier_drop(1, &key); /* a resource: APCu refuses it */
 		return NOCOPY_REFUSED;
 	}
-	if (o->add_only && vk_gen() != gen) {
+	if (vk_gen() != gen) {
 		vk_uncopy(key);
 	}
 	return NOCOPY_OK;
 }
 
-/* tier_store for many keys: local copies first, then every SET in one pipeline. */
-static bool tier_store_multi(HashTable *vals, const nocopy_opts *o)
+/* Local copies first (a sibling's invalidation can then only remove our copy, never outlive it), then every SET in one pipeline.
+ * ponytail: adds stay one round trip per key (NX decides first). */
+static nocopy_status tier_store(uint32_t n, zend_string *const *keys, zval *const *vals, const nocopy_opts *o)
 {
+	nocopy_status st = NOCOPY_OK;
 	if (o->add_only) {
-		return nocopy_store_each(vals, o); /* ponytail: add stays one round trip per key (NX decides first) */
+		for (uint32_t i = 0; i < n && !EG(exception); i++) {
+			nocopy_status s = tier_add(keys[i], vals[i], o);
+			st = st == NOCOPY_OK ? s : st;
+		}
+		return st;
 	}
 	if (!vk_ready()) {
-		return false;
+		return NOCOPY_NO_ROOM;
 	}
-	zend_ulong h;
-	zend_string *k;
-	zval *v;
-	bool all = true;
-	uint32_t cap = zend_hash_num_elements(vals), m = 0;
-	zend_string **keys = safe_emalloc(cap, sizeof *keys, 0), **enc = safe_emalloc(cap, sizeof *enc, 0);
-	vk_kv *kv = safe_emalloc(cap, sizeof *kv, 0);
+	zend_string **enc = safe_emalloc(n, sizeof *enc, 0);
+	vk_kv *kv = safe_emalloc(n, sizeof *kv, 0);
+	int8_t *res = emalloc(n);
+	uint32_t m = 0;
 	time_t expires = vk_expires(o->ttl);
-	ZEND_HASH_FOREACH_KEY_VAL(vals, h, k, v) {
-		zend_string *key = nocopy_key_of(k, h);
-		zend_string *e = nocopy_store_local(key, v, o) == NOCOPY_REFUSED ? NULL : vk_encode(v, expires, 0);
+	for (uint32_t i = 0; i < n && !EG(exception); i++) {
+		zend_string *e = nocopy_store_local(keys[i], vals[i], o) == NOCOPY_REFUSED ? NULL : vk_encode(vals[i], expires, o->compute_ms);
 		if (!e) {
-			vk_uncopy(key);
-			all = false;
-			zend_string_release(key);
-			if (EG(exception)) {
-				break;
-			}
+			vk_uncopy(keys[i]);
+			st = NOCOPY_REFUSED;
 			continue;
 		}
-		keys[m] = key;
 		enc[m] = e;
-		kv[m] = (vk_kv) {.k = ZSTR_VAL(key), .kl = ZSTR_LEN(key), .v = ZSTR_VAL(e), .vl = ZSTR_LEN(e)};
-		m++;
-	} ZEND_HASH_FOREACH_END();
-	int8_t *res = emalloc(m + 1);
+		kv[m++] = (vk_kv) {.k = ZSTR_VAL(keys[i]), .kl = ZSTR_LEN(keys[i]), .v = ZSTR_VAL(e), .vl = ZSTR_LEN(e)};
+	}
 	if (m) {
 		vk_mset(m, kv, vk_px(expires), res);
 	}
 	for (uint32_t i = 0; i < m; i++) {
 		if (res[i] != 1) {
-			vk_uncopy(keys[i]);
-			all = false;
+			nocopy_drop_local(kv[i].k, kv[i].kl);
+			st = st == NOCOPY_OK ? NOCOPY_NO_ROOM : st;
 		}
-		zend_string_release(keys[i]);
 		zend_string_release(enc[i]);
 	}
-	efree(res), efree(kv), efree(enc), efree(keys);
-	return all;
-}
-
-static void tier_fetch_multi(HashTable *keys, HashTable *out)
-{
-	if (!vk_ready()) {
-		return;
-	}
-	zval t;
-	zend_string **miss = safe_emalloc(zend_hash_num_elements(keys), sizeof *miss, 0);
-	uint32_t n = 0;
-	NOCOPY_KEYS_FOREACH(keys, k) {
-		if (!nocopy_fetch_local(k, &t, NULL)) {
-			miss[n++] = k; /* borrowed: keys outlives this call */
-			ZVAL_NULL(&t); /* keeps the requested order; removed if not found */
-		}
-		zend_symtable_update(out, k, &t);
-	} NOCOPY_KEYS_FOREACH_END();
-	if (n) {
-		zend_string **raw = ecalloc(n, sizeof *raw);
-		int64_t *ttl = safe_emalloc(n, sizeof *ttl, 0);
-		uint64_t gen = vk_gen();
-		bool got = vk_mget(n, miss, raw, ttl) == 1;
-		for (uint32_t i = 0; i < n; i++) {
-			if (raw[i] && !EG(exception) && vk_fill(miss[i], raw[i], ttl[i], &t, NULL)) {
-				zend_symtable_update(out, miss[i], &t);
-			} else {
-				zend_symtable_del(out, miss[i]);
-			}
-			if (raw[i]) {
-				zend_string_release(raw[i]);
-			}
-		}
-		if (got && vk_gen() != gen) {
-			for (uint32_t i = 0; i < n; i++) {
-				vk_uncopy(miss[i]);
-			}
-		}
-		efree(ttl), efree(raw);
-	}
-	efree(miss);
-}
-
-static bool tier_drop(zend_string *key)
-{
-	int64_t gone = 0;
-	int r = vk_ready() ? vk_unlink_n(1, &key, &gone) : -1;
-	vk_forget(key);
-	return r == 1 && gone > 0;
-}
-
-static zend_long tier_drop_multi(HashTable *keys)
-{
-	zend_string **ks = safe_emalloc(zend_hash_num_elements(keys), sizeof *ks, 0);
-	uint32_t n = 0;
-	NOCOPY_KEYS_FOREACH(keys, k) {
-		ks[n++] = k;
-	} NOCOPY_KEYS_FOREACH_END();
-	int64_t gone = 0;
-	if (n && vk_ready()) {
-		vk_unlink_n(n, ks, &gone);
-	}
-	for (uint32_t i = 0; i < n; i++) {
-		vk_forget(ks[i]);
-	}
-	efree(ks);
-	return (zend_long) gone;
+	efree(res), efree(kv), efree(enc);
+	return st;
 }
 
 static bool tier_add_long(zend_string *key, zend_long delta, zend_long ttl, zend_long *out)
@@ -1267,8 +1223,7 @@ static bool tier_clear(void)
 }
 
 static const nocopy_detour_ops vk_detour = {
-	tier_store, tier_fetch, tier_fetch_multi, tier_store_multi, tier_drop, tier_drop_multi,
-	tier_add_long, tier_cas_long, tier_clear, true, "resp",
+	tier_store, tier_fetch, tier_drop, tier_add_long, tier_cas_long, tier_clear, true, "resp",
 };
 
 const nocopy_detour_ops *nocopy_resp_route(void) { return vk_on ? &vk_detour : NULL; }
