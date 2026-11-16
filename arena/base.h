@@ -74,6 +74,13 @@ static inline void ar_cpu_relax(void)
 #endif
 }
 
+/* Store, then a full barrier before this thread's later loads (Dekker). x86: the locked exchange is one; a fence after it is a second (bench/arena.c: get -26%). */
+#if defined(__x86_64__) || defined(__i386__)
+# define AR_PUBLISH(p, v) ((void) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST))
+#else
+# define AR_PUBLISH(p, v) do { __atomic_store_n((p), (v), __ATOMIC_SEQ_CST); __atomic_thread_fence(__ATOMIC_SEQ_CST); } while (0)
+#endif
+
 /* Segment sets: bitmaps of NOCOPY_SEG_WORDS words (pins, ownership, reclaim's sets). */
 static inline uint64_t ar_segbit(uint32_t s) { return (uint64_t) 1 << (s & 63); }
 static inline uint32_t ar_segs_count(const uint64_t *m, uint32_t nwords)

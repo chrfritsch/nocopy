@@ -45,8 +45,7 @@ static inline bool ar_pin(ar_pins_t *r, const void *p)
 	r->mine[w] |= b;
 	r->transient = true;
 	r->idle++;
-	__atomic_store_n(&ar_pins_of(r->slot)[w], r->mine[w], __ATOMIC_SEQ_CST);
-	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	AR_PUBLISH(&ar_pins_of(r->slot)[w], r->mine[w]);
 	AR_HOOK("pin.set");
 	return true;
 }

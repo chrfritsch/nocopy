@@ -60,8 +60,7 @@ bool ar_atom_begin(ar_atom_reader *r, int slot, nocopy_atom_view *v)
 		for (;;) {
 			uint32_t g = __atomic_load_n(&A->gen, __ATOMIC_ACQUIRE);
 			AR_HOOK("view.loaded");
-			__atomic_store_n(agen_of(slot), g, __ATOMIC_SEQ_CST);
-			__atomic_thread_fence(__ATOMIC_SEQ_CST);
+			AR_PUBLISH(agen_of(slot), g);
 			if (__atomic_load_n(&half_of(g)->state, __ATOMIC_ACQUIRE) == g) {
 				r->agen = g;
 				break;
@@ -119,8 +118,7 @@ static bool rotate(void)
 	}
 	uint32_t g = A->gen, old = g - 1; /* the other half holds old, also when a dead rotation left it WIPING or half wiped */
 	ar_atom_half *o = half_of(old);
-	__atomic_store_n(&o->state, old | NOCOPY_ATOM_WIPING, __ATOMIC_SEQ_CST);
-	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	AR_PUBLISH(&o->state, old | NOCOPY_ATOM_WIPING);
 	AR_HOOK("rotate.marked");
 	if (viewed(old) || segments_use((uint8_t) (1u << (old & 1)))) {
 		__atomic_store_n(&o->state, old, __ATOMIC_RELEASE);
