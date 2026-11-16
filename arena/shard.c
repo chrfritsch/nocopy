@@ -266,6 +266,7 @@ nocopy_entry *nocopy_put_begin(nocopy_put *p, nocopy_ctx *c, const nocopy_put_re
 		ar_pins_drop_transient(&c->pins); /* our own idle pins would block reclaim; only mixed read/write loops pay */
 	}
 	ar_shard *sh = &ar_shards[ar_shard_idx(q->h)];
+	nocopy_warm(q->h); /* the slot's miss before the lock, the old entry's during the allocation */
 	ar_shard_lock(sh);
 	struct timespec ts;
 	nocopy_clock(&ts); /* inside the lock: measured faster under write contention than before it */
@@ -304,6 +305,7 @@ nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only)
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen)
 {
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];
+	nocopy_warm(h);
 	ar_shard_lock(sh);
 	nocopy_entry *old;
 	ar_slot *sp = find(sh, h, k, klen, &old);
@@ -332,6 +334,7 @@ static __attribute__((noinline)) nocopy_entry *lookup(ar_shard *sh, uint64_t h, 
 int nocopy_update(uint64_t h, const char *k, uint32_t klen, int (*fn)(nocopy_entry *e, void *arg), void *arg)
 {
 	ar_shard *sh = &ar_shards[ar_shard_idx(h)];
+	nocopy_warm(h);
 	ar_shard_lock(sh);
 	nocopy_entry *e = lookup(sh, h, k, klen);
 	int r = e && !nocopy_expired(e) ? fn(e, arg) : NOCOPY_GONE;

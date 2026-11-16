@@ -16,6 +16,9 @@ __attribute__((noinline)) nocopy_status nocopy_store_local(zend_string *key, zva
 {
 	nocopy_put_req q = {.h = zend_string_hash_val(key), .key = ZSTR_VAL(key), .klen = (uint32_t) ZSTR_LEN(key),
 		.ttl = (time_t) o->ttl, .expires = o->expires, .user = o->compute_ms};
+	if (Z_TYPE_P(val) > IS_STRING) {
+		nocopy_warm_slot(q.h); /* arrives while the value is built */
+	}
 	return nocopy_value_put(&NOCOPY_G(env), &NOCOPY_G(ctx), &q, val, o->add_only);
 }
 
@@ -166,6 +169,21 @@ static zend_always_inline bool fetch(zend_string *key, zval *rv, nocopy_meta *m)
 
 bool nocopy_fetch(zend_string *key, zval *rv) { return fetch(key, rv, NULL); }
 
+#define BATCH_AHEAD 16 /* keys of a batch warmed before the first is looked up */
+
+/* A batch's cache misses overlap instead of following each other (prof.php get_multi_100k: -30%; the same 10 hot keys in a loop: +18%). Not for a pair: one of Drupal's two is hot. */
+static void fetch_some(zend_string **ks, uint32_t n, HashTable *out, zval *t)
+{
+	for (uint32_t i = 0; n > 2 && i < n; i++) {
+		nocopy_warm(zend_string_hash_val(ks[i]));
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		if (local_fetch(ks[i], t, NULL, false)) {
+			zend_symtable_update(out, ks[i], t);
+		}
+	}
+}
+
 /* noinline: under LTO, inlined into nocopy_get_multiple, copy mode got 14% slower */
 __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *out)
 {
@@ -174,12 +192,17 @@ __attribute__((noinline)) void nocopy_fetch_multi(HashTable *keys, HashTable *ou
 		return;
 	}
 	zval t;
+	zend_string *ks[BATCH_AHEAD];
+	uint32_t n = 0;
 	nocopy_borrow_begin(&NOCOPY_G(ctx)); /* idle pins checked once per call, not per key */
 	NOCOPY_KEYS_FOREACH(keys, k) {
-		if (local_fetch(k, &t, NULL, false)) {
-			zend_symtable_update(out, k, &t);
+		ks[n++] = k;
+		if (n == BATCH_AHEAD) {
+			fetch_some(ks, n, out, &t);
+			n = 0;
 		}
 	} NOCOPY_KEYS_FOREACH_END();
+	fetch_some(ks, n, out, &t);
 	nocopy_borrow_end(&NOCOPY_G(ctx));
 }
 

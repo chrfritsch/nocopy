@@ -82,6 +82,28 @@ size_t nocopy_put_max(void); /* the largest block nocopy_put_begin takes (a shar
 /* Publishes p->e under its key (add_only: not over a live entry) and unlocks. */
 nocopy_put_result nocopy_put_commit(nocopy_put *p, bool add_only);
 
+/* Hints ahead of a lookup or write of h: its slot's line; then, that line read, its first candidate's block. Prefetches only: lock-free, unpinned. */
+static inline void nocopy_warm_slot(uint64_t h)
+{
+	const ar_index *ix = &ar_ix[ar_shard_idx(h)];
+	__builtin_prefetch(&ix->t[ar_slot_tag(h) & ix->mask]);
+}
+
+static inline void nocopy_warm(uint64_t h)
+{
+	const ar_index *ix = &ar_ix[ar_shard_idx(h)];
+	uint32_t tag = ar_slot_tag(h), i = tag & ix->mask;
+	ar_slot s = __atomic_load_n(&ix->t[i], __ATOMIC_RELAXED);
+	if ((uint32_t) (s >> 32) != tag) { /* the next of its run: most keys lie in their first two slots */
+		if (!s || (uint32_t) ((s = __atomic_load_n(&ix->t[(i + 1) & ix->mask], __ATOMIC_RELAXED)) >> 32) != tag) {
+			return;
+		}
+	}
+	const char *e = ar_at8(ar_slot_off8(s));
+	__builtin_prefetch(e);
+	__builtin_prefetch(e + 64);
+}
+
 bool nocopy_delete(uint64_t h, const char *k, uint32_t klen); /* true if it was live */
 void ar_shard_unstick(uint32_t i); /* lock-free readers: takes and drops shard i's lock */
 #define NOCOPY_GONE (-1)
