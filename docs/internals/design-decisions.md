@@ -627,7 +627,9 @@ path (its `get_int` row moves 256-289 between runs of either tree: the hot count
 single-key RESP miss or store now allocates its small request arrays, beside a network round trip. Also one copy each of:
 the 64-byte round-up (`ar_up64`), "has dynamic properties" (`nc_has_dynamic`), a deduped string's private copy for keys
 and values (`shared_copy`), the Drupal module's deployment prefix. Behaviour: `nocopy_put_multiple([])` is true on every
-route (was false with RESP unreachable).
+route (was false with RESP unreachable). The stats take one struct: `ar_shards_stat` and `ar_atoms_stat` add their fields to
+`nocopy_stats_t` (`base.h`) instead of filling structs of their own that `nocopy_stats` copied field by field, and the atoms'
+invariant check is the atoms' (`ar_atoms_verify`).
 
 **8.6's stateless closure cache needs nothing from nocopy** (measured for the `nocopy_remember` docs). A hit of
 `nocopy_remember` called from a function, best of 9 x 1M, 8.5 / 8.6 (with or without OPcache): closure created once
@@ -677,6 +679,7 @@ Code comments are one short line, or none.
 | `nocopy_remember` split into `xfetch_due()` and `await_holder()` (Extract Function, 2026-11-13) | `apcu_entry hit` (21 ns), `./dev ab HEAD 9-11 read`, copy / zero: both inline -3.0 / +0.5%, -0.6 / -3.2%; the wait loop `noinline` -2.5 / -2.0%, -0.3 / -2.1%; `xfetch_due` alone -1.5 / -3.4%, -1.8 / -1.1% and 370 -> 375 Ir per hit (`./dev cg remember`); HEAD against itself -0.5 / -0.1%. Every layout cost the hit 0.3-0.7 ns: the 57-line function stays |
 | `build_node` split into `node_prepare()` (the hook / dynamic-properties switch) and the write (Split Phase, 2026-11-13) | inlined, yet the extra status check and the nodes' reload cost instructions: `./dev cg` put_obj 4,012 -> 4,034, put_ords 179,765 -> 181,041, put_json 357,223 -> 359,414; `ONLY='store object' ./dev ab HEAD 9 write` -3.0 / -4.2%, +0.4 / -2.6%. The two switches stay in one function |
 | The layout id (`build_id`, `layout_id`: ELF note, Mach-O UUID, file hash) in a unit of its own (Move Function, 2026-11-13) | not built: `clang-tidy` compiles each `.c` alone, so the move needs a one-function header or a declaration in `nocopy_php.h`, which every PHP layer includes; more interface to take 85 lines out of `nocopy.c`, whose sections already keep it apart |
+| Hook results (`__serialize`/`__sleep`) in one map from the first, instead of a linear search over four that moves into a map (2026-11-16) | the map's 512 zeroed bytes on every value with a hook: `./dev cg` put_obj 4,092 -> 4,188 Ir (`build_object` 361 -> 453), put_prods 294,957 -> 295,346 |
 
 ## Ruled out by the 2026-11 audit
 

@@ -67,6 +67,15 @@ typedef struct {
 	size_t need;     /* NOCOPY_ERR_TOO_SMALL: bytes the layout needs */
 } nocopy_err;
 
+/* nocopy_stats(): each module adds what it counts (ar_shards_stat, ar_atoms_stat), the rest in arena.c. Lock-free: a snapshot that may be off by concurrent writes. */
+typedef struct {
+	uint64_t used, entries, evacuated, hits, misses, evicted, expired, ghost_hits, expunges, lock_steals, slots, leases;
+	uint64_t atoms, atoms_used, atoms_size, atom_rotations, shared_arrays, shared_arrays_used;
+	uint64_t segment_size;
+	uint32_t segments, free_segments, dead_segments, pinned_segments, kept_segments, shards;
+	time_t start_time;
+} nocopy_stats_t;
+
 static inline void ar_cpu_relax(void)
 {
 #if defined(__x86_64__) || defined(__i386__)

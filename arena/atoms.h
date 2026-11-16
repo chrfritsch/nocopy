@@ -41,10 +41,8 @@ bool ar_atom_begin(ar_atom_reader *r, int slot, nocopy_atom_view *v);
 void ar_atom_end(ar_atom_reader *r, int slot); /* after the commit: the block's segment carries the bit by then */
 void ar_atoms_reset_slot(int slot);            /* claimed from a dead owner, who may have died holding a view */
 
-typedef struct {
-	uint64_t atoms, used, size, rotations, arrays, array_bytes;
-} ar_atoms_stats;
-void ar_atoms_stat(ar_atoms_stats *s);
+void ar_atoms_stat(nocopy_stats_t *s);
+const char *ar_atoms_verify(void); /* NULL, or the first invariant of the current half broken; no admission in progress: for tests */
 
 /* ---- API (nocopy_arena.h) ---- */
 

@@ -45,11 +45,7 @@ bool ar_shards_still_depend(uint8_t bits);
 const char *ar_shards_verify(void);
 void ar_shards_forget_held(void); /* tests: this thread played a lock holder that died */
 
-typedef struct {
-	uint64_t used, entries, evacuated, evicted, expired, ghost_hits;
-	uint32_t dead_segments;
-} ar_shards_stats;
-void ar_shards_stat(ar_shards_stats *s); /* lock-free: a snapshot that may be off by concurrent writes */
+void ar_shards_stat(nocopy_stats_t *s); /* adds the shards' sums */
 
 /* ---- API (nocopy_arena.h) ---- */
 

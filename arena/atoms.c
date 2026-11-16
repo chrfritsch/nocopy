@@ -220,14 +220,32 @@ void *nocopy_atom_add_array(const nocopy_atom_view *v, uint64_t h, uint32_t size
 	return add(v, h, size, fill, arg, s, len | NOCOPY_ATOM_ARRAY);
 }
 
-void ar_atoms_stat(ar_atoms_stats *s)
+void ar_atoms_stat(nocopy_stats_t *s)
 {
 	uint32_t g = __atomic_load_n(&A->gen, __ATOMIC_RELAXED);
 	const ar_atom_half *cur = half_of(g);
 	s->atoms = ar_index_nlive(ix_of(g));
-	s->used = __atomic_load_n(&A->half[0].used, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].used, __ATOMIC_RELAXED);
-	s->size = 2 * (uint64_t) A->half_bytes;
-	s->rotations = __atomic_load_n(&A->rotations, __ATOMIC_RELAXED);
-	s->arrays = __atomic_load_n(&cur->arrays, __ATOMIC_RELAXED);
-	s->array_bytes = __atomic_load_n(&A->half[0].array_bytes, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].array_bytes, __ATOMIC_RELAXED);
+	s->atoms_used = __atomic_load_n(&A->half[0].used, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].used, __ATOMIC_RELAXED);
+	s->atoms_size = 2 * (uint64_t) A->half_bytes;
+	s->atom_rotations = __atomic_load_n(&A->rotations, __ATOMIC_RELAXED);
+	s->shared_arrays = __atomic_load_n(&cur->arrays, __ATOMIC_RELAXED);
+	s->shared_arrays_used = __atomic_load_n(&A->half[0].array_bytes, __ATOMIC_RELAXED) + __atomic_load_n(&A->half[1].array_bytes, __ATOMIC_RELAXED);
+}
+
+#define NEED(c) do { if (!(c)) return #c; } while (0)
+
+const char *ar_atoms_verify(void)
+{
+	uint32_t g = A->gen;
+	const ar_atom_half *hf = half_of(g);
+	const ar_index *ix = ix_of(g);
+	NEED(hf->state == g && hf->used <= A->half_bytes && !A->lock.holder);
+	for (uint32_t i = 0; i <= ix->mask; i++) {
+		if (ix->t[i]) {
+			const uint32_t *r = ar_at8(ar_slot_off8(ix->t[i]));
+			size_t o = (size_t) ((const char *) r - area_of(g));
+			NEED(o < hf->used && o + 8 + r[1] + (r[0] & NOCOPY_ATOM_LEN) + 1 <= hf->used); /* whole records only */
+		}
+	}
+	return NULL;
 }

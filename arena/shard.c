@@ -361,9 +361,8 @@ void nocopy_clear(void)
 	}
 }
 
-void ar_shards_stat(ar_shards_stats *st)
+void ar_shards_stat(nocopy_stats_t *st)
 {
-	memset(st, 0, sizeof *st);
 	for (uint32_t i = 0; i < nshards; i++) {
 		ar_shard *sh = &ar_shards[i];
 		st->used += __atomic_load_n(&sh->log.live_bytes, __ATOMIC_RELAXED);

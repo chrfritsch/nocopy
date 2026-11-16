@@ -134,15 +134,8 @@ void nocopy_stats(nocopy_stats_t *st)
 {
 	memset(st, 0, sizeof *st);
 	time_t now = nocopy_now();
-	ar_shards_stats sh;
-	ar_shards_stat(&sh);
-	st->used = sh.used;
-	st->entries = sh.entries;
-	st->evacuated = sh.evacuated;
-	st->evicted = sh.evicted;
-	st->expired = sh.expired;
-	st->ghost_hits = sh.ghost_hits;
-	st->dead_segments = sh.dead_segments;
+	ar_shards_stat(st);
+	ar_atoms_stat(st);
 	uint32_t nw = ar_worker_high();
 	for (uint32_t i = 0; i < nw; i++) {
 		st->hits += __atomic_load_n(&ar_worker_at(i)->hits, __ATOMIC_RELAXED);
@@ -159,14 +152,6 @@ void nocopy_stats(nocopy_stats_t *st)
 	st->expunges = nocopy_expunges();
 	st->lock_steals = __atomic_load_n(&ar_proc->lock_steals, __ATOMIC_RELAXED);
 	st->leases = ar_leases_held(now);
-	ar_atoms_stats a;
-	ar_atoms_stat(&a);
-	st->atoms = a.atoms;
-	st->atoms_used = a.used;
-	st->atoms_size = a.size;
-	st->atom_rotations = a.rotations;
-	st->shared_arrays = a.arrays;
-	st->shared_arrays_used = a.array_bytes;
 }
 
 uint64_t nocopy_expunges(void) { return __atomic_load_n(&ar_hdr->expunges, __ATOMIC_RELAXED); }
@@ -175,29 +160,11 @@ uint64_t nocopy_expunges(void) { return __atomic_load_n(&ar_hdr->expunges, __ATO
 
 #define NEED(c) do { if (!(c)) return #c; } while (0)
 
-static const char *check_atoms(void)
-{
-	const ar_atoms_hdr *at = &ar_hdr->atoms;
-	uint32_t g = at->gen;
-	const ar_atom_half *hf = &at->half[g & 1];
-	NEED(hf->state == g && hf->used <= at->half_bytes && !at->lock.holder);
-	const ar_index *ix = &ar_atom_ix[g & 1];
-	for (uint32_t i = 0; i <= ix->mask; i++) {
-		ar_slot sl = ix->t[i];
-		if (sl) {
-			const uint32_t *r = ar_at8(ar_slot_off8(sl));
-			size_t o = (size_t) ((const char *) r - (ar_atoms + (size_t) (g & 1) * ar_atom_bytes));
-			NEED(o < hf->used && o + 8 + r[1] + (r[0] & NOCOPY_ATOM_LEN) + 1 <= hf->used); /* whole records only */
-		}
-	}
-	return NULL;
-}
-
 const char *nocopy_arena_check(void)
 {
 	for (uint32_t si = 0; si <= ar_shard_mask; si++) {
 		NEED(!ar_shards[si].lock.holder && !(ar_ix[si].hdr->mseq & 1));
 	}
 	const char *why = ar_shards_verify();
-	return why ? why : check_atoms();
+	return why ? why : ar_atoms_verify();
 }
