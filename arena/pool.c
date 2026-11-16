@@ -13,17 +13,15 @@ uint32_t *ar_unpin_gen;
 uint8_t *ar_seg_owner;
 ar_segmeta *ar_segmeta_at;
 
-static size_t up64(size_t n) { return (n + 63) & ~(size_t) 63; }
-
 size_t ar_pool_plan(ar_pool_hdr *h, size_t at, size_t maxsegs)
 {
 	h->pin_stride = (uint32_t) (((maxsegs + 63) / 64 + 7) & ~(size_t) 7);
-	h->owner_off = up64(at);
-	h->meta_off = up64(h->owner_off + maxsegs);
-	h->pins_off = up64(h->meta_off + maxsegs * sizeof(ar_segmeta));
+	h->owner_off = ar_up64(at);
+	h->meta_off = ar_up64(h->owner_off + maxsegs);
+	h->pins_off = ar_up64(h->meta_off + maxsegs * sizeof(ar_segmeta));
 	h->keep_stride = (uint32_t) ((maxsegs + 63) / 64);
-	h->keeps_off = up64(h->pins_off + (size_t) NOCOPY_MAX_WORKERS * h->pin_stride * sizeof(uint64_t));
-	return up64(h->keeps_off + (size_t) NOCOPY_MAX_WORKERS * h->keep_stride * sizeof(uint64_t));
+	h->keeps_off = ar_up64(h->pins_off + (size_t) NOCOPY_MAX_WORKERS * h->pin_stride * sizeof(uint64_t));
+	return ar_up64(h->keeps_off + (size_t) NOCOPY_MAX_WORKERS * h->keep_stride * sizeof(uint64_t));
 }
 
 void ar_pool_init(ar_pool_hdr *h, size_t segs_off, uint32_t nsegs, unsigned shift)

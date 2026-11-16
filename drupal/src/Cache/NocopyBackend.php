@@ -70,6 +70,11 @@ class NocopyBackend implements CacheBackendInterface {
     return Settings::get('nocopy_prefix') ?: hash('xxh128', $root . '/' . $sitePath);
   }
 
+  // The same with core's deployment identifier (cache bins, tag tokens): a deploy starts with nothing the old code wrote.
+  public static function deploymentPrefix(string $name, string $root, string $sitePath): string {
+    return ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.' . $name : Settings::getApcuPrefix('nocopy_' . $name, $root, $sitePath);
+  }
+
   protected function key(string $cid): string {
     return $this->prefix . $cid;
   }

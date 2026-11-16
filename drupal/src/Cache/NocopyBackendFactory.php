@@ -8,14 +8,13 @@ use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Cache\CacheFactoryInterface;
 use Drupal\Core\Cache\CacheTagsChecksumInterface;
 use Drupal\Core\Cache\NullBackend;
-use Drupal\Core\Site\Settings;
 
 class NocopyBackendFactory implements CacheFactoryInterface {
 
   protected string $sitePrefix;
 
   public function __construct(string $root, string $sitePath, protected CacheTagsChecksumInterface $checksumProvider, protected TimeInterface $time, protected bool $fastLayer = FALSE) {
-    $this->sitePrefix = ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.backend' : Settings::getApcuPrefix('nocopy_backend', $root, $sitePath);
+    $this->sitePrefix = NocopyBackend::deploymentPrefix('backend', $root, $sitePath);
   }
 
   public function get($bin) {

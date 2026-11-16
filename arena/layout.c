@@ -8,8 +8,6 @@ char *ar_base;
 size_t ar_size;
 ar_arena *ar_hdr;
 
-static size_t up64(size_t n) { return (n + 63) & ~(size_t) 63; }
-
 nocopy_err ar_layout_plan(ar_layout *l, size_t size, uint64_t hint)
 {
 	memset(l, 0, sizeof *l);
@@ -29,9 +27,9 @@ nocopy_err ar_layout_plan(ar_layout *l, size_t size, uint64_t hint)
 		per <<= 1;
 	}
 	size_t maxsegs = size >> shift; /* an upper bound: the header takes some */
-	l->tables_off = up64(sizeof(ar_arena));
+	l->tables_off = ar_up64(sizeof(ar_arena));
 	l->ghosts_off = l->tables_off + (size_t) nshards * per * sizeof(ar_slot);
-	l->segrec_off = up64(l->ghosts_off + (size_t) nshards * per * sizeof(uint16_t));
+	l->segrec_off = ar_up64(l->ghosts_off + (size_t) nshards * per * sizeof(uint16_t));
 	size_t at = ar_pool_plan(&l->pool, l->segrec_off + maxsegs * sizeof(ar_seg), maxsegs);
 	l->header = ar_atoms_plan(&l->atoms, at, size);
 	size_t need = l->header + ((size_t) 4 << shift);

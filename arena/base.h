@@ -41,6 +41,8 @@ __attribute__((noreturn, cold)) void ar_assert_fail(const char *what, const char
 #define NOCOPY_MAX_SHARDS 8
 #define NOCOPY_USER_BYTES 256 /* the user's shared state in the arena header */
 #define NOCOPY_ALIGN(n) (((n) + 7) & ~(size_t) 7)
+/* Up to a cache line: where the parts of the region start. */
+static inline size_t ar_up64(size_t n) { return (n + 63) & ~(size_t) 63; }
 #define AR_NONE UINT32_MAX
 
 /* Where this process maps the arena (the same address in every process), and its size; NULL: no arena.

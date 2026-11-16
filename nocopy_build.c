@@ -523,12 +523,7 @@ static void pmap_init(pmap *m)
 	m->n = 0;
 }
 
-static void pmap_free(pmap *m)
-{
-	if (m->s != m->inl) {
-		efree(m->s);
-	}
-}
+static void pmap_free(pmap *m) { SMALL_FREE(m->inl, m->s); }
 
 static zend_always_inline uint32_t pmap_hash(uintptr_t k) { return (uint32_t) __builtin_bswap64((uint64_t) k * 0x5e2d58d8b3bce8d9ULL); }
 
@@ -552,9 +547,7 @@ static void pmap_grow(pmap *m)
 			*pmap_probe(m, old[i].k) = old[i];
 		}
 	}
-	if (old != m->inl) {
-		efree(old);
-	}
+	SMALL_FREE(m->inl, old);
 }
 
 /* k's slot, added with value v if it was missing; *added says which. */
@@ -645,12 +638,8 @@ static void nc_graph_b_free(graph_b *g)
 		return;
 	}
 	graph_b_end_pass(g);
-	if (g->classes != g->cinl) {
-		efree(g->classes);
-	}
-	if (g->nodes != g->inl) {
-		efree(g->nodes);
-	}
+	SMALL_FREE(g->cinl, g->classes);
+	SMALL_FREE(g->inl, g->nodes);
 	if (g->hooks) {
 		efree(g->hooks);
 	}
@@ -674,9 +663,7 @@ static void nc_graph_b_free(graph_b *g)
 		}
 		OBJ_RELEASE(h->o);
 	}
-	if (g->res != g->rinl) {
-		efree(g->res);
-	}
+	SMALL_FREE(g->rinl, g->res);
 	if (g->hk) {
 		pmap_free(g->hk);
 		efree(g->hk);
@@ -740,17 +727,6 @@ static uint32_t graph_b_res(graph_b *g, zend_object *o)
 }
 
 /* ---- objects and shared references ---- */
-
-static bool has_dynamic(const HashTable *props)
-{
-	zval *v;
-	ZEND_HASH_FOREACH_VAL(props, v) {
-		if (Z_TYPE_P(v) != IS_INDIRECT) {
-			return true;
-		}
-	} ZEND_HASH_FOREACH_END();
-	return false;
-}
 
 /* The dynamic properties without the slots. */
 static void dyn_copy(zval *a, zend_object *o)
@@ -1077,7 +1053,7 @@ static build_status build_node(nc_builder *b, zend_object *o, uint32_t ck, int d
 			n->own = nc_date_zone_name(o, &n->data);
 			break;
 		case K_SLOTS: case K_WAKEUP:
-			n->dyn = o->properties && has_dynamic(o->properties);
+			n->dyn = nc_has_dynamic(o);
 			if (n->dyn && o->ce->default_properties_count) {
 				dyn_copy(&n->data, o);
 				n->own = true;
@@ -1443,13 +1419,9 @@ static void nc_build_free(nc_builder *b)
 		if (s->cand) {
 			efree(s->cand);
 		}
-		if (s->hv != s->inl) {
-			efree(s->hv);
-		}
+		SMALL_FREE(s->inl, s->hv);
 	}
-	if (b->str != b->str_inl) {
-		efree(b->str);
-	}
+	SMALL_FREE(b->str_inl, b->str);
 }
 
 static zend_always_inline nc_built built(const nc_builder *b) { return (nc_built) {b->buf, b->base, b->bn, b->rel, b->rn, b->root, b->av && b->atoms ? nocopy_atom_bit(b->av) : 0}; }

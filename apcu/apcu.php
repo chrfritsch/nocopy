@@ -73,9 +73,7 @@ function apcu_exists(array|string|int $key): array|bool
 function apcu_delete(mixed $key): array|bool
 {
     if ($key instanceof APCUIterator) {
-        foreach (array_keys($key->keys()) as $k) {
-            nocopy_delete((string) $k);
-        }
+        nocopy_delete_multiple(array_map('strval', array_keys($key->keys())));
         return true;
     }
     if (!is_array($key)) {

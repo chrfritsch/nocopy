@@ -214,6 +214,7 @@ static zend_always_inline void graph_each(nc_graph *g, zval_fn f, void *ctx)
 uint64_t nc_class_fp(nocopy_env *env, zend_class_entry *ce); /* kind | hash of what must not change; cached per request */
 zend_class_entry *nc_class_resolve(nocopy_env *env, const nc_class *c); /* NULL: gone (autoload is user code) or changed */
 bool nc_call_magic(zend_function *f, zend_object *o, zval *rv); /* false: it threw (rv released) */
+bool nc_has_dynamic(const zend_object *o);     /* dynamic properties beside its slots */
 bool nc_date_native(zend_object *o);           /* stored as K_DATE: initialized, with a zone, no dynamic properties */
 bool nc_date_zone_name(zend_object *o, zval *z); /* its zone's ID or abbreviation (false: null, an offset) */
 bool nc_date_out(nocopy_env *env, zend_object *obj, const nc_obj *n); /* false: the zone is gone */

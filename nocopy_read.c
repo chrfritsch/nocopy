@@ -12,31 +12,23 @@
 
 static void copy_into(nocopy_strtab *t, zval *dst, const zval *src);
 
-/* A string the block uses more than once (refcount 3): its uses share one copy. */
-static __attribute__((noinline)) void copy_shared_str(nocopy_strtab *t, zval *dst, zend_string *s)
+/* A reference to the one private copy of s (hash h) in this value: a string the block uses more than once, as key or value, is copied once. */
+static zend_string *shared_copy(nocopy_strtab *t, const zend_string *s, zend_ulong h)
 {
-	nocopy_strslot *k = strtab_slot(t, ZSTR_H(s));
+	nocopy_strslot *k = strtab_slot(t, h);
 	if (k->gen == t->gen && k->s == s) {
-		ZVAL_STR_COPY(dst, k->copy);
-		return;
+		return zend_string_copy(k->copy);
 	}
-	strtab_put(t, k, s, ZSTR_H(s));
+	strtab_put(t, k, s, h);
 	k->copy = zend_string_init(ZSTR_VAL(s), ZSTR_LEN(s), 0);
-	ZSTR_H(k->copy) = ZSTR_H(s);
-	ZVAL_STR(dst, k->copy);
+	ZSTR_H(k->copy) = h;
+	return k->copy;
 }
 
-/* A key still in the arena: a deduped one shares its copy. */
+/* A key still in the arena. */
 static void unshare_key(nocopy_strtab *t, zend_array *a, Bucket *b)
 {
-	nocopy_strslot *s = strtab_slot(t, b->h);
-	if (s->gen == t->gen && s->s == b->key) {
-		b->key = zend_string_copy(s->copy);
-	} else {
-		strtab_put(t, s, b->key, b->h);
-		b->key = s->copy = zend_string_init(ZSTR_VAL(b->key), ZSTR_LEN(b->key), 0);
-		ZSTR_H(b->key) = b->h;
-	}
+	b->key = shared_copy(t, b->key, b->h);
 	HT_FLAGS(a) &= ~HASH_FLAG_STATIC_KEYS;
 }
 
@@ -73,8 +65,8 @@ static void copy_into(nocopy_strtab *t, zval *dst, const zval *src)
 {
 	switch (Z_TYPE_P(src)) {
 		case IS_STRING:
-			if (UNEXPECTED(GC_REFCOUNT(Z_STR_P(src)) > 2)) {
-				copy_shared_str(t, dst, Z_STR_P(src));
+			if (UNEXPECTED(GC_REFCOUNT(Z_STR_P(src)) > 2)) { /* used more than once */
+				ZVAL_STR(dst, shared_copy(t, Z_STR_P(src), ZSTR_H(Z_STR_P(src))));
 			} else {
 				ZVAL_STRINGL_FAST(dst, Z_STRVAL_P(src), Z_STRLEN_P(src)); /* "" and 1 char: interned, no alloc */
 			}

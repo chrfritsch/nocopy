@@ -615,6 +615,20 @@ the same name). A fetch looks up each distinct case once (cases keep their ident
 before / after: a list of 64 distinct cases 1161-1172 / 789-808 ns on 8.5, 1182-1194 / 795-878 on 8.6; 100 objects
 holding 2 cases 3037-3076 / 3031-3306 (8.5), 3081-3246 / 3062-3254 (8.6), noise.
 
+**One implementation per mechanism (2026-11-16).** Two places held one thing twice. The detour had six keyed ops (`store`,
+`fetch`, `drop`, each single and multi), so the RESP tier and the no-arena table each wrote a fetch, a store and a drop
+twice: now three, over n keys (a single key is n = 1; adds stay one round trip per key inside `tier_store`). The atoms kept
+a hand-written open-addressing table beside the shards': both halves are now an `ar_index` probed with `ar_probe`
+(`ar_probe_start_locked`, no seqlock: nothing is removed), a record's slot holds its arena offset like an entry's, so the
+unused first 8 bytes of a half are gone. Instructions per call (`./dev cg`, N=20000, before / after): `put_arr` 8825 / 8741,
+`put_new` 14314 / 13893, `put_prods` 293486 / 294957, `put_big` 794297 / 789876, `put_obj` 4092 / 4092, `put_multi` 5135 / 5101,
+`put_int` 591 / 591, `get_miss` 196 / 196, `remember` 363 / 363, `inc` 283 / 284; `nocopy_fetch` disassembles to the same hot
+path (its `get_int` row moves 256-289 between runs of either tree: the hot counter's per-process seed). With the tier, a
+single-key RESP miss or store now allocates its small request arrays, beside a network round trip. Also one copy each of:
+the 64-byte round-up (`ar_up64`), "has dynamic properties" (`nc_has_dynamic`), a deduped string's private copy for keys
+and values (`shared_copy`), the Drupal module's deployment prefix. Behaviour: `nocopy_put_multiple([])` is true on every
+route (was false with RESP unreachable).
+
 **8.6's stateless closure cache needs nothing from nocopy** (measured for the `nocopy_remember` docs). A hit of
 `nocopy_remember` called from a function, best of 9 x 1M, 8.5 / 8.6 (with or without OPcache): closure created once
 26.2 / 29.6-30.1 ns, `static fn` written at the call 52.9-53.0 / 29.2-29.4, a closure capturing a variable 67.1-68.8 /

@@ -8,7 +8,6 @@ use Drupal\Core\Cache\CacheTagsChecksumInterface;
 use Drupal\Core\Cache\CacheTagsChecksumPreloadInterface;
 use Drupal\Core\Cache\CacheTagsChecksumTrait;
 use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
-use Drupal\Core\Site\Settings;
 
 /**
  * Cache tag checksums in nocopy: one random token per tag, fresh on every invalidation and whenever missing.
@@ -26,7 +25,7 @@ class NocopyCacheTagsChecksum implements CacheTagsChecksumInterface, CacheTagsIn
 
   public function __construct(string $root, string $sitePath) {
     NocopyBackend::requireShared();
-    $this->prefix = ($prefix = Settings::get('nocopy_prefix')) ? $prefix . '.tags' : Settings::getApcuPrefix('nocopy_tags', $root, $sitePath);
+    $this->prefix = NocopyBackend::deploymentPrefix('tags', $root, $sitePath);
   }
 
   // Tags all loaded, nothing delayed or to preload: just the sum.

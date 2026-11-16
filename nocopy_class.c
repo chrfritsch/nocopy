@@ -138,23 +138,27 @@ bool nc_call_magic(zend_function *f, zend_object *o, zval *rv)
 	return true;
 }
 
+/* A property of o's table that is no slot. */
+bool nc_has_dynamic(const zend_object *o)
+{
+	if (o->properties) {
+		zval *v;
+		ZEND_HASH_FOREACH_VAL(o->properties, v) {
+			if (Z_TYPE_P(v) != IS_INDIRECT) {
+				return true;
+			}
+		} ZEND_HASH_FOREACH_END();
+	}
+	return false;
+}
+
 /* ---- dates: timestamp and zone, not __serialize()'s string (formatting and parsing were ~95% of their cost) ---- */
 
 bool nc_date_native(zend_object *o)
 {
 	const timelib_time *t = php_date_obj_from_obj(o)->time;
-	if (!t || !t->is_localtime || t->zone_type < TIMELIB_ZONETYPE_OFFSET || t->zone_type > TIMELIB_ZONETYPE_ID) {
-		return false;
-	}
-	if (o->properties) {
-		zval *v;
-		ZEND_HASH_FOREACH_VAL(o->properties, v) {
-			if (Z_TYPE_P(v) != IS_INDIRECT) {
-				return false; /* dynamic properties: __serialize() would add them */
-			}
-		} ZEND_HASH_FOREACH_END();
-	}
-	return true;
+	return t && t->is_localtime && t->zone_type >= TIMELIB_ZONETYPE_OFFSET && t->zone_type <= TIMELIB_ZONETYPE_ID
+		&& !nc_has_dynamic(o); /* dynamic properties: __serialize() would add them */
 }
 
 bool nc_date_zone_name(zend_object *o, zval *z)
